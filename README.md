@@ -68,26 +68,34 @@ A few decisions worth calling out, because the design is the point.
   obviously irrelevant.
 
 - **Pairwise judgment, not absolute scores.** Asking a model "rate this 0-100" produces mushy, bunched
-  numbers (everything lands near 85). Asking "which of these two fits better?" is a far easier and
-  better-calibrated call. `langsort.py` collects those comparisons; `btrank.py` fits a Bradley-Terry
-  strength to each role from its wins and losses. On a real ~2,600-role run, the fitted order agreed
-  with **84.3%** of the raw pairwise decisions, which doubles as a self-consistency metric: high means
-  the model's judgment was nearly a clean linear order, low means it was genuinely noisy.
+  numbers (everything lands near 85). Asking "which of these two fits better?" is far easier and
+  better-calibrated. `langsort.py` collects those comparisons; `btrank.py` turns them into a ranking.
 
-- **It denoises, not just sorts.** Individual LLM comparisons can be intransitive (A>B>C>A). Bradley-Terry
-  can't represent a cycle, so it finds the single global order that satisfies the most comparisons rather
-  than trusting any one of them. (For when you need a *guaranteed* contradiction-free order over a small
-  shortlist, `langsort.py --mode sort` uses a merge sort that never asks a transitively-implied
-  comparison, so a noisy comparator can't make it self-contradict.)
+- **The decisions are gold; the model only disambiguates.** Each comparison is an edge (winner above
+  loser), and together they form a partial order that `btrank.py` topologically sorts, honoring every
+  decision it can. A model distilled from the same decisions (logistic regression over the embeddings)
+  only orders what the decisions leave incomparable, places never-compared roles, and condenses cycles
+  if any appear. On a real ~2,600-role hull this predicts held-out decisions **~90%**, versus ~68% for
+  the model alone, because the decisions' transitive structure carries far more than the embeddings do.
+  In practice the graph comes out acyclic, so the gold order is honored 100% and the model just fills
+  gaps. (`langsort.py --mode sort` can instead produce a guaranteed contradiction-free total order over
+  a small shortlist, via a merge sort that never asks a transitively-implied comparison.)
+
+- **Gather only what isn't already implied.** Collecting comparisons, `langsort.py` gates to pairs still
+  incomparable under the partial order, so every LLM call buys a new constraint. Random pairing wastes a
+  fast-growing share re-deriving implied orderings (a quarter-plus by ~8k decisions); gating reclaims it,
+  worth several points of ranking quality. But it picks *among* the eligible pairs at random: choosing
+  the "most informative" one (by model uncertainty or order-adjacency) measurably loses, because those
+  are the noisy near-ties. Gate which pairs are eligible; choose among them by coin flip.
 
 - **Lexical and semantic recall, unioned.** Measured on this corpus for "software engineer": matching the
   alternate titles finds **+56%** more roles than embeddings alone, yet still misses **~24%** of jobs
   whose literal title contains the term. Neither alone is enough, so `hull.py` unions them.
 
 - **Distillation.** `btrank.py --distill-out` turns thousands of pairwise judgments into a linear model
-  over the embeddings (Bradley-Terry with a linear utility is just logistic regression on embedding
-  differences). It then scores the *entire* corpus with no further model calls: the taste learned on one
-  hull generalizes to every future snapshot, for free.
+  over the embeddings (logistic regression on embedding differences). It then scores the *entire* corpus
+  with no further model calls: the taste learned on one hull generalizes to every future snapshot, for
+  free. It saturates fast, held-out accuracy is within 1% of its ceiling by ~2,000 decisions.
 
 - **Memory-bounded throughout.** A 21 GB dataset was built and is consumed on a 38 GB laptop. Everything
   streams (chunked Parquet, memory-mapped embedding caches); nothing assumes the corpus fits in RAM.
@@ -107,4 +115,4 @@ authorization) against `jd_markdown` before relying on it.
 Built by Elliott Dehnbostel. The productized version, which ranks new listings against a resume and emails
 a daily digest of the strongest matches, runs at [JobScream.com](https://jobscream.com). More at
 [github.com/elliottdehn](https://github.com/elliottdehn); a resume sits alongside this file as
-`egd-resume.pdf`.
+`egd-resume.txt`.

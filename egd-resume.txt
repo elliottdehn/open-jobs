@@ -1,0 +1,49 @@
+Elliott Gregory Dehnbostel
+Senior Software Engineer + AI Engineer
+Cincinnati, Ohio | dehnbostele@gmail.com | github.com/elliottdehn
+
+SUMMARY
+Backend engineer with a research-and-development bend. Builds distributed infrastructure and the
+novel approaches that push it past its limits: $2.5M shaved off Meta's infrastructure, a from-scratch
+MEV-resistant DeFi order-book, an AI product bootstrapped solo to $30K ARR. Operates across the full
+stack: distributed infrastructure, performance & efficiency, mechanism design, capital markets, and
+from-scratch AI training/delivery/governance.
+
+EXPERIENCE
+JobScream.com — Founder & CEO / AI Engineer (2024-present, Remote/Cincinnati)
+Built an AI-native job search engine that ranks every listing against a candidate's resume and emails
+a daily digest of the strongest matches. Bootstrapped to $30K ARR over two years, no outside capital,
+no paid acquisition. Conceived, designed, and built the product full-stack. Trained and integrated
+custom neural networks.
+
+Econia Labs — Senior Software Engineer (2023, Contract, Remote/NYC)
+Researched and developed an upgraded decentralized limit order book that eliminated minimum order
+sizes, enabling an unlimited number of fills in a single transaction and a single canonical market per
+asset pair. Built infrastructure to index and serve the production exchange.
+
+Meta — Senior Software Engineer (2021-2022, Remote/NYC)
+Designed, delivered, and validated at least $2.5M in server capacity and wall-time savings on critical
+infrastructure. Leveraged static analysis and code generation to surface optimization opportunities.
+Established detection and documentation to keep privacy-harming patterns out of production.
+
+Circle Financial — Software Development Engineer (2020-2021, Remote/Cincinnati)
+Built an automatic customer billing system replacing a manual process, working across Legal, Sales,
+Finance, and Engineering; designed for frequent requirement changes to support growth.
+
+Garmin — Software Development Engineer (2019-2020, Kansas)
+Built a distributed API serving millions of smartwatch users per day plus its customer-support tool.
+Doubled test coverage with a rule-driven data-initialization framework for passive fuzz-testing.
+
+SKILLS / TOOLS
+Distributed web services, performance & efficiency optimization, scripting/automation, static
+analysis, code generation, blockchain applications. Python, Rust, Java, PHP/Hack, Solidity, Dart,
+C/C++, AWS/GCP, SQL/NoSQL, GraphQL, Memcached, JS/HTML/CSS.
+
+PROJECTS
+Decentralized Limit Order Protocol (2024): on-chain order book with constant execution cost and MEV
+resistance for trading real-world securities on a public blockchain.
+lodis (2022): Rust HTTP server framework wrapper with process resilience + CI on local compute.
+/u/lit_word_bot (2020): Reddit bot that finds/defines challenging words. Top 2% bot by popularity.
+
+EDUCATION
+The Ohio State University — B.S. Computer Science & Engineering, AI focus (2014-2018), GPA 3.6

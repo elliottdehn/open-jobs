@@ -118,7 +118,8 @@ better-calibrated call. So we collect pairwise judgments and let the math turn t
 python3 hull.py     --function engineering --level Senior,Staff --country US --remote \
                     --title "software engineer,backend,platform" --out hull.json
 python3 langsort.py --resume resume.txt --candidates hull.json --mode sample --per-item 12
-python3 btrank.py   --candidates hull.json --decisions langsort_decisions.jsonl --out ranked.json
+python3 btrank.py   --candidates hull.json --decisions langsort_decisions.jsonl \
+                    --parquet open-jobs.parquet --out ranked.json
 ```
 
 ### Step 1 — the convex hull (hull.py)
@@ -143,12 +144,26 @@ a filter with the person; the hull must contain every relevant role.
 
 ### Step 2 — learn the LLM's discrimination (langsort.py)
 
-`--mode sample` draws ~`--per-item` random comparisons per role and runs them ALL concurrently (there
-is no ordering dependency, so it is fully parallel and fast). Each call asks one question, "which fits
-the resume better, A or B?", capped to a tiny decision-only output, and appends the verdict to
-`langsort_decisions.jsonl`. That log is the product of this step. It is memoized and replayed on
-restart, so a killed run resumes without losing or repeating a decision. ~12 per role is plenty to
-learn the ranking; raise it for a sharper top, or bound cost with `--max-comparisons`.
+`--mode sample` gathers pairwise judgments toward `--per-item` comparisons per role. Each call asks one
+question, "which fits the resume better, A or B?", capped to a tiny decision-only output, and appends
+the verdict to `langsort_decisions.jsonl` (the product of this step). It is memoized and replayed on
+restart, so a killed run resumes without losing or repeating a decision.
+
+By default it **gates**: it only asks pairs still incomparable under the gold partial order built so
+far, so every call buys a new constraint instead of re-deriving one transitivity already implies. This
+matters more the more you gather: random pair selection wastes a fast-growing fraction on already-
+implied pairs (about a quarter by ~8k decisions, more beyond), and gating reclaims that budget, worth
+several points of final ranking quality. It runs in parallel rounds (`--batch` pairs per round, then
+the closure updates). `--no-gate` reverts to one fully-parallel sweep of random pairs (fine at small
+budgets, where almost nothing is implied yet). Note: gate WHICH pairs are eligible, but pick among them
+at RANDOM. Cleverly choosing the "most informative" eligible pair (by model uncertainty or order
+adjacency) measurably underperforms random, because those pairs are the noisy near-ties.
+
+How many comparisons you need depends on the goal. To directly rank THIS hull, ~8-12 per role gives
+each one enough head-to-heads. To train the distilled model in step 3 for corpus-wide reuse, far
+fewer: measured on a ~2,600-role hull, held-out accuracy is within 1% of its ceiling by ~2,000 total
+decisions (about 1.5 per role) and fully saturated by ~4,000, so ~3 per role is plenty. Bound cost
+with `--max-comparisons`.
 
 There is also `--mode sort`: a contradiction-free merge sort that emits an exact total order over a
 small shortlist. It only compares the heads of two already-sorted runs, so it never asks a
@@ -158,17 +173,25 @@ not to learn over thousands.
 
 ### Step 3 — rank (btrank.py)
 
-Bradley-Terry fits each role a strength from its wins and losses (robust to the uneven comparison
-counts sampling produces) and ranks by it. It reports how well the fitted order agrees with the raw
-decisions: high agreement means the LLM was nearly a clean linear order, low means its judgment was
-genuinely noisy. Because Bradley-Terry cannot represent a cycle, it DENOISES the comparisons, finding
-the single order that satisfies the most of them rather than following any one path. Roles never
-compared are appended at the end (ordered by `--match` score if you pass match.py output).
+The LLM's decisions are treated as GOLD. Each is an edge (winner ranked above loser), and together
+they define a partial order; btrank topologically sorts it, so the final ranking honors every decision
+it can. A model distilled from the same decisions (logistic regression over the job embeddings) only
+DISAMBIGUATES: it orders roles the decisions leave incomparable, places roles never compared (the
+small uncompared tail, or the whole corpus), and breaks cycles if any exist (strongly-connected
+components are condensed first). On a real ~2,600-role hull this fits held-out decisions ~90%, versus
+~68% for the model alone and ~70% for a soft blend, because the decisions' transitive structure carries
+far more than the embeddings do. In practice the decision graph is acyclic, so the gold order honors
+100% of decisions and the model only fills the gaps.
 
-Optional generalization: `--distill-out taste.npz --parquet open-jobs.parquet` learns a linear model
-over the job embeddings from the same decisions (Bradley-Terry with a linear utility is logistic
-regression on embedding differences). Saved in score_distill.py's format, it scores the WHOLE corpus
-with no further LLM calls, so the taste learned on the hull generalizes to every future snapshot.
+So the two goals from step 2 have different appetites for decisions: the distilled model saturates at
+~4K, but this hull ranking keeps sharpening with every decision you add, since each one pins down more
+of the order.
+
+`--method` picks the ranker: `gold` (default, above; needs `--parquet` for the embeddings), `fuse` (a
+softer blend that lets the model override sparse decisions, more robust to a very noisy comparator but
+it bottlenecks at the embedding ceiling), or `bt` (plain Bradley-Terry, no embeddings needed).
+`--distill-out taste.npz` also saves the model as a corpus-wide ranker in score_distill.py's format, so
+the taste generalizes to every future snapshot with no further LLM calls.
 
 ### Add-ons and hand-rolling
 

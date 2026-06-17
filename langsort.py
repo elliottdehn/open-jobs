@@ -81,6 +81,9 @@ def main():
                          "sort = contradiction-free merge sort emitting a total order (sequential tail)")
     ap.add_argument("--per-item", type=int, default=12, help="[sample] target comparisons per role")
     ap.add_argument("--max-comparisons", type=int, default=0, help="[sample] cap on total comparisons (0 = no cap)")
+    ap.add_argument("--batch", type=int, default=512, help="[sample] pairs asked per round before the closure updates")
+    ap.add_argument("--no-gate", action="store_true",
+                    help="[sample] disable the incomparability gate (ask any random pair, one parallel sweep)")
     ap.add_argument("--model", default="gpt-5.4-nano-2026-03-17")
     ap.add_argument("--reasoning", default="none", choices=["none", "minimal", "low", "medium", "high"])
     ap.add_argument("--workers", type=int, default=64)
@@ -137,25 +140,72 @@ def main():
             else: out.append(b[j]); j += 1
         return out + a[i:] + b[j:]
 
-    if args.mode == "sample":                      # gather ~per-item comparisons, fully parallel (no sort tail)
+    if args.mode == "sample":                      # gather comparisons for btrank's gold+impute ranking
         import random
         rnd = random.Random(0)
-        idx = {c["id"]: c for c in items}
-        ids = list(idx)
-        pairs = set()
-        for a in ids:
-            for _ in range(args.per_item):
-                b = rnd.choice(ids)
-                if b != a: pairs.add((a, b) if a < b else (b, a))
-        pairs = [p for p in pairs if p not in memo and (p[1], p[0]) not in memo]   # skip resumed pairs
-        if args.max_comparisons: pairs = pairs[:args.max_comparisons]
-        est[0] = max(len(pairs), 1)
-        sys.stderr.write(f"sampling {len(pairs):,} fresh pairs (~{args.per_item}/role over {len(ids):,} roles), "
-                         f"fully parallel on {args.workers} workers\n")
-        with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            list(ex.map(lambda pr: before(idx[pr[0]], idx[pr[1]]), pairs))
+        idx = {c["id"]: c for c in items}; ids = list(idx); Rn = len(ids)
+        pidx = {cid: k for k, cid in enumerate(ids)}
+        target = args.max_comparisons or args.per_item * Rn
+        est[0] = max(target, 1)
+
+        if args.no_gate:                           # ungated: any random pairs, one parallel sweep
+            pairs = set()
+            for a in ids:
+                for _ in range(args.per_item):
+                    b = rnd.choice(ids)
+                    if b != a: pairs.add((a, b) if a < b else (b, a))
+            pairs = [p for p in pairs if p not in memo and (p[1], p[0]) not in memo]
+            if args.max_comparisons: pairs = pairs[:args.max_comparisons]
+            est[0] = max(len(pairs), 1)
+            sys.stderr.write(f"sampling {len(pairs):,} pairs, fully parallel (gate OFF)\n")
+            with ThreadPoolExecutor(max_workers=args.workers) as ex:
+                list(ex.map(lambda pr: before(idx[pr[0]], idx[pr[1]]), pairs))
+            logf.close()
+            sys.stderr.write(f"\ngathered {calls[0]:,} decisions -> {args.log}\n"
+                             f"next: python3 btrank.py --candidates {args.candidates} --decisions {args.log}\n\n")
+            return
+
+        # gated (default): only ask pairs still INCOMPARABLE under the running gold closure, so every
+        # call buys a new constraint. Random sampling re-derives a fast-growing fraction of orderings
+        # the partial order already implies (26% wasted by ~8k decisions); gating reclaims that budget.
+        up = [0] * Rn; down = [0] * Rn
+        def add_edge(a, b):                        # a ranked above b; propagate transitive closure
+            anc = up[a] | (1 << a); des = down[b] | (1 << b)
+            x = anc
+            while x:
+                t = (x & -x).bit_length() - 1; down[t] |= des; x &= x - 1
+            y = des
+            while y:
+                t = (y & -y).bit_length() - 1; up[t] |= anc; y &= y - 1
+        for (ca, cb), res in list(memo.items()):   # seed the closure from resumed decisions
+            if ca in pidx and cb in pidx:
+                a, b = (pidx[ca], pidx[cb]) if res else (pidx[cb], pidx[ca]); add_edge(a, b)
+        sys.stderr.write(f"gated sampling toward {target:,} decisions over {Rn:,} roles "
+                         f"(batch {args.batch}, {args.workers} workers)\n")
+        cap = target * 20 + 10000                  # give up once the order is nearly total (few incomparable left)
+        miss = 0
+        while calls[0] < target and miss < cap:
+            batch, bset = [], set()
+            while len(batch) < args.batch and calls[0] + len(batch) < target and miss < cap:
+                a = rnd.randrange(Rn); b = rnd.randrange(Rn)
+                if a == b: continue
+                if a > b: a, b = b, a
+                if (a, b) in bset: continue
+                if (down[a] | up[a]) >> b & 1: miss += 1; continue                      # already ordered
+                if (ids[a], ids[b]) in memo or (ids[b], ids[a]) in memo: miss += 1; continue
+                batch.append((a, b)); bset.add((a, b))
+            if not batch: break
+            with ThreadPoolExecutor(max_workers=args.workers) as ex:
+                list(ex.map(lambda pr: before(idx[ids[pr[0]]], idx[ids[pr[1]]]), batch))
+            for a, b in batch:                     # fold the round's verdicts into the closure
+                r = memo.get((ids[a], ids[b]))
+                if r is None:
+                    r2 = memo.get((ids[b], ids[a]))
+                    if r2 is None: continue
+                    r = not r2
+                x, y = (a, b) if r else (b, a); add_edge(x, y)
         logf.close()
-        sys.stderr.write(f"\ngathered {calls[0]:,} new decisions -> {args.log}\n"
+        sys.stderr.write(f"\ngathered {calls[0]:,} gated decisions -> {args.log}\n"
                          f"next: python3 btrank.py --candidates {args.candidates} --decisions {args.log}\n\n")
         return
 
