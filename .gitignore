@@ -1,0 +1,19 @@
+# the dataset itself is hosted on R2, not in git (21 GB). fetch it with download.py
+open-jobs.parquet
+*.parquet
+
+# local pipeline outputs
+hull.json
+matches.json
+ranked.json
+match_results.json
+match_results.json.jsonl
+langsort_results.json
+langsort_decisions.jsonl
+*.npz
+report.html
+
+# python / macOS noise
+__pycache__/
+*.pyc
+.DS_Store
