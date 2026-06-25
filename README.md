@@ -25,6 +25,9 @@ https://download.jobscream.com/open-jobs.parquet      # ~21 GB, refreshed in pla
 | `btrank.py` | **Step 3.** Aggregate those judgments into one ranking (Bradley-Terry), and optionally distill them into a reusable model. |
 | `rank.py` | An embedding-only recall ranker (lexical seed -> learned ridge ranker -> score the corpus). |
 | `match.py` | Per-role LLM explanation: strengths, gaps, and a verdict for a shortlist. |
+| `slugs.json` | The set of companies the crawler covers, per ATS. Check here to see if a company is already included. |
+| `contributed-slugs.txt` | Community-contributed companies. Add a missing one here, see `CONTRIBUTING.md`. |
+| `CONTRIBUTING.md` | How to contribute, mainly: add a missing company in one line. |
 
 ## The dataset
 
@@ -103,6 +106,15 @@ A few decisions worth calling out, because the design is the point.
 - **Cost-aware and resumable.** Comparisons use a nano model with token-capped, decision-only outputs,
   and every decision is appended to a log that replays on restart, so a killed run resumes without losing
   or repeating work.
+
+## Contributing
+
+The dataset grows by knowing which companies exist and where they post. The single most useful
+contribution is **adding a company that isn't in here yet**, and it takes one line. Find the company's
+slug (the company-specific part of its careers URL), check it isn't already in `slugs.json`, and add
+`<ats>,<slug>` to [`contributed-slugs.txt`](contributed-slugs.txt) in a pull request. Contributed slugs
+are fused into the daily crawl, so they persist and start showing up in the next build. Full details,
+including how to read a slug out of each ATS's URLs, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 

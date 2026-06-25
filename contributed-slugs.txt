@@ -1,0 +1,32 @@
+# open-jobs - community-contributed company slugs
+#
+# Found a company that isn't in the dataset? Add it here. One company per line:
+#
+#     <ats>,<slug>
+#
+# The <slug> is the company's identifier on its applicant tracking system (ATS),
+# the company-specific part of its careers URL. Examples by ATS:
+#
+#     greenhouse        boards.greenhouse.io/SLUG            -> greenhouse,SLUG
+#     lever             jobs.lever.co/SLUG                   -> lever,SLUG
+#     ashby             jobs.ashbyhq.com/SLUG                -> ashby,SLUG
+#     workable          apply.workable.com/SLUG              -> workable,SLUG
+#     smartrecruiters   careers.smartrecruiters.com/SLUG     -> smartrecruiters,SLUG
+#     recruitee         SLUG.recruitee.com                   -> recruitee,SLUG
+#     personio          SLUG.jobs.personio.com               -> personio,SLUG
+#     paylocity         recruiting.paylocity.com/.../SLUG    -> paylocity,SLUG
+#     workday           SLUG.wdN.myworkdayjobs.com           -> workday,SLUG
+#     breezy            SLUG.breezy.hr                       -> breezy,SLUG
+#
+# Supported ATSes (only these get ripped, slugs for anything else are ignored):
+#   greenhouse  lever  ashby  workable  smartrecruiters  recruitee  pinpoint
+#   breezy  recruiterbox  jobscore  crelate  personio  paylocity  dayforce
+#   workday  eightfold
+#
+# Before adding, check public/slugs.json to see if the company is already covered
+# (search for the slug under its ATS). Lowercase the slug. One company per line.
+# Contributed slugs are fused into the daily crawl, so your addition persists even
+# as the discovery set is regenerated.
+#
+# Add your contributions below this line:
+# -------------------------------------------------------------------------------
