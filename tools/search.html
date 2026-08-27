@@ -33,6 +33,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 #cmp .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
 #cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
 #cmp .opt:hover{border-color:var(--acc)}
+.gcard .jd{font-size:12px;color:#c9c9d0;max-height:110px;overflow:hidden;margin-top:4px}.gcard .btns .more{background:var(--ok)}.gcard .btns .less{background:var(--no)}.gcard.more{border-color:var(--ok)}.gcard.less{border-color:var(--no);opacity:.6}
 .gcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px}.gcard.none{opacity:.4}.gcard .lbl{font-weight:600}.gcard ul{margin:2px 0 0 16px;padding:0;font-size:12px;color:#c9c9d0}.gcard .btns{display:flex;gap:6px;margin-top:6px}.gcard .btns button{flex:1;padding:5px}.gcard .btns .on{background:var(--acc)}
 .scchips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin:0 6px 6px 0;padding:6px 10px}.scchips button.on{background:var(--acc);border-color:var(--acc)}.scchips button.enc{background:rgba(46,204,113,.18);border-color:var(--ok)}.scchips button.dis{background:rgba(231,76,60,.18);border-color:var(--no);text-decoration:line-through}.scchips button span{color:var(--mut);font-size:11px;margin-left:4px}
 #cmp .guess{font-size:11px;color:var(--mut);letter-spacing:.3px;text-transform:uppercase;min-height:14px}#cmp .guess b{color:#4dff88;font-weight:600}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
@@ -65,12 +66,10 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
     <div class="top" style="margin-top:14px"><span id="sc-n"></span><span><button class="g" id="sc-any">anywhere</button> <button id="sc-go">continue →</button></span></div>
   </div>
   <div id="what" style="display:none">
-    <h2 style="margin:0 0 6px">What to ban?</h2>
-    <p class="hint" style="margin:0 0 10px">Terms from the jobs in scope. Click a term to <b style="color:var(--no)">✖ ban</b> it: any job with it in the title (or description, second row) is dropped. Click again to un-ban. Add your own below.</p>
-    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the title</h3><div id="kw-t" class="scchips"></div>
-    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the description</h3><div id="kw-b" class="scchips"></div>
-    <div class="row" style="margin-top:8px"><input id="kw-add" type="text" placeholder="ban a term, e.g. frontend or 'on-site' … then Enter"><select id="kw-where"><option value="t">in title</option><option value="b">in description</option></select></div>
-    <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button id="wh-go">continue →</button></span></div>
+    <h2 style="margin:0 0 6px">What?</h2>
+    <p class="hint" style="margin:0 0 10px">A spread of jobs from your scope. Mark <b style="color:var(--ok)">More</b> like this or <b style="color:var(--no)">Less</b> like this; skip the rest. This seeds the model before it starts asking you to compare.</p>
+    <div id="wh-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;max-height:62vh;overflow:auto"></div>
+    <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button class="g" id="wh-more">show another spread</button> <button id="wh-go">continue →</button></span></div>
   </div>
   <div id="cmpmain">
   <div class="top"><span id="cmpn">comparison 1</span><div class="conf"><i id="cmpbar"></i></div><span id="cmpc">confidence 0%</span><span><kbd>←</kbd> left <kbd>→</kbd> right <kbd>S</kbd> skip <kbd>Esc</kbd> stop</span></div>
@@ -103,6 +102,9 @@ function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.le
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
 function dot(a,b){let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s}
 const ideal=norm(IDEAL.vector);
+let prior=Float32Array.from(ideal);  // anchor for the models: ideal JD, shifted by the More/Less seed sets
+function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(ideal);return}
+  const v=Float32Array.from(ideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.vec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.vec[i]/N.length;prior=norm(v)}
 for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
@@ -120,15 +122,15 @@ function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=
 // ---- pairwise taste model (Bradley-Terry on vector differences): P(a beats b) = sigmoid(u·(va−vb))
 st.compares = st.compares || [];  // [{a,b,win}] keys
 const byKey = Object.fromEntries(JOBS.map(j => [j.k, j]));
-let u = new Float32Array(ideal.length), taste = false;  // taste=true once a confident model exists
+let u = Float32Array.from(prior), taste = false;  // taste=true once a confident model exists
 const K_COMMITTEE = 5; let committee = [];
 function fitOn(C, iters = 60){
-  const w = Float32Array.from(ideal); if (!C.length) return w;
+  const w = Float32Array.from(prior); if (!C.length) return w;
   const lr = .7, l2 = .02;
   for (let ep = 0; ep < iters; ep++) for (const [a, b, win] of C) {
     let s = 0; for (let i = 0; i < w.length; i++) s += w[i] * (a.vec[i] - b.vec[i]);
     const y = win === 'a' ? 1 : 0, p = 1 / (1 + Math.exp(-s)), g = p - y;
-    for (let i = 0; i < w.length; i++) w[i] -= lr * (g * (a.vec[i] - b.vec[i]) + l2 * (w[i] - ideal[i]));
+    for (let i = 0; i < w.length; i++) w[i] -= lr * (g * (a.vec[i] - b.vec[i]) + l2 * (w[i] - prior[i]));
   }
   return w;
 }
@@ -231,28 +233,29 @@ function startCmp(){
   $('#scope').style.display = 'block'; $('#what').style.display = 'none'; $('#cmpmain').style.display = 'none'; renderScope();
   event({ type: 'sort_start', compares: st.compares.length });
 }
-const STOPW=new Set('and or of the for a in to with at on & - senior sr jr ii iii iv i lead staff associate assistant engineer engineering software developer development remote job jobs position role roles team hiring new'.split(' '));
-function inScopeJobs(){return JOBS.filter(j=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})}
-function mineTitle(list){const c={};for(const j of list){const w=(j.t||'').toLowerCase().replace(/[^a-z0-9+#./ -]/g,' ').split(/\s+/).filter(x=>x&&!STOPW.has(x)&&x.length>1);const seen=new Set();for(let i=0;i<w.length;i++){for(const t of [w[i],i+1<w.length?w[i]+' '+w[i+1]:null]){if(!t||seen.has(t))continue;seen.add(t);c[t]=(c[t]||0)+1}}}
-  return Object.entries(c).filter(([t,n])=>n>=Math.max(3,list.length*0.01)).sort((a,b)=>b[1]-a[1]).slice(0,28)}
-function mineBody(list){const c={};for(const j of list){const txt=(j.jd||'').toLowerCase();for(const t of TECH)if(hasTerm(txt,t))c[t]=(c[t]||0)+1}return Object.entries(c).filter(([t,n])=>n>=3).sort((a,b)=>b[1]-a[1]).slice(0,40)}
-function chip(kind,t,n){const b=document.createElement('button');const v=st.kw[kind][t]||0;b.className=v<0?'dis':'';b.innerHTML=`${v<0?'✖ ':''}${esc(t)}<span>${n!=null?n:''}</span>`;
-  b.onclick=()=>{const nv=(st.kw[kind][t]||0)<0?0:-1;if(nv===0)delete st.kw[kind][t];else st.kw[kind][t]=nv;save();event({type:'ban',where:kind,term:t,on:nv<0});renderWhat()};return b}
+let spreadSeed=0;
+function inScopeJobs(){return JOBS.filter(j=>{if(kwHidden(j))return false;for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})}
+function spread(list,k){  // farthest-point sampling over vectors, seeded at the job nearest the ideal JD (offset by spreadSeed)
+  if(list.length<=k)return list.slice();const byS=[...list].sort((a,b)=>b.sim-a.sim);const out=[byS[Math.min(spreadSeed*3,byS.length-1)]];const d=new Float32Array(list.length).fill(Infinity);
+  for(let r=0;r<k-1;r++){const last=out[out.length-1];let bi=-1,bd=-Infinity;for(let i=0;i<list.length;i++){const j=list[i];if(out.includes(j))continue;const dist=1-dot(j.vec,last.vec);if(dist<d[i])d[i]=dist;const sc=d[i]+0.12*j.sim;if(sc>bd){bd=sc;bi=i}}if(bi<0)break;out.push(list[bi])}
+  return out}
 function renderWhat(){
-  const list=inScopeJobs();
-  const tEl=$('#kw-t'),bEl=$('#kw-b');tEl.innerHTML='';bEl.innerHTML='';
-  const tTerms=mineTitle(list),bTerms=mineBody(list);
-  for(const [t,n] of tTerms)tEl.appendChild(chip('t',t,n));for(const [t] of Object.entries(st.kw.t))if(!tTerms.some(x=>x[0]===t))tEl.appendChild(chip('t',t,null));
-  for(const [t,n] of bTerms)bEl.appendChild(chip('b',t,n));for(const [t] of Object.entries(st.kw.b))if(!bTerms.some(x=>x[0]===t))bEl.appendChild(chip('b',t,null));
+  const list=inScopeJobs().filter(j=>st.labels[j.k]===undefined);const el=$('#wh-cards');el.innerHTML='';
+  for(const j of spread(list,24)){const d=document.createElement('div');d.className='gcard';
+    d.innerHTML=`<div class="lbl">${esc(j.t)}</div><div class="meta" style="color:var(--mut);font-size:12px">${esc(j.c)}${j.l?' · '+esc(j.l.slice(0,40)):''}${j.rm&&j.rm!=='unknown'?' · '+j.rm:''}${salaryOf(j)?' · 💰':''}</div><div class="jd">${esc((j.e&&j.e.summary)||(j.jd||'').slice(0,360))}</div><div class="btns"><button class="g more">More like this</button><button class="g less">Less</button></div>`;
+    const [bm,bl]=d.querySelectorAll('button');
+    bm.onclick=()=>{st.labels[j.k]=st.labels[j.k]===1?undefined:1;if(st.labels[j.k]===undefined)delete st.labels[j.k];d.className='gcard'+(st.labels[j.k]===1?' more':'');save();event({type:'seed',key:j.k,value:st.labels[j.k]??null,title:j.t,company:j.c});whatCount()};
+    bl.onclick=()=>{st.labels[j.k]=st.labels[j.k]===0?undefined:0;if(st.labels[j.k]===undefined)delete st.labels[j.k];d.className='gcard'+(st.labels[j.k]===0?' less':'');save();event({type:'seed',key:j.k,value:st.labels[j.k]??null,title:j.t,company:j.c});whatCount()};
+    el.appendChild(d)}
   whatCount()}
-function whatCount(){const n=JOBS.filter(passes).length,dis=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v<0).length,all=inScopeJobs().length;$('#wh-n').textContent=`${n.toLocaleString()} of ${all.toLocaleString()} jobs remain · ${dis} banned term${dis===1?'':'s'}`}
-$('#kw-add').onkeydown=e=>{if(e.key!=='Enter')return;e.preventDefault();const t=$('#kw-add').value.trim().toLowerCase();if(!t)return;const kind=$('#kw-where').value;st.kw[kind][t]=-1;save();event({type:'ban',where:kind,term:t,on:true});$('#kw-add').value='';renderWhat()};
+function whatCount(){const P=JOBS.filter(j=>st.labels[j.k]===1).length,N=JOBS.filter(j=>st.labels[j.k]===0).length;$('#wh-n').textContent=`${P} more · ${N} less · ${inScopeJobs().length.toLocaleString()} jobs in scope`}
+$('#wh-more').onclick=()=>{spreadSeed++;renderWhat()};
 function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});$('#scope').style.display='none';$('#what').style.display='block';renderWhat()}
 $('#wh-back').onclick=()=>{$('#what').style.display='none';$('#scope').style.display='block'};
 $('#wh-go').onclick=()=>beginPairs();
 function beginPairs(){
-  event({ type: 'bans', title: Object.keys(st.kw.t), body: Object.keys(st.kw.b), n: JOBS.filter(passes).length });
-  renderFacets(); render();
+  event({ type: 'seed_done', more: JOBS.filter(j => st.labels[j.k] === 1).map(j => j.k), less: JOBS.filter(j => st.labels[j.k] === 0).map(j => j.k), n: JOBS.filter(passes).length });
+  updatePrior(); fitPairs(); refit(); renderFacets(); render();
   $('#what').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
 }
 $('#sc-go').onclick = toWhat;
@@ -315,5 +318,5 @@ $('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render()};$
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
 $('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitPairs();taste=st.compares.length>0;refit();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
+st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();updatePrior();fitPairs();taste=st.compares.length>0;refit();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>

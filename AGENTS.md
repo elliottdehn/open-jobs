@@ -63,8 +63,8 @@ While served, every interaction is appended to `work/interactions.jsonl`:
 
 Tell the person: J = yes, K = no, Space opens the description, O opens the posting, and the
 rainbow **Sort** button (top right) first asks **Where?** (remote/country/region chips) and
-**What to ban?** (terms mined from the slice's titles and descriptions; a click bans the term and
-drops every job containing it), then runs pairwise comparisons ("which would you rather have?")
+**What?** (a spread of ~24 jobs across the scope; **More** / **Less** like this seeds the model —
+these count as yes/no labels and shift the anchor vector), then runs pairwise comparisons ("which would you rather have?")
 until the model predicts their recent picks reliably, and sorts by that taste. Comparisons are
 logged as `compare {a,b,win}` events; `rank` uses them (taste model) plus any J/K labels.
 
