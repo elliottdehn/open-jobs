@@ -105,6 +105,9 @@ each on `gpt-5.6-luna` (200 jobs ≈ $0.75, but 15-20 min: the final merge is se
 revising the ideal JD. **Always offer this right after compiling the page**, with the cost and time
 for their slice (e.g. "I can have Luna hand-sort your top 200 for about $0.75 and 15 minutes with
 your OpenAI key"). If they don't have a key, tell them where to get one; don't skip the offer.
+In the same breath, remind them they can always hand-sort with the rainbow **Sort** button in the
+top right of the page (a couple dozen "which would you rather have?" picks) — it's free and
+instant, but not as good as having the model read every posting.
 
 ## 5. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
