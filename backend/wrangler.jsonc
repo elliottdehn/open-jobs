@@ -10,19 +10,21 @@
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["MyDurableObject"] },
 		{ "tag": "v2", "deleted_classes": ["MyDurableObject"], "new_sqlite_classes": ["Board", "Registry"] },
-		{ "tag": "v3", "new_sqlite_classes": ["RateLimit"] }
+		{ "tag": "v3", "new_sqlite_classes": ["RateLimit"] },
+		{ "tag": "v4", "new_sqlite_classes": ["Budget"] }
 	],
 	"durable_objects": {
 		"bindings": [
 			{ "class_name": "Board", "name": "BOARD" },
 			{ "class_name": "Registry", "name": "REGISTRY" },
-			{ "class_name": "RateLimit", "name": "RATELIMIT" }
+			{ "class_name": "RateLimit", "name": "RATELIMIT" },
+			{ "class_name": "Budget", "name": "BUDGET" }
 		]
 	},
 	// Static data for the local-first client: tree manifest, group files, parquet. Served via GET /data/*.
 	"r2_buckets": [{ "binding": "DATA", "bucket_name": "jobscream-data" }],
 	// The web client (web/). Served at / ; API routes take precedence via run_worker_first.
-	"assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/embed", "/data/*", "/ats", "/sync", "/sync/*", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
+	"assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/embed", "/enrich", "/enrich/*", "/data/*", "/ats", "/sync", "/sync/*", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
 	"triggers": {
 		// Daily sweep that (re)arms every board's alarm. Boards fetch at their own fixed slot.
 		"crons": ["0 0 * * *"]
@@ -40,6 +42,9 @@
 		// "off" = only lazily via POST /jobs/enrich.
 		"JOB_ENRICH": "off",
 		// POST /embed per-IP limit
+		// Public POST /enrich: per-IP USD caps (actual token + web-search cost; cached results are free)
+		"ENRICH_HOUR_USD": "5",
+		"ENRICH_DAY_USD": "50",
 		"EMBED_RATE_LIMIT": "10",
 		"EMBED_RATE_WINDOW_MS": "600000"
 	},

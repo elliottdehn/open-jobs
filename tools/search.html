@@ -45,6 +45,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <button class="g" id="toggleIdeal">ideal JD</button>
   <button class="g" id="export">export model + labels</button>
   <span id="chips"></span>
+  <button class="g" id="enrichbtn" title="Structured extraction (seniority, salary, remote policy, skills…) + company info for the visible ranking. Metered per IP: $5/h, $50/day; cached results are free.">⚡ Enrich top 300</button>
   <button id="sortbtn" title="Compare pairs until the model knows your taste, then sort">✨ Sort</button>
   <span class="m" id="stats"></span>
   <span class="m"><kbd>J</kbd> yes <kbd>K</kbd> no <kbd>Space</kbd> open/close <kbd>↑↓</kbd> move <kbd>O</kbd> open link</span>
@@ -58,6 +59,12 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 <main>
   <aside>
     <h3>work arrangement</h3><div id="f-rm"></div>
+    <h3>seniority</h3><div id="f-sn"></div>
+    <h3>role family</h3><div id="f-rf"></div>
+    <h3>employment</h3><div id="f-et"></div>
+    <h3>salary</h3><div id="f-sa"></div>
+    <h3>industry</h3><div id="f-in"></div>
+    <h3>company size</h3><div id="f-cs"></div>
     <h3>countries</h3><div id="f-co"></div>
     <h3>regions / states</h3><div id="f-rg"></div>
     <h3>cities</h3><div id="f-ci"></div>
@@ -77,7 +84,7 @@ const ideal=norm(IDEAL.vector);
 for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
-let st={labels:{},notes:{},opened:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
+let st={labels:{},notes:{},opened:{},enrich:{},companies:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
 // ---- model: logistic regression seeded at the ideal vector, refit on every label
@@ -151,13 +158,32 @@ function stopCmp(){
   render(); $('#stats').textContent += ` · sorted by taste (${st.compares.length} comparisons)`;
 }
 function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] || 0; }
+async function enrichTop(n=300){
+  const btn=$('#enrichbtn');btn.disabled=true;
+  const list=JOBS.filter(passes).sort((a,b)=>b.score-a.score).slice(0,n).filter(j=>!j.e);
+  let spent=0,done=0;
+  for(let i=0;i<list.length;i+=100){
+    const batch=list.slice(i,i+100);btn.textContent=`⚡ enriching ${Math.min(i+100,list.length)}/${list.length}…`;
+    let r;try{r=await fetch((location.protocol.startsWith('http')&&location.port!=='8765'?'':(window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev'))+'/enrich',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jobs:batch.map(j=>{const [ats,rest]=j.k.split('/',2);const [slug,id]=rest.split('#');return{ats,slug,id}})})})}catch(e){btn.textContent='⚡ Enrich (network error)';btn.disabled=false;return}
+    const res=await r.json().catch(()=>({}));
+    for(const [name,b] of Object.entries(res.boards||{}))if(b.company)st.companies[name]={name:b.company.name,website:b.company.website,industry:b.company.industry,size:b.company.size_bucket,hq:(b.company.hq_location||{}).country_code,staffing:b.company.is_staffing_agency,desc:b.company.description};
+    for(const [k,x] of Object.entries(res.jobs||{}))if(x.status==='done'&&x.enrichment){st.enrich[k]=x.enrichment.data;done++}
+    applyEnrich();save();
+    if(r.status===429){btn.textContent=`⚡ rate limited (retry in ${res.retryAfterSeconds}s)`;event({type:'enrich',n:done,rateLimited:true});btn.disabled=false;rebuildFacets();renderFacets();render(false);return}
+    spent+=(res.cost||{}).thisCallUsd||0;
+  }
+  event({type:'enrich',n:done,usd:spent});btn.textContent=`⚡ Enrich top 300 (${done} added, $${spent.toFixed(2)})`;btn.disabled=false;rebuildFacets();renderFacets();render(false)}
+function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(e.work_arrangement&&e.work_arrangement!=='unspecified')j.rm=e.work_arrangement}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
+$('#enrichbtn').onclick=()=>enrichTop(300);
 $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
-const FACETS=['rm','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
+const FACETS=['rm','sn','rf','et','sa','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
 const NAMES={US:'United States',GB:'United Kingdom',CA:'Canada',DE:'Germany',FR:'France',IN:'India',NL:'Netherlands',ES:'Spain',IT:'Italy',PL:'Poland',PT:'Portugal',IE:'Ireland',SE:'Sweden',CH:'Switzerland',AU:'Australia',SG:'Singapore',JP:'Japan',BR:'Brazil',MX:'Mexico',IL:'Israel',AE:'UAE',AT:'Austria',BE:'Belgium',DK:'Denmark',NO:'Norway',FI:'Finland',CZ:'Czechia',GR:'Greece',KR:'South Korea',HK:'Hong Kong',TW:'Taiwan',NZ:'New Zealand',AR:'Argentina',CO:'Colombia',CL:'Chile',ZA:'South Africa',NG:'Nigeria',KE:'Kenya',PH:'Philippines',UA:'Ukraine',TR:'Türkiye',RO:'Romania',HU:'Hungary'};
-const keysOf={rm:j=>[j.rm||'unknown'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
+const salaryBucket=j=>{const e=j.e;if(!e||e.salary_min==null&&e.salary_max==null)return['(not stated)'];const v=(e.salary_max||e.salary_min)*(e.salary_period==='hour'?2080:e.salary_period==='month'?12:e.salary_period==='week'?52:e.salary_period==='day'?260:1);return[v>=250000?'250k+':v>=200000?'200–250k':v>=150000?'150–200k':v>=100000?'100–150k':v>=60000?'60–100k':'<60k']};
+const keysOf={rm:j=>[j.rm||'unknown'],sn:j=>j.e?[j.e.seniority||'unspecified']:['(not enriched)'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
 for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1;
+function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
 function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:f==='rm'?4:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderChips();render()};el.appendChild(l)})}renderChips()}
 // quick chips: remote, and the top 3 countries
 function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
@@ -173,7 +199,7 @@ function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passe
   const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
   $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · ${yes} yes / ${no} no`;hi()}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div><div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
+  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div>${j.e?`<div class="meta" style="color:#c9c9d0;margin-top:3px">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.work_arrangement!=='unspecified'?j.e.work_arrangement:'',j.e.salary_raw?'💰 '+j.e.salary_raw:'',j.e.visa_sponsorship==='yes'?'visa ✓':'',(j.e.skills_required||[]).slice(0,6).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.staffing?' · staffing agency':''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}<div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
   d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};
   d.querySelector('.note').onkeydown=e=>e.stopPropagation();return d}
@@ -189,5 +215,5 @@ $('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render()};$
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
 $('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-fitPairs();taste=st.compares.length>0;refit();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
+st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitPairs();taste=st.compares.length>0;refit();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>

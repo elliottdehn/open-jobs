@@ -1,6 +1,7 @@
 import { enabledAts, boardName, slugsFor, fetchers } from "./ats";
 export { Board } from "./board";
 export { RateLimit } from "./ratelimit";
+export { Budget } from "./budget";
 import type { BoardState, EnrichJobsResult, JobQuery } from "./board";
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
@@ -89,6 +90,62 @@ export default {
 				const busy = /429|rate limit/i.test(msg);
 				return Response.json({ error: busy ? "embedding service busy, try again in a moment" : msg }, { status: busy ? 503 : 500, headers: { ...cors, "retry-after": "5" } });
 			}
+		}
+
+		// POST /enrich  {"jobs":[{"ats","slug","id"}…]} -> public, per-IP metered enrichment of jobs + their boards' companies.
+		//   Cached results are free. Uncached work is reserved against the IP's budget (ENRICH_HOUR_USD / ENRICH_DAY_USD),
+		//   then settled at actual token + web-search cost. 429 with retry-after when a window is exhausted.
+		//   Response: { boards: {name: {company, companyError}}, jobs: {key: {status, enrichment, cached}}, cost: {...} }
+		if (parts[0] === "enrich" && parts.length === 1 && request.method === "POST") {
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			const hourLimit = Number(env.ENRICH_HOUR_USD || 5), dayLimit = Number(env.ENRICH_DAY_USD || 50);
+			const body = (await request.json().catch(() => null)) as { jobs?: { ats: string; slug: string; id: string }[] } | null;
+			const list = (body?.jobs ?? []).filter((j) => j && fetchers[j.ats] && j.slug && j.id).slice(0, 300);
+			if (!list.length) return Response.json({ error: "jobs[] required (max 300 per call)" }, { status: 400, headers: cors });
+			const byBoard = new Map<string, string[]>();
+			for (const j of list) { const name = boardName(j.ats, j.slug); byBoard.set(name, [...(byBoard.get(name) ?? []), j.id]); }
+			// dry run: what's cached, what would cost
+			const dry = new Map<string, EnrichJobsResult>();
+			await Promise.all([...byBoard].map(async ([name, ids]) => { try { dry.set(name, await env.BOARD.getByName(name).enrichJobs(ids, false, true)); } catch { /* skip board */ } }));
+			const EST_JOB = 0.0012, EST_COMPANY = 0.015;
+			let estimate = 0;
+			for (const [, r] of dry) estimate += r.todo.length * EST_JOB + (r.companyCached ? 0 : EST_COMPANY);
+			const budget = env.BUDGET.getByName(`ip:${ip}`);
+			let reserved = 0;
+			if (estimate > 0) {
+				const res = await budget.reserve(estimate, hourLimit, dayLimit);
+				if (!res.ok) {
+					// nothing new admitted: still return the cached part
+					const boards: Record<string, unknown> = {}, jobs: Record<string, unknown> = {};
+					for (const [name, r] of dry) { boards[name] = { company: r.company, companyError: r.companyError }; for (const [id, x] of Object.entries(r.jobs)) jobs[`${name}#${id}`] = x; }
+					return Response.json({ boards, jobs, rateLimited: true, retryAfterSeconds: Math.ceil(res.retryAfterMs / 1000), spent: { hourUsd: res.hourUsd, dayUsd: res.dayUsd, hourLimit, dayLimit } },
+						{ status: 429, headers: { ...cors, "retry-after": String(Math.ceil(res.retryAfterMs / 1000)) } });
+				}
+				reserved = estimate;
+			}
+			const boards: Record<string, unknown> = {}, jobs: Record<string, unknown> = {};
+			let actual = 0;
+			await Promise.all([...byBoard].map(async ([name, ids]) => {
+				try {
+					const r: EnrichJobsResult = await env.BOARD.getByName(name).enrichJobs(ids, false, false);
+					actual += r.costUsd;
+					boards[name] = { company: r.company, companyError: r.companyError };
+					for (const [id, x] of Object.entries(r.jobs)) jobs[`${name}#${id}`] = x;
+				} catch (e) {
+					const error = e instanceof Error ? e.message : String(e);
+					boards[name] = { company: null, companyError: error };
+					for (const id of ids) jobs[`${name}#${id}`] = { status: "error", error };
+				}
+			}));
+			if (reserved > 0) await budget.settle(reserved, actual);
+			const st = await budget.status(hourLimit, dayLimit);
+			return Response.json({ boards, jobs, cost: { thisCallUsd: +actual.toFixed(4), hourUsd: +st.hourUsd.toFixed(4), dayUsd: +st.dayUsd.toFixed(4), hourLimit, dayLimit } }, { headers: cors });
+		}
+
+		// GET /enrich/budget -> this IP's spend windows
+		if (parts[0] === "enrich" && parts[1] === "budget" && request.method === "GET") {
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			return Response.json(await env.BUDGET.getByName(`ip:${ip}`).status(Number(env.ENRICH_HOUR_USD || 5), Number(env.ENRICH_DAY_USD || 50)), { headers: cors });
 		}
 
 		// GET /data/<key>  -> object from the DATA R2 bucket (manifest, group files, parquet) with Range support

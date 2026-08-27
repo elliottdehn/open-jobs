@@ -9,6 +9,7 @@
   uv run tools/jobs.py fetch  --groups 12,45,301 [--top N]        -> download groups -> work/jobs.parquet
   uv run tools/jobs.py html   [--out work/search.html]            -> single-file search UI over work/jobs.parquet
   uv run tools/jobs.py serve  [--port 8765]                       -> serve work/ + record interactions to work/interactions.jsonl
+  uv run tools/jobs.py enrich [--top N | --all]                   -> structured extraction + company for the slice (metered per IP: $5/h, $50/day) -> work/enrichment.json
   uv run tools/jobs.py rank   [--labels work/interactions.jsonl]  -> re-rank with a classifier trained on labels -> work/ranked.csv
   uv run tools/jobs.py status                                     -> what's in work/
 
@@ -118,6 +119,38 @@ def cmd_fetch(a):
     con.execute(f"COPY (SELECT * FROM jobs) TO '{os.path.join(WORK, 'jobs.parquet')}' (FORMAT PARQUET)")
     print(f"wrote {WORK}/jobs.parquet and {WORK}/jobs.duckdb: {len(rows):,} jobs from {len(leaves)} groups. Columns: ats, slug, id, title, company, location, url, seen_ms, jd, leaf, sim (cosine to ideal JD), vec_b64 (float32 LE base64).")
 
+def post(path, body):
+    req = urllib.request.Request(f"{BASE}{path}", data=json.dumps(body).encode(), headers={**UA, "content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r: return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.loads(e.read())
+        except Exception: return e.code, {}
+
+def cmd_enrich(a):
+    rows = load_jobs()
+    keys = [(r[0], r[1], r[2]) for r in rows]  # ordered by sim desc
+    if not a.all: keys = keys[: a.top]
+    p = os.path.join(WORK, "enrichment.json")
+    store = json.load(open(p)) if os.path.exists(p) else {"jobs": {}, "boards": {}}
+    todo = [k for k in keys if f"{k[0]}/{k[1]}#{k[2]}" not in store["jobs"]]
+    print(f"{len(keys)} jobs selected, {len(todo)} not yet enriched locally; sending in batches of 100")
+    spent = 0.0
+    for i in range(0, len(todo), 100):
+        batch = todo[i:i + 100]
+        code, res = post("/enrich", {"jobs": [{"ats": k[0], "slug": k[1], "id": k[2]} for k in batch]})
+        for name, b in (res.get("boards") or {}).items(): store["boards"][name] = b
+        for key, j in (res.get("jobs") or {}).items():
+            if j.get("status") == "done": store["jobs"][key] = j["enrichment"]
+        json.dump(store, open(p, "w"))
+        if code == 429:
+            print(f"rate limited by the server: spent ${res.get('spent', {}).get('hourUsd', 0):.2f} this hour / ${res.get('spent', {}).get('dayUsd', 0):.2f} today; retry in {res.get('retryAfterSeconds')}s. Saved what came back.")
+            break
+        if code != 200: print(f"batch failed: HTTP {code} {str(res)[:200]}"); break
+        c = res.get("cost", {}); spent += c.get("thisCallUsd", 0)
+        print(f"  {min(i + 100, len(todo))}/{len(todo)}: ${c.get('thisCallUsd', 0):.3f} this call, ${c.get('hourUsd', 0):.2f}/${c.get('hourLimit')} this hour, ${c.get('dayUsd', 0):.2f}/${c.get('dayLimit')} today", flush=True)
+    print(f"wrote {p}: {len(store['jobs'])} jobs, {len(store['boards'])} boards enriched (this run ≈ ${spent:.2f}). Re-run `html` to use it.")
+
 def load_jobs():
     import duckdb
     p = os.path.join(WORK, "jobs.parquet")
@@ -135,11 +168,18 @@ def cmd_html(a):
         seen.add(key); uniq.append(r)
     if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
     rows = uniq
+    ep = os.path.join(WORK, "enrichment.json")
+    enr = json.load(open(ep)) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
     jobs = []
     for r in rows:
         loc = parse_location(r[5], r[8])
-        jobs.append({"k": f"{r[0]}/{r[1]}#{r[2]}", "t": r[3], "c": r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
-                     "rm": loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"]})
+        key = f"{r[0]}/{r[1]}#{r[2]}"
+        e = (enr["jobs"].get(key) or {}).get("data")
+        comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
+        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
+                     "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
+                     "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
+    print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     html = TEMPLATE.replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w").write(html)
@@ -204,7 +244,7 @@ def cmd_rank(a):
     for i in order[:10]: print(f"  {score[i]:.3f}  {rows[i][3][:60]} | {rows[i][4]} | {rows[i][5]}")
 
 def cmd_status(a):
-    for f in ("ideal-jd.md", "ideal.json", "groups.json", "jobs.parquet", "search.html", "interactions.jsonl", "model.json", "ranked.csv"):
+    for f in ("ideal-jd.md", "ideal.json", "groups.json", "jobs.parquet", "search.html", "enrichment.json", "interactions.jsonl", "model.json", "ranked.csv"):
         p = os.path.join(WORK, f); print(f"{'✓' if os.path.exists(p) else '·'} {f}" + (f"  ({os.path.getsize(p)/1e6:.1f} MB, {time.strftime('%H:%M', time.localtime(os.path.getmtime(p)))})" if os.path.exists(p) else ""))
     p = os.path.join(WORK, "interactions.jsonl")
     if os.path.exists(p):
@@ -220,7 +260,8 @@ s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add
 s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12)
 s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000)
 s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true")
+s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.add_argument("--all", action="store_true")
 s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))
 sub.add_parser("status")
 args = ap.parse_args()
-{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "rank": cmd_rank, "status": cmd_status}[args.cmd](args)
+{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "status": cmd_status}[args.cmd](args)

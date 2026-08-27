@@ -55,6 +55,19 @@ rainbow **Sort** button (top right) runs pairwise comparisons ("which would you 
 until the model predicts their recent picks reliably, then sorts by that taste. Comparisons are
 logged as `compare {a,b,win}` events; `rank` uses them (taste model) plus any J/K labels.
 
+## 4b. Enrich the slice (optional, metered)
+```
+uv run tools/jobs.py enrich --top 300     # or --all
+uv run tools/jobs.py html                  # recompile so the page has the structured fields
+```
+Runs structured extraction on the jobs (seniority, role family, work arrangement, salary when
+stated, skills, one-line summary, alt titles…) and resolves each job's company (name, website,
+industry, size, HQ, staffing-agency flag). Results are cached server-side forever, so repeats are
+free; new work is metered **per IP at $5/hour and $50/day** (real token + web-search cost, roughly
+$0.001 per job and $0.015 per new company). The page's ⚡ Enrich button does the same for the
+current top 300. On 429 the tool saves what it got and tells you when to retry. Enriched fields
+become facets (seniority, role family, employment type, salary band, industry, company size).
+
 ## 5. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
 - **Labels** → `uv run tools/jobs.py rank` trains a classifier on them and writes

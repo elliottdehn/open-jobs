@@ -5,6 +5,7 @@ import { ENRICH_BATCH, ENRICH_CONCURRENCY, enricher, enrichOne, jdText, type Job
 import { EMBED_TAG, embedTexts } from "./openai";
 import { deriveCandidates } from "./company";
 import { resolveCompany, type CompanyEnrichment } from "./company";
+import { usd } from "./pricing";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -130,7 +131,12 @@ export interface JobEnrichResult {
 export interface EnrichJobsResult {
 	company: CompanyEnrichment | null;
 	companyError: string | null;
+	companyCached: boolean;
 	jobs: Record<string, JobEnrichResult>;
+	/** Keys that would need a model call (dry run) / were called (real run). */
+	todo: string[];
+	/** Actual USD spent in this call (jobs + company), 0 on dry run. */
+	costUsd: number;
 }
 
 export interface Diff {
@@ -683,13 +689,17 @@ export class Board extends DurableObject<Env> {
 	 * Lazy enrichment: enrich the given job ids now and return their payloads. Idempotent — jobs
 	 * already `done` are returned from storage unless `force`. Unknown ids are reported as such.
 	 */
-	async enrichJobs(ids: string[], force = false): Promise<EnrichJobsResult> {
+	async enrichJobs(ids: string[], force = false, dryRun = false): Promise<EnrichJobsResult> {
 		const meta = await this.meta();
 		if (!meta) throw new Error("board not initialized");
+		let costUsd = 0;
+		const companyCached = !!meta.company;
 		// Resolve the company first (one-shot, cached on meta) so job extraction gets it as context.
-		if (!meta.company && this.env.OPENAI_KEY) {
-			const live = (await this.getJobs({ status: "open" })).map((j) => j as Job);
+		if (!meta.company && this.env.OPENAI_KEY && !dryRun) {
+			const live = (await this.getJobs({ status: "open", jobLimit: 5 })).map((j) => j as Job);
 			await this.enrichBoard(meta, live, false);
+			const c = meta.company as CompanyEnrichment | null | undefined;
+			if (c) costUsd += usd(c.usage, c.searches?.length ?? 0);
 			await this.ctx.storage.put("meta", meta);
 		}
 		const result: Record<string, JobEnrichResult> = {};
@@ -706,8 +716,15 @@ export class Board extends DurableObject<Env> {
 			}
 			todo.push(r);
 		}
-		const wrap = (): EnrichJobsResult => ({ company: meta.company ?? null, companyError: meta.companyError ?? null, jobs: result });
-		if (todo.length === 0) return wrap();
+		const wrap = (): EnrichJobsResult => ({
+			company: meta.company ?? null,
+			companyError: meta.companyError ?? null,
+			companyCached,
+			jobs: result,
+			todo: todo.map((r) => r.id),
+			costUsd,
+		});
+		if (todo.length === 0 || dryRun) return wrap();
 		if (!this.env.OPENAI_KEY) throw new Error("OPENAI_KEY secret not set");
 		const jobs = todo.map((r) => rowToJob(r) as Job);
 		const ctx = { ats: meta.ats, company: meta.company?.name ?? null };
@@ -727,6 +744,7 @@ export class Board extends DurableObject<Env> {
 							id,
 						);
 						result[id] = { status: "done", enrichment: e };
+						costUsd += usd(e.usage);
 					} catch (err) {
 						const msg = err instanceof Error ? err.message : String(err);
 						this.ctx.storage.sql.exec(`UPDATE jobs SET enrich_status = 'error', enrich_error = ? WHERE id = ?`, msg, id);

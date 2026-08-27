@@ -31,6 +31,7 @@ q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'')
                coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint,
                epoch_ms(first_seen_at) AS first_seen_ms,
                left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
+               json_extract(enrichment_json, '$.data') AS enrichment,
                embedding
         FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"""
 # Load via Arrow: the FLOAT[] column comes back as a ListArray whose flat values view is a zero-copy
@@ -40,7 +41,7 @@ emb = tbl.column("embedding").combine_chunks()
 vals = emb.values.to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
 offsets = emb.offsets.to_numpy()
 D = int(offsets[1] - offsets[0])
-cols = [tbl.column(c).to_pylist() for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "jd")]
+cols = [tbl.column(c).to_pylist() for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "jd", "enrichment")]
 meta_rows = list(zip(*cols))
 X = np.array(vals.reshape(-1, D))  # Arrow buffers are read-only; one writable copy (~9 GB), then drop the table
 del tbl, emb, vals, cols
@@ -52,6 +53,7 @@ print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s")
 # company name per board from boards parquet (resolved), else slug
 B = os.path.join(root, "boards", "*.parquet")
 comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size_bucket, company_hq_country, company_is_staffing_agency, company_description FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
 
 # PCA for splitting
 t = time.time()
@@ -164,8 +166,9 @@ for n in leaves:
     V = X[idx].astype(np.float32)  # exact vectors (unit length), float32 little-endian base64
     jobs = []
     for i, r in enumerate(idx):
-        a, s, jid, title, loc, url, _, fs, jd = meta_rows[r]
+        a, s, jid, title, loc, url, _, fs, jd, enr = meta_rows[r]
         jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "jd": jd,
+                     **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
                      "v": base64.b64encode(V[i].tobytes()).decode()})
     with open(os.path.join(out, "groups", f"{n['id']}.json"), "w") as f: json.dump({"leaf": n["id"], "lo": n["lo"], "hi": n["hi"], "jobs": jobs}, f)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
