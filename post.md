@@ -1,54 +1,54 @@
-# I open-sourced ~2 million jobs so your coding agent can run your job search
+# I turned my coding agent into a job-searching monster, again: ~2 million jobs, rebuilt bigger, ranked with local AI, CC0
 
-One prompt, in whatever agent you use (Claude Code, Codex, Cursor, Gemini CLI, whatever):
+repo: https://github.com/elliottdehn/open-jobs
+
+Two months ago I posted [I turned Claude Code into a job-searching monster](https://www.reddit.com/r/vibecoding/comments/1u8hrha/i_turned_claude_code_into_a_jobsearching_monster/): ~960k jobs from 16 applicant tracking systems, and a hull → pairwise-judgment → rank algorithm that Claude ran for you for about $10. Then I lost the repository in a data-loss event. So I rebuilt it from scratch, with a similar algorithm and everything I'd learned the first time, and it came back better and stronger. This is the announcement.
+
+One prompt, in whatever agent you use (Claude Code, Codex, Cursor, Gemini CLI):
 
 > "Clone https://github.com/elliottdehn/open-jobs, it's a job-searching toolchain. Help me find jobs to apply to."
 
-Unfortunately, web and mobile agents are not useful for this because the toolchain requires internet access to download the dataset.
+(Web and mobile agents won't work for this. The toolchain needs a machine with internet access to download its slice of the dataset.)
 
-The agent clones the repo, pulls the slice of the dataset that's relevant to you, and then it's just your agent working over a local table of real, current job postings. Rank them, filter them, dedupe them, summarize the ones worth reading, draft the cover letter, keep a shortlist in a file, check again tomorrow. It does what you tell it.
+## The Open Jobs Project, v2
 
-## What's in the dataset
+Vendors charge over a thousand dollars a month for open job data. That data is a commodity. Almost every company posts through an applicant tracking system with a public careers page, and it is not that hard to crawl all of them.
 
-Almost every company posts its jobs through an applicant tracking system: Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters, Paycom, iCIMS, and a dozen more. Every one of those has a public careers page, and it is not actually that hard to crawl all of them. The people who do it in bulk charge quadruple digits a month for access.
+The rebuilt dataset: **~2 million open jobs from ~65,000 company boards across 25 ATSes** (Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters, Paycom, iCIMS, Oracle, Dayforce and the rest), refreshed every day so every job in it is genuinely open, with the full description, company, location, posting date, and an embedding of every posting. Parquet. CC0, so use it for anything, commercially, without credit. There is no business model. I built it for myself and would rather share it than sit on it.
 
-This is the same data, free. ~2 million open jobs across ~65,000 company boards, refreshed daily, with the full job description, the company, the location, the posting date, and an embedding of every posting in a parquet file. There's no business model; I built it for myself and would rather share it than sit on it.
+What changed from v1: twice the jobs, more ATSes, full descriptions even for the providers whose listings are title-only (Workday alone is 800k), and a daily crawl that runs as one Durable Object per job board on Cloudflare for pocket change. What's different on purpose: jobs are **not enriched by default**. v1 ran 34 structured fields through an LLM for every posting; v2 keeps the raw record plus the vector and lets you enrich what you actually look at (more on that below).
 
 ## You don't download all of it
 
-The full set is about 50 GB. You can take it all if you want, but the point of the toolchain is that you don't have to.
+The full set is about 50 GB. You can take it, but you don't have to. Every job is embedded, and the corpus is split into a few thousand groups of similar jobs (nursing, backend/payments, HVAC project management, cruise-ship crew... it finds these itself, nobody labeled anything), laid out so neighbours in the file are neighbours in meaning. You download slices of the dataset based on a semantic query, and the first slice you get is the one you actually wanted.
 
-Every job is embedded, and the corpus is split into a few thousand groups of similar jobs (nursing, backend/payments, HVAC project management, cruise-ship crew... it finds these on its own, nobody labeled anything). The groups are laid out so that neighbours in the file are neighbours in meaning.
+## How jobs are ranked for you with local AI
 
-So the agent embeds what you're looking for (your résumé, or a paragraph), finds the nearest groups, and downloads just those. The first slice you get is the one you actually wanted. A typical search pulls a few thousand jobs and a few tens of MB, and the whole thing is on your disk in seconds.
+v1 was hull → learn taste (a few thousand LLM comparisons) → rank → filter hard. v2 keeps the shape and moves the expensive part to the very end, where it's optional.
 
-The algorithm behind the grouping isn't important. The only thing you need to know is that you download slices of the dataset based on a semantic query.
+**1. Write the job you want.** Not your résumé. A job description for the job you want, in the shape of a real posting: title, what you'd do day to day, must-haves, arrangement, comp if you care. Your agent drafts it, you correct it, two or three rounds. This is the hull step in v1 terms, except the "filter" is a point in embedding space, and everything downstream is measured against it. It's the most important ten minutes of the whole process.
 
-# How jobs are ranked for you
+**2. Embed it once, download the neighbourhood.** The JD goes through the same embedding model every posting went through. That call is the only thing that ever leaves your machine (rate-limited per IP because I pay for it). Your vector is compared against every group's centroid and the closest groups are downloaded: a few thousand jobs, full descriptions and vectors, on your disk in seconds.
 
-Step by step, this is what happens between "help me find a job" and a sorted list.
+**3. Pre-rank for free.** Cosine similarity to your JD, plus a small bonus for titles that share words with your target title. Locations get parsed into remote/hybrid/onsite, country, state, city. Salaries get pulled out of the description text mechanically (currency, period, annualized) wherever a posting states one. All of it becomes facets in a single self-contained HTML page served on localhost.
 
-**1. You and the agent write the job you want.** Not a résumé: a job description, in the same shape as a real posting (title, what you'd do day to day, must-haves, arrangement, comp if you care). The agent drafts it, you correct it, two or three rounds. This is the most important step, because everything downstream is measured against it.
+**4. Learn taste, with you as the judge.** v1 spent a few thousand LLM comparisons here. v2 spends zero, because the same trick works with a person: pairwise judgment is far better calibrated than absolute scoring, for people as much as for models. The Sort button runs three screens.
+- *Where?* Chips for remote/hybrid/onsite, countries, states. Everything else is dropped.
+- *What?* Two dozen jobs spread across your scope, farthest-point sampled so they're deliberately different from each other. Mark More like this or Less like this. That shifts the anchor: your JD plus the mean of your Mores minus the mean of your Lesses.
+- *Compare.* Two jobs, which would you rather have? A Bradley-Terry model over the vector difference learns from each answer, pulled toward the anchor so early picks can't swing it. The pairs are not random: a committee of bootstrapped models is refit after every pick and the next pair is the one they disagree on most, weighted toward jobs that are actually different (a decision between near-twins teaches nothing) and toward the top of the ranking, where order matters. It labels the option it predicts you'll pick, so you can watch it learn. It stops after 12 comparisons once the top of the ranking is stable across the committee or it predicts your recent picks reliably; hard stop at 25.
 
-**2. It gets embedded, once.** That text goes to the same embedding model every posting was embedded with, so it lands in the same space as the jobs. That call is the only thing that ever leaves your machine (rate-limited per IP because I pay for it). The vector comes back and stays local.
+**5. Rank.** Every job is scored by the learned taste vector and the list re-sorts. J/K on any row is a yes/no label that refits a classifier on top of it, live. On my own search, a role that is currently checking my references came out 4th of ~1,750 after 22 comparisons.
 
-**3. Nearest groups.** Your vector is compared against every group's centroid and the closest groups are downloaded (title, company, location, URL, full description, vector for every job). No clicking through cards; the centroid distance decides. A few thousand jobs land in a parquet file.
+**6. Have the model read them (optional, bring your own key).** With your own OpenAI key, `rank.py` merge-sorts your top N with the model as comparator, reading both postings against your JD. It does not do every comparison. It only asks about pairs that are both near the top of the base ranking, or that the base ranking calls a near-tie; the vectors decide everything else. A few hundred calls, about fifteen cents, a few minutes, every "why" cached. This is v1's expensive step moved to the end, where it's a hundred times cheaper because it only reads what's already plausible.
 
-**4. Pre-ranking.** Before you do anything, the list is sorted by cosine similarity between each job and your ideal JD, plus a small bonus for jobs whose title shares words with your target title. Locations are parsed into remote/hybrid/onsite, country, state and city; salaries are pulled out of the description text mechanically (currency, period, annualized) wherever a posting states one. All of that becomes facets in a single self-contained HTML page, served locally.
+**7. It's all files.** Labels, comparisons, notes and searches are logged locally as events. Your agent reads them, tells you what your picks say that your JD didn't, and revises the JD. The exported search is a weight vector: 6 KB, no account, no tracking, and a free reusable ranker for every future day of new postings.
 
-**5. Sort: Where, What, then compare.** The Sort button in the top right runs three quick screens.
-- *Where?* Chips for remote/hybrid/onsite, countries, states. Anything you don't pick is dropped from what follows.
-- *What?* Two dozen jobs spread across your scope (farthest-point sampled, so they're deliberately different from each other). Mark More like this or Less like this. Those picks shift the anchor vector: ideal JD plus the mean of your Mores minus the mean of your Lesses.
-- *Compare.* It shows two jobs and asks which you'd rather have. A pairwise model (Bradley-Terry over the vector difference, pulled toward the anchor so early picks can't swing it) learns from each answer. The pairs aren't random: a committee of bootstrapped models is refit after every pick, and the next pair is the one they disagree on most, weighted toward jobs that are different from each other (a decision between near-twins teaches nothing) and toward the top of the current ranking. It labels the option it predicts you'll choose, so you can see it learning. It stops after 12 comparisons once the top of the ranking is stable across the committee or it predicts your recent picks reliably, hard stop at 25.
+**Enrichment, on demand.** If you want structured fields (seniority, skills, remote policy, salary, company website and size), the page requests them for the jobs you're looking at. That's metered per IP at $5/hour and $50/day of actual API cost, cached forever, so whatever anyone enriches is in the next morning's dataset for everyone. The corpus enriches itself where people look.
 
-**6. The list re-sorts.** Every job is scored by the learned taste vector. J and K on any row is a yes/no label that refits a classifier on top of it, live.
+## Running it
 
-**7. Optional: have the LLM read them.** With your own OpenAI key, `rank.py` does a merge sort of your top N where the comparator is the model reading both postings against your ideal JD. It doesn't do every comparison: it only asks the model for pairs that are both in the top of the base ranking, or that the base ranking calls a near-tie; everything else is decided by the vectors. A few hundred calls, about fifteen cents, a few minutes, and every "why" is cached.
+Clone the repo, open your agent in it, and say what job you want. `AGENTS.md` is the playbook; the tools are a handful of small Python scripts (`embed` → `fetch` → `html` → `serve` → `rank`) that the agent drives. The code is meant to be changed for you, not used as-is: add a facet, change the weighting, fix the salary parser for your market, write a different page.
 
-**8. Everything you did is a file.** Labels, comparisons, bans, notes and searches are logged locally as events. The agent reads them, tells you what your picks say that your JD didn't, and revises the JD. The exported search is a weight vector: 6 KB, no account, reusable against tomorrow's slice.
+Cost to run: zero for the search itself (one embedding call on my dime). About fifteen cents if you want the model to read your top 200. v1 was $10; v2 is a coffee, and most of the coffee is optional.
 
-The jobs are not enriched by default. If you want structured fields (seniority, skills, remote policy, company website and size), the page can request them for the jobs you're looking at; that's metered per IP and cached forever, so whatever anyone enriches is in the next day's dataset for everyone.
-
-Repo: https://github.com/elliottdehn/open-jobs
-
-Happy to answer questions.
+Happy to answer questions about the crawling, the embeddings, the ranking, or how badly ATS APIs are designed.
