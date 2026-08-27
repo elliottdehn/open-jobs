@@ -50,17 +50,24 @@ for (;;) {
 	if (flags.slim) qs.set("slim", "1");
 	if (flags["skip-empty"]) qs.set("skipEmpty", "1");
 	if (flags.embed) qs.set("embed", "1");
-	// One page = 200 boards; big boards make these slow, so retry transient failures with backoff.
-	let res, text;
+	// One page can be hundreds of MB with vectors: stream the body line by line (never buffer it in one string).
+	let res, lines;
 	for (let attempt = 0; ; attempt++) {
 		try {
 			res = await fetch(`${base}/export/${ats}?${qs}`, { headers });
 			if (res.status >= 500 || res.status === 429) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
 			if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}: ${await res.text()}`), { fatal: true });
-			text = await res.text();
+			lines = [];
+			let carry = "";
+			const dec = new TextDecoder();
+			for await (const chunk of res.body) {
+				carry += dec.decode(chunk, { stream: true });
+				let nl;
+				while ((nl = carry.indexOf("\n")) >= 0) { const l = carry.slice(0, nl); carry = carry.slice(nl + 1); if (l) lines.push(l); }
+			}
+			carry += dec.decode(); if (carry.trim()) lines.push(carry);
 			// A DO failure mid-stream truncates the body without an HTTP error; verify the page is complete.
 			// Boards may span several lines ({part, more}) when vectors are included; count distinct boards.
-			const lines = text.split("\n").filter(Boolean);
 			const got = new Set(lines.map((l) => { const i = l.indexOf('"slug":"'); return i < 0 ? l : l.slice(i, l.indexOf('"', i + 8)); })).size;
 			const expected = Number(res.headers.get("x-page-boards") ?? got);
 			if (!flags["skip-empty"] && got !== expected) throw new Error(`truncated page: ${got}/${expected} boards`);
@@ -71,8 +78,7 @@ for (;;) {
 			await new Promise((r) => setTimeout(r, 3000 * 2 ** attempt));
 		}
 	}
-	for (const line of text.split("\n")) {
-		if (!line) continue;
+	for (const line of lines) {
 		const b = JSON.parse(line);
 		if (!b.part) boards++;
 		if (b.error) errors++;
