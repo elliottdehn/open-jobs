@@ -1,0 +1,83 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "backend",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-26",
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["MyDurableObject"] },
+		{ "tag": "v2", "deleted_classes": ["MyDurableObject"], "new_sqlite_classes": ["Board", "Registry"] },
+		{ "tag": "v3", "new_sqlite_classes": ["RateLimit"] }
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "class_name": "Board", "name": "BOARD" },
+			{ "class_name": "Registry", "name": "REGISTRY" },
+			{ "class_name": "RateLimit", "name": "RATELIMIT" }
+		]
+	},
+	// Static data for the local-first client: tree manifest, group files, parquet. Served via GET /data/*.
+	"r2_buckets": [{ "binding": "DATA", "bucket_name": "jobscream-data" }],
+	// The web client (web/). Served at / ; API routes take precedence via run_worker_first.
+	"assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/embed", "/data/*", "/ats", "/sync", "/sync/*", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
+	"triggers": {
+		// Daily sweep that (re)arms every board's alarm. Boards fetch at their own fixed slot.
+		"crons": ["0 0 * * *"]
+	},
+	"vars": {
+		// Set to a real value with `wrangler secret put ADMIN_TOKEN` to protect the HTTP endpoints.
+		"ADMIN_TOKEN": "",
+		// "on" = resolve the company behind every board automatically after its first successful fetch
+		// (one OpenAI Responses call with web_search per board, ~40k live boards). "off" = only via
+		// POST /boards/:ats/:slug/enrich-board.
+		"BOARD_ENRICH": "off",
+		// "on" = embed every live job once (text-embedding-3-small, 768 dims) after its detail fetch.
+		"EMBED": "on",
+		// "on" = run the structured job extraction automatically for every new job (see FIELDS.md §2 cost).
+		// "off" = only lazily via POST /jobs/enrich.
+		"JOB_ENRICH": "off",
+		// POST /embed per-IP limit
+		"EMBED_RATE_LIMIT": "10",
+		"EMBED_RATE_WINDOW_MS": "600000"
+	},
+	// Export pages with JD bodies + vectors are ~100 MB of JSON; the default 30 s CPU limit cuts them off.
+	"limits": { "cpu_ms": 300000 },
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	]
+	/**
+	 * Smart Placement
+	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 */
+	// "placement": {  "mode": "smart" }
+	/**
+	 * Bindings
+	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
+	 * databases, object storage, AI inference, real-time communication and more.
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+	 */
+	/**
+	 * Environment Variables
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
+	 * Note: Use secrets to store sensitive data.
+	 * https://developers.cloudflare.com/workers/configuration/secrets/
+	 */
+	// "vars": {  "MY_VARIABLE": "production_value" }
+	/**
+	 * Static Assets
+	 * https://developers.cloudflare.com/workers/static-assets/binding/
+	 */
+	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
+	/**
+	 * Service Bindings (communicate between multiple Workers)
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
+	 */
+	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+}

@@ -1,0 +1,201 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["numpy", "duckdb>=1.1"]
+# ///
+"""open-jobs agent toolchain. Everything runs locally except one embedding call.
+
+  uv run tools/jobs.py embed  --file work/ideal-jd.md            -> work/ideal.json (vector + recipe)
+  uv run tools/jobs.py groups [--k 30] [--min-sim 0]              -> nearest groups (id, size, label, exemplars)
+  uv run tools/jobs.py fetch  --groups 12,45,301 [--top N]        -> download groups -> work/jobs.parquet
+  uv run tools/jobs.py html   [--out work/search.html]            -> single-file search UI over work/jobs.parquet
+  uv run tools/jobs.py serve  [--port 8765]                       -> serve work/ + record interactions to work/interactions.jsonl
+  uv run tools/jobs.py rank   [--labels work/interactions.jsonl]  -> re-rank with a classifier trained on labels -> work/ranked.csv
+  uv run tools/jobs.py status                                     -> what's in work/
+
+Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
+"""
+import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
+import numpy as np
+
+BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
+WORK = os.environ.get("WORK", "work")
+UA = {"user-agent": "open-jobs-tools/0.1"}
+os.makedirs(WORK, exist_ok=True)
+
+def get(path, binary=False):
+    req = urllib.request.Request(f"{BASE}{path}", headers=UA)
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return r.read() if binary else json.loads(r.read())
+
+def manifest():
+    p = os.path.join(WORK, "manifest.json"); c = os.path.join(WORK, "centroids.bin")
+    if not (os.path.exists(p) and os.path.exists(c)) or time.time() - os.path.getmtime(p) > 6 * 3600:
+        m = get("/data/manifest.json"); open(p, "w").write(json.dumps(m))
+        open(c, "wb").write(get("/data/centroids.bin", binary=True))
+    m = json.load(open(p))
+    C = np.fromfile(c, dtype=np.float16).astype(np.float32).reshape(-1, m["dims"])
+    return m, C
+
+def ideal():
+    p = os.path.join(WORK, "ideal.json")
+    if not os.path.exists(p): sys.exit("no work/ideal.json — run `embed --file work/ideal-jd.md` first")
+    d = json.load(open(p)); v = np.asarray(d["vector"], dtype=np.float32); v /= np.linalg.norm(v) + 1e-9
+    return d, v
+
+def cmd_embed(a):
+    text = open(a.file).read()
+    body = json.dumps({"text": text, "title": a.title or "", "location": a.location or ""}).encode()
+    req = urllib.request.Request(f"{BASE}/embed", data=body, headers={**UA, "content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r: d = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"embed failed: HTTP {e.code} {e.read()[:200].decode(errors='replace')}")
+    out = {"vector": d["vector"], "recipe": d["recipe"], "source": a.file, "embedded_at": int(time.time() * 1000), "title": a.title, "location": a.location}
+    json.dump(out, open(os.path.join(WORK, "ideal.json"), "w"))
+    print(f"embedded {a.file} -> {WORK}/ideal.json ({d['recipe']})")
+
+def node_label(n):
+    ex = "; ".join(f"{e['title']} @ {e['company']}" for e in n["exemplars"][:4])
+    return f"{n['label']}  [{ex}]"
+
+def nearest(m, C, v, k, min_sim=0.0):
+    T = m["tree"]
+    sims = C @ v
+    def lb(i): return max(0.0, 1 - sims[i] - T[i]["radius"])
+    pq = [(lb(0), 0)]; out = []
+    while pq and len(out) < k * 3:
+        pq.sort(); _, i = pq.pop(0); n = T[i]
+        if not n["children"] or n["radius"] <= 0.45: out.append(n)
+        else: pq.extend((lb(c), c) for c in n["children"])
+    out = sorted(out, key=lambda n: -sims[n["id"]])
+    return [(n, float(sims[n["id"]])) for n in out if sims[n["id"]] >= min_sim][:k]
+
+def cmd_groups(a):
+    m, C = manifest(); d, v = ideal()
+    if d["recipe"] != m["recipe"]: print(f"warning: ideal.json recipe {d['recipe']} != manifest {m['recipe']}; re-run embed", file=sys.stderr)
+    rows = nearest(m, C, v, a.k, a.min_sim)
+    print(f"{m['jobs']:,} jobs in {m['leaves']:,} groups (built {time.strftime('%Y-%m-%d', time.localtime(m['built_at']/1000))}). Nearest to your ideal JD:\n")
+    print(f"{'id':>6} {'sim':>5} {'jobs':>6} {'titles':>6}  label  [exemplars]")
+    for n, s in rows:
+        print(f"{n['id']:>6} {s:5.2f} {n['size']:>6} {n.get('distinct_titles', ''):>6}  {node_label(n)[:150]}")
+    json.dump([{"id": n["id"], "sim": s, "size": n["size"], "label": n["label"], "exemplars": n["exemplars"]} for n, s in rows], open(os.path.join(WORK, "groups.json"), "w"), indent=1)
+    print(f"\nwrote {WORK}/groups.json. Next: `fetch --groups <ids>` (maybe) — or `fetch --top N` for the N nearest.")
+
+def leaves_under(m, n):
+    T = m["tree"]; out = []; st = [n]
+    while st:
+        x = st.pop()
+        if not x["children"]: out.append(x)
+        else: st.extend(T[c] for c in x["children"])
+    return out
+
+def cmd_fetch(a):
+    import duckdb
+    m, C = manifest(); d, v = ideal()
+    T = m["tree"]
+    ids = [int(x) for x in a.groups.split(",")] if a.groups else [n["id"] for n, _ in nearest(m, C, v, a.top)]
+    leaves = []
+    for i in ids: leaves.extend(leaves_under(m, T[i]))
+    gdir = os.path.join(WORK, "groups"); os.makedirs(gdir, exist_ok=True)
+    rows = []; total = 0
+    for li, leaf in enumerate(leaves):
+        p = os.path.join(gdir, f"{leaf['id']}.json")
+        if not os.path.exists(p): open(p, "wb").write(get(f"/data/groups/{leaf['id']}.json", binary=True))
+        g = json.load(open(p))
+        for j in g["jobs"]:
+            vec = np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32)
+            rows.append((j["ats"], j["slug"], j["id"], j["title"], j["company"], j["location"], j["url"], j.get("seen") or 0, j.get("jd") or "", leaf["id"], float(vec @ v), j["v"]))
+        total += len(g["jobs"])
+        print(f"\r{li+1}/{len(leaves)} groups, {total:,} jobs", end="", file=sys.stderr)
+    print(file=sys.stderr)
+    con = duckdb.connect(os.path.join(WORK, "jobs.duckdb"))
+    con.execute("CREATE OR REPLACE TABLE jobs (ats VARCHAR, slug VARCHAR, id VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, url VARCHAR, seen_ms BIGINT, jd VARCHAR, leaf INTEGER, sim DOUBLE, vec_b64 VARCHAR)")
+    con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    con.execute(f"COPY (SELECT * FROM jobs) TO '{os.path.join(WORK, 'jobs.parquet')}' (FORMAT PARQUET)")
+    print(f"wrote {WORK}/jobs.parquet and {WORK}/jobs.duckdb: {len(rows):,} jobs from {len(leaves)} groups. Columns: ats, slug, id, title, company, location, url, seen_ms, jd, leaf, sim (cosine to ideal JD), vec_b64 (float32 LE base64).")
+
+def load_jobs():
+    import duckdb
+    p = os.path.join(WORK, "jobs.parquet")
+    if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
+    return duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
+
+def cmd_html(a):
+    d, v = ideal()
+    rows = load_jobs()
+    jobs = [{"k": f"{r[0]}/{r[1]}#{r[2]}", "t": r[3], "c": r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11]} for r in rows]
+    html = TEMPLATE.replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
+    out = a.out or os.path.join(WORK, "search.html")
+    open(out, "w").write(html)
+    print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")
+
+def cmd_serve(a):
+    import http.server, socketserver, webbrowser
+    work = os.path.abspath(WORK); log = os.path.join(work, "interactions.jsonl")
+    class H(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kw): super().__init__(*args, directory=work, **kw)
+        def do_POST(self):
+            if self.path == "/event":
+                n = int(self.headers.get("content-length", 0)); body = self.rfile.read(n)
+                with open(log, "ab") as f: f.write(body.rstrip(b"\n") + b"\n")
+                self.send_response(204); self.end_headers()
+            else: self.send_response(404); self.end_headers()
+        def log_message(self, *args): pass
+    with socketserver.ThreadingTCPServer(("127.0.0.1", a.port), H) as srv:
+        url = f"http://127.0.0.1:{a.port}/search.html"
+        print(f"serving {work} at {url}\ninteractions -> {log}\nCtrl-C to stop")
+        if not a.no_open: webbrowser.open(url)
+        try: srv.serve_forever()
+        except KeyboardInterrupt: pass
+
+def cmd_rank(a):
+    d, v = ideal(); rows = load_jobs()
+    labels = {}
+    if os.path.exists(a.labels):
+        for line in open(a.labels):
+            try: e = json.loads(line)
+            except Exception: continue
+            if e.get("type") == "label": labels[e["key"]] = e["value"]
+    X = np.stack([np.frombuffer(base64.b64decode(r[11]), dtype=np.float32) for r in rows]); keys = [f"{r[0]}/{r[1]}#{r[2]}" for r in rows]
+    pos = [i for i, k in enumerate(keys) if labels.get(k) == 1]; neg = [i for i, k in enumerate(keys) if labels.get(k) == 0]
+    w = v.copy(); b = 0.0
+    if pos and neg:
+        idx = pos + neg; y = np.array([1] * len(pos) + [0] * len(neg), dtype=np.float32)
+        for _ in range(200):
+            p = 1 / (1 + np.exp(-(X[idx] @ w + b))); g = p - y
+            w -= 0.5 * (X[idx].T @ g / len(idx) + 0.01 * (w - v)); b -= 0.5 * g.mean()
+        score = 1 / (1 + np.exp(-(X @ w + b)))
+        print(f"classifier trained on {len(pos)} yes / {len(neg)} no")
+    else:
+        score = X @ v; print("no labels yet (need >=1 yes and >=1 no): ranking by similarity to the ideal JD")
+    order = np.argsort(-score)
+    out = os.path.join(WORK, "ranked.csv")
+    with open(out, "w") as f:
+        f.write("score,label,title,company,location,url,key\n")
+        for i in order:
+            r = rows[i]; f.write(f"{score[i]:.4f},{labels.get(keys[i], '')},\"{r[3].replace(chr(34), chr(39))}\",\"{(r[4] or '').replace(chr(34), chr(39))}\",\"{(r[5] or '').replace(chr(34), chr(39))}\",{r[6]},{keys[i]}\n")
+    json.dump({"recipe": d["recipe"], "w": w.tolist(), "b": float(b), "labels": labels}, open(os.path.join(WORK, "model.json"), "w"))
+    print(f"wrote {out} and {WORK}/model.json. Top 10:")
+    for i in order[:10]: print(f"  {score[i]:.3f}  {rows[i][3][:60]} | {rows[i][4]} | {rows[i][5]}")
+
+def cmd_status(a):
+    for f in ("ideal-jd.md", "ideal.json", "groups.json", "jobs.parquet", "search.html", "interactions.jsonl", "model.json", "ranked.csv"):
+        p = os.path.join(WORK, f); print(f"{'✓' if os.path.exists(p) else '·'} {f}" + (f"  ({os.path.getsize(p)/1e6:.1f} MB, {time.strftime('%H:%M', time.localtime(os.path.getmtime(p)))})" if os.path.exists(p) else ""))
+    p = os.path.join(WORK, "interactions.jsonl")
+    if os.path.exists(p):
+        ev = [json.loads(l) for l in open(p) if l.strip()]
+        from collections import Counter
+        print("interactions:", dict(Counter(e.get("type") for e in ev)), "| yes:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 1), "no:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 0))
+
+TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html")).read()
+
+ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
+s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")
+s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add_argument("--min-sim", type=float, default=0.0)
+s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12)
+s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000)
+s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true")
+s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))
+sub.add_parser("status")
+args = ap.parse_args()
+{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "rank": cmd_rank, "status": cmd_status}[args.cmd](args)

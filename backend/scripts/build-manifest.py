@@ -1,0 +1,172 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
+# ///
+"""Build the local-first client data from export/jobs/*.parquet (must include embeddings):
+  export/web/manifest.json     tree nodes {id, parent, lo, hi, radius, size, label, medoid, exemplars, children}
+                               + recipe/dims/counts. Row ranges are into the DFS order.
+  export/web/centroids.bin     float16 [nodes x dims] node centroids (unit vectors), same order as manifest.nodes
+  export/web/groups/<leaf>.json  jobs of one leaf, DFS order, with exact float32 embeddings (base64)
+Then `scripts/upload-web.sh` puts it in R2.  Run: uv run scripts/build-manifest.py [--leaf-max 400] [--leaf-radius 0.30]
+"""
+import argparse, base64, collections, glob, json, os, re, sys, time
+import numpy as np, duckdb
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--leaf-max", type=int, default=400)
+ap.add_argument("--leaf-radius", type=float, default=0.30)
+ap.add_argument("--pca", type=int, default=256)
+args = ap.parse_args()
+
+root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
+out = os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
+J = os.path.join(root, "jobs", "*.parquet")
+con = duckdb.connect()
+con.execute("SET threads=4"); con.execute("SET memory_limit='12GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
+t = time.time()
+recipe = con.execute(f"SELECT embed_model, count(*) FROM read_parquet('{J}') WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY 2 DESC").fetchall()
+print("recipes:", recipe)
+tag = recipe[0][0]
+q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
+               coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint,
+               epoch_ms(first_seen_at) AS first_seen_ms,
+               left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
+               embedding
+        FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"""
+# Load via Arrow: the FLOAT[] column comes back as a ListArray whose flat values view is a zero-copy
+# float32 buffer -> reshape to (N, D). Metadata columns go through Python objects (small).
+tbl = con.execute(q).to_arrow_table()
+emb = tbl.column("embedding").combine_chunks()
+vals = emb.values.to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
+offsets = emb.offsets.to_numpy()
+D = int(offsets[1] - offsets[0])
+cols = [tbl.column(c).to_pylist() for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "jd")]
+meta_rows = list(zip(*cols))
+X = np.array(vals.reshape(-1, D))  # Arrow buffers are read-only; one writable copy (~9 GB), then drop the table
+del tbl, emb, vals, cols
+X = np.nan_to_num(X, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them (unit-normalized below)
+X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
+N, D = X.shape
+print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s")
+
+# company name per board from boards parquet (resolved), else slug
+B = os.path.join(root, "boards", "*.parquet")
+comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+
+# PCA for splitting
+t = time.time()
+rng = np.random.default_rng(0)
+samp = X[rng.choice(N, min(N, 50_000), replace=False)]
+mu = samp.mean(0)
+_, _, Vt = np.linalg.svd(samp - mu, full_matrices=False)
+P = Vt[: args.pca].T.astype(np.float32)
+Z = (X - mu) @ P
+print(f"PCA-{args.pca} in {time.time()-t:.0f}s")
+
+# recursive bisection
+nodes = []; order = np.empty(N, dtype=np.int64); pos = 0
+def two_means(idx, iters=6):
+    r = np.random.default_rng(len(idx) * 7919)
+    c = Z[r.choice(idx, 2, replace=False)].copy()
+    for _ in range(iters):
+        d0 = ((Z[idx] - c[0]) ** 2).sum(1); d1 = ((Z[idx] - c[1]) ** 2).sum(1)
+        lab = (d1 < d0)
+        for k, m in ((0, ~lab), (1, lab)):
+            if m.any(): c[k] = Z[idx[m]].mean(0)
+    return lab
+def build(idx, parent, depth):
+    global pos
+    cen = X[idx].mean(0); cen /= np.linalg.norm(cen) + 1e-9
+    rad = float((1 - X[idx] @ cen).max())
+    me = len(nodes); nodes.append({"id": me, "parent": parent, "lo": pos, "hi": None, "radius": round(rad, 4), "depth": depth, "children": [], "_cen": cen})
+    split = None
+    if len(idx) > args.leaf_max and rad > args.leaf_radius and depth < 40:
+        lab = two_means(idx); a, b = idx[~lab], idx[lab]
+        if len(a) and len(b): split = (a, b)
+    if split is None:
+        order[pos:pos + len(idx)] = idx; pos += len(idx)
+    else:
+        nodes[me]["children"] = [build(split[0], me, depth + 1), build(split[1], me, depth + 1)]
+    nodes[me]["hi"] = pos
+    return me
+t = time.time(); build(np.arange(N), None, 0)
+leaves = [n for n in nodes if not n["children"]]
+print(f"tree: {len(nodes)} nodes, {len(leaves)} leaves in {time.time()-t:.0f}s; leaf sizes median {int(np.median([n['hi']-n['lo'] for n in leaves]))}, max {max(n['hi']-n['lo'] for n in leaves)}")
+
+# labels: top title words + medoid + exemplars
+STOP = set("and or of the for a in to with at on & senior sr jr ii iii i lead staff associate assistant manager specialist".split())
+def words(idx, k=4):
+    c = collections.Counter()
+    for r in idx:
+        for w in re.findall(r"[a-z][a-z+#]+", meta_rows[r][3].lower()):
+            if w not in STOP and len(w) > 2: c[w] += 1
+    return [w for w, _ in c.most_common(k)]
+def company(r):
+    a, s = meta_rows[r][0], meta_rows[r][1]
+    return comp.get((a, s)) or meta_rows[r][6] or s
+def norm_title(t):
+    return re.sub(r"[^a-z]+", " ", t.lower()).strip()
+
+def sub_medoids(idx, k):
+    """k-means (in PCA space) inside a group; returns medoid row per sub-cluster, largest first."""
+    Zi = Z[idx]
+    r = np.random.default_rng(len(idx))
+    c = Zi[r.choice(len(idx), k, replace=False)].copy()
+    for _ in range(8):
+        d = ((Zi[:, None, :] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
+        for j in range(k):
+            m = lab == j
+            if m.any(): c[j] = Zi[m].mean(0)
+    out = []
+    for j in np.argsort(-np.bincount(lab, minlength=k)):
+        m = np.where(lab == j)[0]
+        if len(m) == 0: continue
+        sub = idx[m]; cen = X[sub].mean(0); cen /= np.linalg.norm(cen) + 1e-9
+        out.append((int(len(m)), sub[int(np.argmax(X[sub] @ cen))]))
+    return out
+
+def exemplars_for(idx, cen, k=6):
+    """Medoid of the group, then the medoids of its sub-clusters (typical job of each region inside the
+    group), largest region first, skipping repeated titles (location-replicated postings)."""
+    V = X[idx]
+    med = idx[int(np.argmax(V @ cen))]
+    kk = max(2, min(8, len(idx) // 25))
+    cand = [r for _, r in sub_medoids(idx, kk)] if len(idx) >= 10 else list(idx)
+    seen = {norm_title(meta_rows[med][3])}; ex = [med]
+    for r in cand:
+        t = norm_title(meta_rows[r][3])
+        if t in seen: continue
+        seen.add(t); ex.append(r)
+        if len(ex) >= k: break
+    return ex
+
+for n in nodes:
+    idx = order[n["lo"]:n["hi"]]
+    ex_rows = exemplars_for(idx, n["_cen"])
+    n["size"] = int(len(idx)); n["label"] = " · ".join(words(idx))
+    n["exemplars"] = [{"title": meta_rows[r][3][:80], "company": company(r)[:40], "location": meta_rows[r][4][:40]} for r in ex_rows]
+    n["medoid"] = meta_rows[ex_rows[0]][3][:80]
+    n["distinct_titles"] = int(len({norm_title(meta_rows[r][3]) for r in idx}))
+
+# outputs
+C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
+C.tofile(os.path.join(out, "centroids.bin"))
+manifest = {
+    "recipe": tag, "dims": D, "jobs": N, "nodes": len(nodes), "leaves": len(leaves),
+    "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
+    "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
+}
+with open(os.path.join(out, "manifest.json"), "w") as f: json.dump(manifest, f)
+# groups: one file per leaf, jobs in DFS order, int8 embeddings (per-vector scale)
+t = time.time()
+for n in leaves:
+    idx = order[n["lo"]:n["hi"]]
+    V = X[idx].astype(np.float32)  # exact vectors (unit length), float32 little-endian base64
+    jobs = []
+    for i, r in enumerate(idx):
+        a, s, jid, title, loc, url, _, fs, jd = meta_rows[r]
+        jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "jd": jd,
+                     "v": base64.b64encode(V[i].tobytes()).decode()})
+    with open(os.path.join(out, "groups", f"{n['id']}.json"), "w") as f: json.dump({"leaf": n["id"], "lo": n["lo"], "hi": n["hi"], "jobs": jobs}, f)
+size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
+print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")

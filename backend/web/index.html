@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobScream — the local AI job board</title>
+<style>
+  :root { --bg:#0b0c10; --fg:#e8e8ea; --mut:#9a9aa3; --card:#15161c; --line:#2a2b33; --acc:#7c5cff; --ok:#2ecc71; --no:#e74c3c; }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px }
+  header h1 { margin:0; font-size:20px; letter-spacing:.5px } header span { color:var(--mut); font-size:13px }
+  main { max-width:1100px; margin:0 auto; padding:20px 24px }
+  .step { display:none } .step.active { display:block }
+  textarea { width:100%; min-height:220px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:12px; font:14px/1.4 ui-monospace,Menlo,monospace }
+  input[type=text] { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14px; width:100% }
+  .row { display:flex; gap:10px; margin:10px 0 } .row > * { flex:1 }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:14px; cursor:pointer } button:disabled { opacity:.5; cursor:default }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg) }
+  .status { color:var(--mut); font-size:13px; margin:8px 0; min-height:18px }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; margin-top:12px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:6px }
+  .card.maybe { border-color:var(--ok) } .card.no { opacity:.35 }
+  .card .lbl { font-weight:600 } .card .meta { color:var(--mut); font-size:12px } .card ul { margin:4px 0 0 16px; padding:0; font-size:13px; color:#c9c9d0 } .card li span { color:var(--mut) }
+  .card .btns { display:flex; gap:8px; margin-top:auto } .card .btns button { flex:1; padding:7px }
+  .btn-yes { background:var(--ok) } .btn-no { background:var(--no) }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden } .bar i { display:block; height:100%; background:var(--acc); width:0 }
+  .job { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:8px 0; display:flex; gap:12px; align-items:center }
+  .job.pos { border-color:var(--ok) } .job.neg { border-color:var(--no); opacity:.55 }
+  .job .t { flex:1 } .job .t b { font-size:15px } .job .t div { color:var(--mut); font-size:13px } .job .s { font:12px ui-monospace,Menlo,monospace; color:var(--mut); width:60px; text-align:right }
+  .job a { color:var(--acc); text-decoration:none }
+  kbd { background:var(--line); border-radius:4px; padding:1px 6px; font:12px ui-monospace,Menlo,monospace }
+  .hint { color:var(--mut); font-size:13px }
+  .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap }
+  pre.export { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:160px }
+</style>
+</head>
+<body>
+<header><h1>JobScream</h1><span>the local AI job board · it's literally local</span><span id="corpus"></span></header>
+<main>
+  <section id="s1" class="step active">
+    <h2>1. Who are you looking for work as?</h2>
+    <p class="hint">Paste your résumé or a paragraph about the work you want. It's embedded once (rate-limited per IP) and the vector stays in this tab; nothing else leaves your machine.</p>
+    <div class="row"><input id="title" type="text" placeholder="Target title (optional), e.g. Senior Backend Engineer"><input id="loc" type="text" placeholder="Location preference (optional), e.g. Berlin / Remote US"></div>
+    <textarea id="resume" placeholder="Résumé text or a description of what you want…"></textarea>
+    <div class="row"><button id="go">Find my neighbourhood</button></div>
+    <div class="status" id="st1"></div>
+  </section>
+
+  <section id="s2" class="step">
+    <div class="top"><h2>2. Your neighbourhood</h2><div><button class="ghost" id="more">Show more groups</button> <button id="next2" disabled>Next: teach the model →</button></div></div>
+    <p class="hint">Groups of similar jobs, nearest first. <b>Maybe</b> downloads the group; <b>No</b> skips it (and teaches the model what you don't want). <span id="dl"></span></p>
+    <div class="bar"><i id="dlbar"></i></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section id="s3" class="step">
+    <div class="top"><h2>3. Teach it</h2><div class="hint"><kbd>J</kbd> yes · <kbd>K</kbd> no · <kbd>Space</kbd> skip · model refits live</div></div>
+    <div class="status" id="st3"></div>
+    <div id="jobs"></div>
+    <div class="row"><button class="ghost" id="morejobs">Show more</button><button id="export">Export search (weights) →</button></div>
+    <pre class="export" id="exp" style="display:none"></pre>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

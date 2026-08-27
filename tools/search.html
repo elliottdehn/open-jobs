@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>open-jobs · local search</title>
+<style>
+:root{--bg:#0b0c10;--fg:#e8e8ea;--mut:#9a9aa3;--card:#15161c;--line:#2a2b33;--acc:#7c5cff;--ok:#2ecc71;--no:#e74c3c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:2}
+header h1{margin:0;font-size:16px}header .m{color:var(--mut);font-size:12px}
+input,select{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
+input[type=text]{width:260px}
+main{display:grid;grid-template-columns:260px 1fr;gap:0;min-height:calc(100vh - 50px)}
+aside{border-right:1px solid var(--line);padding:12px;font-size:12px;overflow:auto;max-height:calc(100vh - 50px);position:sticky;top:50px}
+aside h3{margin:10px 0 4px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
+aside label{display:flex;justify-content:space-between;gap:6px;padding:2px 0;cursor:pointer;color:#c9c9d0}aside label span{color:var(--mut)}
+#list{padding:10px 14px}
+.job{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:6px 0;cursor:pointer}
+.job.cur{outline:2px solid var(--acc)}.job.pos{border-color:var(--ok)}.job.neg{border-color:var(--no);opacity:.55}
+.job .h{display:flex;gap:10px;align-items:baseline}.job b{font-size:14px;flex:1}.job .s{font:12px ui-monospace,Menlo,monospace;color:var(--mut)}
+.job .meta{color:var(--mut);font-size:12px;margin-top:2px}.job .meta a{color:var(--acc);text-decoration:none}
+.job .jd{display:none;margin-top:8px;color:#c9c9d0;font-size:13px;white-space:pre-wrap;max-height:420px;overflow:auto;border-top:1px solid var(--line);padding-top:8px}
+.job.open .jd{display:block}
+.job .note{display:none;margin-top:6px;width:100%}.job.open .note{display:block}
+kbd{background:var(--line);border-radius:4px;padding:0 5px;font:11px ui-monospace,Menlo,monospace}
+button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}button.g{background:transparent;border:1px solid var(--line);color:var(--fg)}
+.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
+#ideal{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 14px;white-space:pre-wrap;font-size:12px;color:#c9c9d0;max-height:200px;overflow:auto}
+</style></head>
+<body>
+<header>
+  <h1>open-jobs</h1>
+  <input id="q" type="text" placeholder="search title / company / description…">
+  <select id="sort"><option value="model">sort: model score</option><option value="sim">sort: similarity to ideal JD</option><option value="date">sort: newest</option><option value="company">sort: company</option></select>
+  <select id="show"><option value="all">show: all</option><option value="unlabeled">show: unlabeled</option><option value="yes">show: yes</option><option value="no">show: no</option></select>
+  <button class="g" id="toggleIdeal">ideal JD</button>
+  <button class="g" id="export">export model + labels</button>
+  <span class="m" id="stats"></span>
+  <span class="m"><kbd>J</kbd> yes <kbd>K</kbd> no <kbd>Space</kbd> open/close <kbd>↑↓</kbd> move <kbd>O</kbd> open link</span>
+</header>
+<div id="ideal"></div>
+<main>
+  <aside>
+    <h3>groups</h3><div id="f-g"></div>
+    <h3>companies</h3><div id="f-c"></div>
+    <h3>locations</h3><div id="f-l"></div>
+    <h3>sources</h3><div id="f-a"></div>
+  </aside>
+  <div id="list"></div>
+</main>
+<script>
+const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__;
+const $=s=>document.querySelector(s);
+function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
+function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
+function dot(a,b){let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s}
+const ideal=norm(IDEAL.vector);
+for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
+// ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
+const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
+let st={labels:{},notes:{},opened:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
+function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
+function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
+// ---- model: logistic regression seeded at the ideal vector, refit on every label
+let w=Float32Array.from(ideal),b=0;
+function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=>st.labels[j.k]===0);
+  if(!pos.length||!neg.length){w=Float32Array.from(ideal);b=0;for(const j of JOBS)j.score=j.sim;return}
+  w=Float32Array.from(ideal);b=0;const items=[...pos,...neg],lr=.5,l2=.01;
+  for(let ep=0;ep<30;ep++)for(const j of items){const y=st.labels[j.k],p=1/(1+Math.exp(-(dot(w,j.vec)+b))),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*j.vec[i]+l2*(w[i]-ideal[i]));b-=lr*g}
+  for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(w,j.vec)+b)))}
+// ---- facets
+const facets={g:{},c:{},l:{},a:{}};const sel={g:new Set(),c:new Set(),l:new Set(),a:new Set()};
+const keyOf={g:j=>'group '+j.g,c:j=>j.c||'?',l:j=>(j.l||'?').split(',').slice(-1)[0].trim()||'?',a:j=>j.k.split('/')[0]};
+for(const j of JOBS)for(const f in facets){const k=keyOf[f](j);facets[f][k]=(facets[f][k]||0)+1}
+function renderFacets(){for(const f in facets){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});render()};el.appendChild(l)})}}
+// ---- list
+let ranked=[],cur=0,shown=0;
+function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
+  for(const f in sel)if(sel[f].size&&!sel[f].has(keyOf[f](j)))return false;
+  const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
+function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):b.score-a.score);
+  if(reset){shown=0;cur=0}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));for(let i=0;i<N;i++)el.appendChild(jobEl(ranked[i],i));shown=N;
+  if(ranked.length>N){const m=document.createElement('button');m.className='g';m.textContent=`show more (${ranked.length-N} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
+  const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
+  $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · ${yes} yes / ${no} no`;hi()}
+function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
+  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div><div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
+  d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
+  d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};
+  d.querySelector('.note').onkeydown=e=>e.stopPropagation();return d}
+function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
+function label(v){const j=ranked[cur];if(!j)return;st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false);cur=Math.min(cur+1,ranked.length-1);hi()}
+function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;const j=ranked[cur];
+  if(e.key==='j'||e.key==='J')label(1);else if(e.key==='k'||e.key==='K')label(0);else if(e.key===' '){e.preventDefault();if(j)toggle(j,document.querySelector(`.job[data-i="${cur}"]`))}
+  else if(e.key==='ArrowDown'){cur=Math.min(cur+1,ranked.length-1);hi()}else if(e.key==='ArrowUp'){cur=Math.max(0,cur-1);hi()}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}});
+let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render()},250)};
+$('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render()};$('#show').onchange=()=>render();
+$('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
+$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),labels:st.labels,notes:st.notes,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+refit();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title});
+</script></body></html>
