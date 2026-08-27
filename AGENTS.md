@@ -5,7 +5,8 @@ runs on this machine except one call that embeds their ideal job description. Wo
 
 ## 0. Setup (once)
 - Needs `uv` (https://docs.astral.sh/uv/) and Python 3.10+. All commands are `uv run tools/jobs.py <cmd>`.
-- `WORKER_URL` defaults to the public index (`https://backend.dehnbostele.workers.dev`).
+- `WORKER_URL` defaults to the public index (`https://backend.dehnbostele.workers.dev`); `DATA_URL`
+  can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
 ## 1. Shop the ideal JD (the important part)
