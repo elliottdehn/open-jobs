@@ -125,6 +125,14 @@ def load_jobs():
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
+    # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
+    seen = set(); uniq = []
+    for r in rows:
+        key = (re.sub(r"\W+", " ", (r[4] or "").lower()).strip(), re.sub(r"\W+", " ", (r[3] or "").lower()).strip())
+        if key in seen: continue
+        seen.add(key); uniq.append(r)
+    if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
+    rows = uniq
     jobs = [{"k": f"{r[0]}/{r[1]}#{r[2]}", "t": r[3], "c": r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11]} for r in rows]
     html = TEMPLATE.replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
@@ -152,31 +160,40 @@ def cmd_serve(a):
 
 def cmd_rank(a):
     d, v = ideal(); rows = load_jobs()
-    labels = {}
+    labels = {}; compares = []
     if os.path.exists(a.labels):
         for line in open(a.labels):
             try: e = json.loads(line)
             except Exception: continue
             if e.get("type") == "label": labels[e["key"]] = e["value"]
+            if e.get("type") == "compare": compares.append((e["a"], e["b"], e["win"]))
     X = np.stack([np.frombuffer(base64.b64decode(r[11]), dtype=np.float32) for r in rows]); keys = [f"{r[0]}/{r[1]}#{r[2]}" for r in rows]
     pos = [i for i, k in enumerate(keys) if labels.get(k) == 1]; neg = [i for i, k in enumerate(keys) if labels.get(k) == 0]
-    w = v.copy(); b = 0.0
+    kidx = {k: i for i, k in enumerate(keys)}
+    u = v.copy()
+    pairs = [(kidx[a_], kidx[b_], 1.0 if win == "a" else 0.0) for a_, b_, win in compares if a_ in kidx and b_ in kidx]
+    if pairs:  # taste model from Sort comparisons: P(a>b) = sigmoid(u·(va−vb)), L2-pulled to the ideal vector
+        for _ in range(300):
+            for ia, ib, y in pairs:
+                d = X[ia] - X[ib]; p = 1 / (1 + math.exp(-float(u @ d))); u -= 0.7 * ((p - y) * d + 0.02 * (u - v))
+        print(f"taste model from {len(pairs)} comparisons")
+    w = u.copy(); b = 0.0
     if pos and neg:
         idx = pos + neg; y = np.array([1] * len(pos) + [0] * len(neg), dtype=np.float32)
         for _ in range(200):
             p = 1 / (1 + np.exp(-(X[idx] @ w + b))); g = p - y
-            w -= 0.5 * (X[idx].T @ g / len(idx) + 0.01 * (w - v)); b -= 0.5 * g.mean()
+            w -= 0.5 * (X[idx].T @ g / len(idx) + 0.01 * (w - u)); b -= 0.5 * g.mean()
         score = 1 / (1 + np.exp(-(X @ w + b)))
         print(f"classifier trained on {len(pos)} yes / {len(neg)} no")
     else:
-        score = X @ v; print("no labels yet (need >=1 yes and >=1 no): ranking by similarity to the ideal JD")
+        score = X @ u; print("no labels (need >=1 yes and >=1 no): ranking by " + ("taste model" if pairs else "similarity to the ideal JD"))
     order = np.argsort(-score)
     out = os.path.join(WORK, "ranked.csv")
     with open(out, "w") as f:
         f.write("score,label,title,company,location,url,key\n")
         for i in order:
             r = rows[i]; f.write(f"{score[i]:.4f},{labels.get(keys[i], '')},\"{r[3].replace(chr(34), chr(39))}\",\"{(r[4] or '').replace(chr(34), chr(39))}\",\"{(r[5] or '').replace(chr(34), chr(39))}\",{r[6]},{keys[i]}\n")
-    json.dump({"recipe": d["recipe"], "w": w.tolist(), "b": float(b), "labels": labels}, open(os.path.join(WORK, "model.json"), "w"))
+    json.dump({"recipe": d["recipe"], "w": w.tolist(), "b": float(b), "taste": u.tolist(), "labels": labels, "compares": len(pairs)}, open(os.path.join(WORK, "model.json"), "w"))
     print(f"wrote {out} and {WORK}/model.json. Top 10:")
     for i in order[:10]: print(f"  {score[i]:.3f}  {rows[i][3][:60]} | {rows[i][4]} | {rows[i][5]}")
 

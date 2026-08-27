@@ -23,6 +23,16 @@ aside label{display:flex;justify-content:space-between;gap:6px;padding:2px 0;cur
 kbd{background:var(--line);border-radius:4px;padding:0 5px;font:11px ui-monospace,Menlo,monospace}
 button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}button.g{background:transparent;border:1px solid var(--line);color:var(--fg)}
 .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
+#sortbtn{margin-left:auto;font-weight:700;font-size:14px;padding:8px 16px;color:#fff;border:0;border-radius:8px;background:linear-gradient(90deg,#ff4d4d,#ffb347,#ffe94d,#4dff88,#4dc3ff,#b84dff,#ff4d9d);background-size:300% 100%;animation:rb 3s linear infinite;box-shadow:0 0 14px rgba(255,255,255,.25);text-shadow:0 1px 2px rgba(0,0,0,.5)}
+@keyframes rb{0%{background-position:0 0}100%{background-position:300% 0}}
+#cmp{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10;align-items:center;justify-content:center}
+#cmp.on{display:flex}
+#cmp .box{width:min(1100px,96vw);max-height:92vh;display:flex;flex-direction:column;gap:10px}
+#cmp .top{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:13px}
+#cmp .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+#cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
+#cmp .opt:hover{border-color:var(--acc)}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
+#cmp .conf{height:6px;background:var(--line);border-radius:3px;overflow:hidden;flex:1;margin:0 12px}#cmp .conf i{display:block;height:100%;background:linear-gradient(90deg,#4dc3ff,#4dff88)}
 #ideal{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 14px;white-space:pre-wrap;font-size:12px;color:#c9c9d0;max-height:200px;overflow:auto}
 </style></head>
 <body>
@@ -33,10 +43,16 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <select id="show"><option value="all">show: all</option><option value="unlabeled">show: unlabeled</option><option value="yes">show: yes</option><option value="no">show: no</option></select>
   <button class="g" id="toggleIdeal">ideal JD</button>
   <button class="g" id="export">export model + labels</button>
+  <button id="sortbtn" title="Compare pairs until the model knows your taste, then sort">✨ Sort</button>
   <span class="m" id="stats"></span>
   <span class="m"><kbd>J</kbd> yes <kbd>K</kbd> no <kbd>Space</kbd> open/close <kbd>↑↓</kbd> move <kbd>O</kbd> open link</span>
 </header>
 <div id="ideal"></div>
+<div id="cmp"><div class="box">
+  <div class="top"><span id="cmpn">comparison 1</span><div class="conf"><i id="cmpbar"></i></div><span id="cmpc">confidence 0%</span><span><kbd>←</kbd> left <kbd>→</kbd> right <kbd>S</kbd> skip <kbd>Esc</kbd> stop</span></div>
+  <div class="pair"><div class="opt" id="optA"></div><div class="opt" id="optB"></div></div>
+  <div class="top"><span id="cmpmsg">Which job would you rather have? Keep going until the bar fills, or stop any time and sort with what it has.</span><button class="g" id="cmpstop">stop &amp; sort now</button></div>
+</div></div>
 <main>
   <aside>
     <h3>groups</h3><div id="f-g"></div>
@@ -66,6 +82,72 @@ function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=
   w=Float32Array.from(ideal);b=0;const items=[...pos,...neg],lr=.5,l2=.01;
   for(let ep=0;ep<30;ep++)for(const j of items){const y=st.labels[j.k],p=1/(1+Math.exp(-(dot(w,j.vec)+b))),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*j.vec[i]+l2*(w[i]-ideal[i]));b-=lr*g}
   for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(w,j.vec)+b)))}
+// ---- pairwise taste model (Bradley-Terry on vector differences): P(a beats b) = sigmoid(u·(va−vb))
+st.compares = st.compares || [];  // [{a,b,win}] keys
+const byKey = Object.fromEntries(JOBS.map(j => [j.k, j]));
+let u = new Float32Array(ideal.length), taste = false;  // taste=true once a confident model exists
+function fitPairs(){
+  const C = st.compares.map(c => [byKey[c.a], byKey[c.b], c.win]).filter(c => c[0] && c[1]);
+  u = Float32Array.from(ideal); if (!C.length) return;
+  const lr = .7, l2 = .02;
+  for (let ep = 0; ep < 60; ep++) for (const [a, b, win] of C) {
+    const d = new Float32Array(u.length); for (let i = 0; i < u.length; i++) d[i] = a.vec[i] - b.vec[i];
+    const y = win === 'a' ? 1 : 0, p = 1 / (1 + Math.exp(-dot(u, d))), g = p - y;
+    for (let i = 0; i < u.length; i++) u[i] -= lr * (g * d[i] + l2 * (u[i] - ideal[i]));
+  }
+}
+function predictsRecent(k = 10){  // how often a model fit on all-but-the-last-k predicts the last k picks
+  if (st.compares.length < k + 3) return 0;
+  const saved = st.compares; st.compares = saved.slice(0, -k); fitPairs(); st.compares = saved;
+  let ok = 0;
+  for (const c of saved.slice(-k)) { const a = byKey[c.a], b = byKey[c.b]; if (!a || !b) continue; const d = dot(u, a.vec) - dot(u, b.vec); if ((d > 0) === (c.win === 'a')) ok++; }
+  fitPairs(); return ok / k;
+}
+function tasteScore(j){ return dot(u, j.vec); }
+let cmpPair = null, cmpAcc = 0;
+function nextPair(){
+  // candidates: top 300 by current taste (or similarity), pick the pair the model is least sure about,
+  // with some spread so we don't keep asking about near-duplicates
+  const pool = JOBS.filter(j => st.labels[j.k] !== 0).sort((x, y) => (taste || st.compares.length ? tasteScore(y) - tasteScore(x) : y.sim - x.sim)).slice(0, 300);
+  let best = null, bestU = Infinity;
+  for (let t = 0; t < 400; t++) {
+    const a = pool[Math.floor(Math.random() * pool.length)], b = pool[Math.floor(Math.random() * pool.length)];
+    if (a === b || (a.c === b.c && a.t === b.t)) continue;
+    if (st.compares.some(c => (c.a === a.k && c.b === b.k) || (c.a === b.k && c.b === a.k))) continue;
+    const unc = Math.abs(dot(u, a.vec) - dot(u, b.vec)) + 0.15 * dot(a.vec, b.vec);  // uncertain and not near-identical
+    if (unc < bestU) { bestU = unc; best = [a, b]; }
+  }
+  return best;
+}
+function showPair(){
+  cmpPair = nextPair(); if (!cmpPair) { stopCmp(); return; }
+  const n = st.compares.length; $('#cmpn').textContent = `comparison ${n + 1}`;
+  cmpAcc = predictsRecent();
+  const conf = Math.min(1, (Math.min(n, 15) / 15) * 0.5 + (n >= 13 ? cmpAcc : 0) * 0.5);
+  $('#cmpbar').style.width = `${conf * 100}%`; $('#cmpc').textContent = `confidence ${Math.round(conf * 100)}%` + (n >= 13 ? ` (predicted ${Math.round(cmpAcc * 100)}% of your last 10)` : '');
+  for (const [el, j] of [[$('#optA'), cmpPair[0]], [$('#optB'), cmpPair[1]]])
+    el.innerHTML = `<b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
+  if (n >= 15 && cmpAcc >= 0.8) { $('#cmpmsg').textContent = `I think I've got your taste (${Math.round(cmpAcc * 100)}% on your last 10). One more or stop & sort.`; }
+}
+function pick(win){
+  if (!cmpPair) return; const [a, b] = cmpPair;
+  st.compares.push({ a: a.k, b: b.k, win }); save();
+  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c });
+  fitPairs();
+  const n = st.compares.length, acc = predictsRecent();
+  if (n >= 15 && acc >= 0.8 && n % 5 === 0) { stopCmp(); return; }
+  showPair();
+}
+function startCmp(){ fitPairs(); $('#cmp').classList.add('on'); event({ type: 'sort_start', compares: st.compares.length }); showPair(); }
+function stopCmp(){
+  $('#cmp').classList.remove('on'); fitPairs(); taste = st.compares.length > 0;
+  if (taste) { for (const j of JOBS) j.score = 1 / (1 + Math.exp(-(dot(u, j.vec) - median()))); $('#sort').value = 'model'; }
+  event({ type: 'sort_done', compares: st.compares.length, accuracy: predictsRecent() });
+  render(); $('#stats').textContent += ` · sorted by taste (${st.compares.length} comparisons)`;
+}
+function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] || 0; }
+$('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
+$('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
 const facets={g:{},c:{},l:{},a:{}};const sel={g:new Set(),c:new Set(),l:new Set(),a:new Set()};
 const keyOf={g:j=>'group '+j.g,c:j=>j.c||'?',l:j=>(j.l||'?').split(',').slice(-1)[0].trim()||'?',a:j=>j.k.split('/')[0]};
@@ -89,13 +171,14 @@ function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k]
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
 function label(v){const j=ranked[cur];if(!j)return;st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false);cur=Math.min(cur+1,ranked.length-1);hi()}
 function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
-document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;const j=ranked[cur];
+document.addEventListener('keydown',e=>{if($('#cmp').classList.contains('on')){if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;const j=ranked[cur];
   if(e.key==='j'||e.key==='J')label(1);else if(e.key==='k'||e.key==='K')label(0);else if(e.key===' '){e.preventDefault();if(j)toggle(j,document.querySelector(`.job[data-i="${cur}"]`))}
   else if(e.key==='ArrowDown'){cur=Math.min(cur+1,ranked.length-1);hi()}else if(e.key==='ArrowUp'){cur=Math.max(0,cur-1);hi()}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}});
 let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render()},250)};
 $('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render()};$('#show').onchange=()=>render();
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
-$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),labels:st.labels,notes:st.notes,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
+$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-refit();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title});
+fitPairs();taste=st.compares.length>0;refit();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>

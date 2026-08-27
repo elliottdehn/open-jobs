@@ -50,7 +50,10 @@ While served, every interaction is appended to `work/interactions.jsonl`:
 `label {key,value,title,company,location,score}`, `view`, `open`, `search {q}`, `filter`,
 `sort`, `note`, `export`, `session`. Labels and notes also persist in the browser's localStorage.
 
-Tell the person: J = yes, K = no, Space opens the description, O opens the posting.
+Tell the person: J = yes, K = no, Space opens the description, O opens the posting, and the
+rainbow **Sort** button (top right) runs pairwise comparisons ("which would you rather have?")
+until the model predicts their recent picks reliably, then sorts by that taste. Comparisons are
+logged as `compare {a,b,win}` events; `rank` uses them (taste model) plus any J/K labels.
 
 ## 5. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
