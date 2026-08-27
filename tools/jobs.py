@@ -16,6 +16,7 @@ Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default
 """
 import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
 import numpy as np
+np.seterr(all="ignore")  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
 DATA = os.environ.get("DATA_URL", BASE)  # where /data/* is served from (override for a local mirror)
