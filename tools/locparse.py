@@ -23,7 +23,16 @@ REMOTE_RE = re.compile(r"\b(remote|work from home|wfh|distributed|anywhere)\b", 
 HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
 ONSITE_RE = re.compile(r"\b(on-?site|in-?office|in person)\b", re.I)
 
+ISO3 = {"usa":"US","gbr":"GB","ind":"IN","can":"CA","deu":"DE","fra":"FR","aus":"AU","nld":"NL","esp":"ES","ita":"IT","pol":"PL","prt":"PT","irl":"IE","swe":"SE","che":"CH","sgp":"SG","jpn":"JP","bra":"BR","mex":"MX","isr":"IL","are":"AE","phl":"PH","idn":"ID","mys":"MY","vnm":"VN","kor":"KR","chn":"CN","hkg":"HK","twn":"TW","nzl":"NZ","arg":"AR","col":"CO","chl":"CL","zaf":"ZA","nga":"NG","ken":"KE","ukr":"UA","tur":"TR","rou":"RO","hun":"HU","cze":"CZ","grc":"GR","aut":"AT","bel":"BE","dnk":"DK","nor":"NO","fin":"FI"}
+COUNTRIES.update(ISO3)
+
 def _split(loc):
+    # hyphenated forms: "Mexico-Remote", "US - Remote (…)", "IND-Pune-Smartworks" -> split on hyphens too when a
+    # side is a known country/code (keeps "Winston-Salem" intact)
+    def hy(m):
+        a, b = m.group(1), m.group(2)
+        return f"{a}; {b}" if (a.lower() in COUNTRIES or b.lower() in COUNTRIES or REMOTE_RE.fullmatch(a) or REMOTE_RE.fullmatch(b)) else m.group(0)
+    loc = re.sub(r"\b([A-Za-z.]+)\s*[-–]\s*([A-Za-z.]+)\b", hy, loc)
     loc = re.sub(r"[()\[\]]", ";", loc)  # "Remote (United States)" -> two segments
     loc = re.sub(r"\b(remote|hybrid|on-?site|work from home|wfh)\b\s*[-–:]?\s*", lambda m: m.group(1) + ";", loc, flags=re.I)  # "Hybrid - Austin" -> "hybrid; Austin"
     parts = re.split(r"\s*(?:;|\||/|\bor\b|\band\b|&|•)\s*", loc)
@@ -38,9 +47,9 @@ def _one(seg, out):
     m = re.match(r"^([A-Z]{2})-([A-Z]{2})-(.+)$", s)
     if m and m.group(1) == "US" and m.group(2) in US_STATES:
         out["countries"].add("US"); out["regions"].add(m.group(2)); out["cities"].add(m.group(3).strip().title()); return
-    m = re.match(r"^([A-Z]{2})-(.+)$", s)
-    if m and m.group(1) in ("US","GB","CA","DE","FR","IN","AU"):
-        out["countries"].add(m.group(1)); rest = m.group(2).strip()
+    m = re.match(r"^([A-Z]{2,3})-(.+)$", s)
+    if m and m.group(1).lower() in COUNTRIES:
+        out["countries"].add(COUNTRIES[m.group(1).lower()]); rest = m.group(2).split("-")[0].strip()
         if rest.lower() != "remote": out["cities"].add(rest.title()); return
         return
     toks = [t.strip() for t in re.split(r",", s) if t.strip()]
