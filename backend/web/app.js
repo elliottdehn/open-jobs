@@ -27,19 +27,14 @@ async function loadManifest() {
 function f16(h) { const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff; if (e === 0) return s * m * 2 ** -24; if (e === 31) return m ? NaN : s * Infinity; return s * (1 + m / 1024) * 2 ** (e - 15); }
 function centroid(i) { const d = state.manifest.dims; return state.cent.subarray(i * d, (i + 1) * d); }
 
-// ball-bound best-first descent; returns nodes in lower-bound order at an adaptive level
+// rank every leaf by centroid similarity: all centroids are local, and ball bounds are far too loose
+// in 1536-d to prune anything (radii ~0.3-0.5 vs. neighbour gaps ~0.08)
 function nearestNodes(q, want) {
   const T = state.manifest.tree;
-  const lb = (n) => Math.max(0, 1 - dot(q, centroid(n.id)) - n.radius);
-  const pq = [[lb(T[0]), 0]];
-  const out = [];
-  while (pq.length && out.length < want * 3) {
-    pq.sort((a, b) => a[0] - b[0]);
-    const [, id] = pq.shift(); const n = T[id];
-    // present leaves, or internal nodes that are already tight enough to be one card
-    if (!n.children.length || n.radius <= 0.45) out.push(n); else for (const c of n.children) pq.push([lb(T[c]), c]);
-  }
-  return out.sort((a, b) => (1 - dot(q, centroid(a.id))) - (1 - dot(q, centroid(b.id)))).slice(0, want);
+  const leaves = [];
+  for (const n of T) if (!n.children.length) leaves.push([dot(q, centroid(n.id)), n]);
+  leaves.sort((a, b) => b[0] - a[0]);
+  return leaves.slice(0, want).map(([, n]) => n);
 }
 function leavesUnder(n) { const T = state.manifest.tree; const out = []; const st = [n]; while (st.length) { const x = st.pop(); if (!x.children.length) out.push(x); else for (const c of x.children) st.push(T[c]); } return out; }
 
@@ -69,7 +64,7 @@ function renderCards(want) {
     const sim = dot(state.vec, centroid(n.id));
     const d = document.createElement("div"); d.className = "card " + (state.decided.get(n.id) || ""); d.dataset.id = n.id;
     d.innerHTML = `<div class="lbl">${esc(n.label || n.medoid)}</div><div class="meta">${n.size.toLocaleString()} jobs${n.distinct_titles ? ` (${n.distinct_titles} distinct titles)` : ""} · similarity ${sim.toFixed(2)} · spread ${n.radius.toFixed(2)}</div>
-      <ul>${n.exemplars.map((e) => `<li>${esc(e.title)} <span>· ${esc(e.company)}${e.location ? " · " + esc(e.location) : ""}</span></li>`).join("")}</ul>
+      <ul>${n.exemplars.map((e) => `<li>${esc(e.title)} <span>${/^[0-9a-f-]{20,}$/i.test(e.company || "") ? "" : "· " + esc(e.company)}${e.location ? " · " + esc(e.location) : ""}</span></li>`).join("")}</ul>
       <div class="btns"><button class="btn-yes">Maybe</button><button class="btn-no">No</button></div>`;
     d.querySelector(".btn-yes").onclick = () => decide(n, "maybe", d);
     d.querySelector(".btn-no").onclick = () => decide(n, "no", d);

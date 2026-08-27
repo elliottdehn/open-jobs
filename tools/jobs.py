@@ -18,12 +18,13 @@ import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math
 import numpy as np
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
+DATA = os.environ.get("DATA_URL", BASE)  # where /data/* is served from (override for a local mirror)
 WORK = os.environ.get("WORK", "work")
 UA = {"user-agent": "open-jobs-tools/0.1"}
 os.makedirs(WORK, exist_ok=True)
 
 def get(path, binary=False):
-    req = urllib.request.Request(f"{BASE}{path}", headers=UA)
+    req = urllib.request.Request(f"{DATA if path.startswith('/data/') else BASE}{path}", headers=UA)
     with urllib.request.urlopen(req, timeout=120) as r:
         return r.read() if binary else json.loads(r.read())
 
@@ -54,21 +55,21 @@ def cmd_embed(a):
     json.dump(out, open(os.path.join(WORK, "ideal.json"), "w"))
     print(f"embedded {a.file} -> {WORK}/ideal.json ({d['recipe']})")
 
+def nice_company(c):
+    return "" if re.fullmatch(r"[0-9a-fA-F-]{20,}", c or "") else (c or "")
+
 def node_label(n):
-    ex = "; ".join(f"{e['title']} @ {e['company']}" for e in n["exemplars"][:4])
+    ex = "; ".join(f"{e['title']}" + (f" @ {nice_company(e['company'])}" if nice_company(e['company']) else "") for e in n["exemplars"][:4])
     return f"{n['label']}  [{ex}]"
 
 def nearest(m, C, v, k, min_sim=0.0):
+    """Rank every leaf by centroid similarity (all centroids are local; ball bounds are too loose in
+    1536-d to prune). Returns [(leaf, sim)] best first."""
     T = m["tree"]
     sims = C @ v
-    def lb(i): return max(0.0, 1 - sims[i] - T[i]["radius"])
-    pq = [(lb(0), 0)]; out = []
-    while pq and len(out) < k * 3:
-        pq.sort(); _, i = pq.pop(0); n = T[i]
-        if not n["children"] or n["radius"] <= 0.45: out.append(n)
-        else: pq.extend((lb(c), c) for c in n["children"])
-    out = sorted(out, key=lambda n: -sims[n["id"]])
-    return [(n, float(sims[n["id"]])) for n in out if sims[n["id"]] >= min_sim][:k]
+    leaves = [n for n in T if not n["children"]]
+    leaves.sort(key=lambda n: -sims[n["id"]])
+    return [(n, float(sims[n["id"]])) for n in leaves if sims[n["id"]] >= min_sim][:k]
 
 def cmd_groups(a):
     m, C = manifest(); d, v = ideal()
