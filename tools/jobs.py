@@ -175,7 +175,7 @@ def cmd_rank(a):
     if pairs:  # taste model from Sort comparisons: P(a>b) = sigmoid(u·(va−vb)), L2-pulled to the ideal vector
         for _ in range(300):
             for ia, ib, y in pairs:
-                d = X[ia] - X[ib]; p = 1 / (1 + math.exp(-float(u @ d))); u -= 0.7 * ((p - y) * d + 0.02 * (u - v))
+                diff = X[ia] - X[ib]; p = 1 / (1 + math.exp(-float(u @ diff))); u -= 0.7 * ((p - y) * diff + 0.02 * (u - v))
         print(f"taste model from {len(pairs)} comparisons")
     w = u.copy(); b = 0.0
     if pos and neg:
