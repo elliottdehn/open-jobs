@@ -159,7 +159,7 @@ function topSetStability(N = 100){  // how much the committee agrees on the top-
 }
 function tasteScore(j){ return dot(u, j.vec); }
 let cmpPair = null, cmpAcc = 0, cmpStab = 0;
-const PAIR_MODE = 'v1';  // 'v1' = near-tie uncertainty sampling on the single model (default); 'committee' = disagreement × leverage
+const PAIR_MODE = 'committee';  // 'v1' = near-tie uncertainty sampling on the single model (default); 'committee' = disagreement × leverage
 function nextPair(){
   const pool = JOBS.filter(j => st.labels[j.k] !== 0 && passes(j)).sort((x, y) => (taste || st.compares.length ? tasteScore(y) - tasteScore(x) : y.sim - x.sim)).slice(0, 300);
   if (pool.length < 2) return null;
@@ -201,7 +201,7 @@ function showPair(){
   const gp = Math.round(100 * Math.max(pA, 1 - pA));
   for (const [el, j, side] of [[$('#optA'), A, 'a'], [$('#optB'), B, 'b']])
     el.innerHTML = `<div class="guess">${guess === side ? `<b>▲ model's guess</b> · ${gp}% · committee ${Math.round(agree * 100)}% agreed` : (guess ? '&nbsp;' : 'no guess yet')}</div><b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
-  $('#cmpmsg').textContent = 'Which job would you rather have? Pairs are the ones the model currently rates as a toss-up.';
+  $('#cmpmsg').textContent = PAIR_MODE === 'committee' ? 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.' : 'Which job would you rather have? Pairs are the ones the model currently rates as a toss-up.';
 }
 function pick(win){
   if (!cmpPair) return; const [a, b] = cmpPair;
