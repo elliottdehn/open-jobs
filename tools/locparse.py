@@ -32,7 +32,8 @@ def _split(loc):
     def hy(m):
         a, b = m.group(1), m.group(2)
         return f"{a}; {b}" if (a.lower() in COUNTRIES or b.lower() in COUNTRIES or REMOTE_RE.fullmatch(a) or REMOTE_RE.fullmatch(b)) else m.group(0)
-    loc = re.sub(r"\b([A-Za-z.]+)\s*[-–]\s*([A-Za-z.]+)\b", hy, loc)
+    loc = re.sub(r"\b([A-Za-z.]+(?: [A-Za-z.]+)?)\s*[-–]\s*([A-Za-z.]+)\b", hy, loc)  # also "Czech Republic-Prague"
+    loc = loc.replace(">", ";")  # "Hungary > Budapest"
     loc = re.sub(r"[()\[\]]", ";", loc)  # "Remote (United States)" -> two segments
     loc = re.sub(r"\b(remote|hybrid|on-?site|work from home|wfh)\b\s*[-–:]?\s*", lambda m: m.group(1) + ";", loc, flags=re.I)  # "Hybrid - Austin" -> "hybrid; Austin"
     parts = re.split(r"\s*(?:;|\||/|\bor\b|\band\b|&|•)\s*", loc)
@@ -65,8 +66,8 @@ def _one(seg, out):
         if tl in PROV_BY_NAME: explicit.add("CA"); out["regions"].add("CA-" + PROV_BY_NAME[tl]); continue
         if tl in CITY_COUNTRY:
             inferred.add(CITY_COUNTRY[tl]); out["cities"].add(t.title()); continue
-        if REMOTE_RE.search(tl) or tl in ("worldwide", "global", "emea", "apac", "latam", "europe", "north america"):
-            if tl in ("emea","apac","latam","europe","north america","worldwide","global"): out["regions"].add(tl.upper())
+        if REMOTE_RE.search(tl) or tl in ("worldwide", "global", "emea", "apac", "latam", "europe", "eastern europe", "western europe", "north america", "south america", "asia", "africa"):
+            if not REMOTE_RE.search(tl): out["regions"].add(tl.title())
             continue
         if city is None and len(t) < 40 and not re.search(r"\d", t) and not REMOTE_RE.search(tl) and not HYBRID_RE.search(tl): city = t
     if city: out["cities"].add(city.title())
