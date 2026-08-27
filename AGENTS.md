@@ -91,6 +91,19 @@ $0.001 per job and $0.015 per new company). The page's ⚡ Enrich button does th
 current top 300. On 429 the tool saves what it got and tells you when to retry. Enriched fields
 become facets (seniority, role family, employment type, salary band, industry, company size).
 
+## 4c. LLM sort with their own key (optional)
+```
+OPENAI_API_KEY=sk-… uv run tools/rank.py --top 200 --budget 1500 --parallel 8
+```
+`tools/rank.py` sorts the top N jobs (by taste model if `work/model.json` exists, else by JD
+similarity) with an LLM as the comparator ("given the ideal JD, which of these two postings is the
+better match?"): bottom-up merge sort, merges at each level in parallel, at most M comparisons
+(cached per pair in `work/llm-compares.json`, so re-runs and bigger budgets only pay for new pairs;
+any unfinished level falls back to the base order). N·log₂N comparisons for a full sort ≈ $0.0005
+each on `gpt-5.6-luna` (200 jobs ≈ $0.75, but 15-20 min: the final merge is sequential). Writes `work/llm-ranked.csv` and
+`work/llm-order.json`; the `why` for each comparison is in the cache and is good material for
+revising the ideal JD. Only offer this if the person has an OpenAI key; it is their spend.
+
 ## 5. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
 - **Labels** → `uv run tools/jobs.py rank` trains a classifier on them and writes
