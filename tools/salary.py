@@ -26,6 +26,10 @@ def _period(after, before):
     if t.startswith(("month", "mo")): return "month"
     return "year"
 
+# plausibility caps depend on the currency's magnitude (INR/JPY/MXN annual figures run into the millions)
+BIG = {"INR": 100, "JPY": 150, "MXN": 20, "PHP": 55, "BRL": 5, "PLN": 4, "SEK": 10, "DKK": 7, "NOK": 10, "HKD": 8, "ZAR": 18, "AED": 4, "KRW": 1300, "TWD": 32}
+def _cap(cur): return BIG.get(cur, 1)
+
 def extract(text):
     if not text: return None
     t = text.replace(" ", " ")
@@ -42,22 +46,27 @@ def extract(text):
         period = _period(after, before)
         if period is None: period = "hour" if hi < 500 else "year" if hi >= 20000 else None
         if period is None or hi <= 0: continue
-        if period == "hour" and not (5 <= hi <= 500): continue
-        if period == "year" and not (8000 <= hi <= 2_000_000): continue
-        if period == "month" and not (500 <= hi <= 100_000): continue
+        cur = CUR.get(c, c.upper()); f = _cap(cur)
+        if period == "hour" and not (5 * f <= hi <= 500 * f): continue
+        if period == "year" and not (8000 * f <= hi <= 2_000_000 * f): continue
+        if period == "month" and not (500 * f <= hi <= 100_000 * f): continue
         score = 2 + (1 if CONTEXT.search(before) else 0) + (0.5 if hi != lo else 0)
-        cand = {"min": lo, "max": hi, "currency": CUR.get(c, c.upper()), "period": period, "raw": t[m.start():m.end()].strip(), "_s": score}
+        cand = {"min": lo, "max": hi, "currency": cur, "period": period, "raw": t[m.start():m.end()].strip(), "_s": score}
         if best is None or cand["_s"] > best["_s"]: best = cand
     if best is None:
         for m in SINGLE.finditer(t):
             c = (m.group(1) or "").lower(); v = _num(m.group(2), m.group(3))
             before, after = t[max(0, m.start() - 120):m.start()], t[m.end():m.end() + 80]
             if not CONTEXT.search(before): continue
-            period = _period(after, before) or ("hour" if v < 500 else "year" if v >= 20000 else None)
-            if period is None: continue
-            if period == "year" and not (8000 <= v <= 2_000_000): continue
-            if period == "hour" and not (5 <= v <= 500): continue
-            best = {"min": v, "max": v, "currency": CUR.get(c, c.upper()), "period": period, "raw": t[m.start():m.end()].strip(), "_s": 1}; break
+            # single figures are risky ("$7 billion", "$350 credit"): need an explicit period, or a clearly annual value
+            period = _period(after, before)
+            cur = CUR.get(c, c.upper()); f = _cap(cur)
+            if period is None:
+                if v >= 20000 * f: period = "year"
+                else: continue
+            if period == "year" and not (8000 * f <= v <= 2_000_000 * f): continue
+            if period == "hour" and not (5 * f <= v <= 500 * f): continue
+            best = {"min": v, "max": v, "currency": cur, "period": period, "raw": t[m.start():m.end()].strip(), "_s": 1}; break
     if not best: return None
     mult = {"hour": 2080, "day": 260, "week": 52, "month": 12, "year": 1}[best["period"]]
     best["annual_min"], best["annual_max"] = round(best["min"] * mult), round(best["max"] * mult)
