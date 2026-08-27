@@ -269,6 +269,23 @@ function stopCmp(){
   render(); $('#stats').textContent += ` · sorted by taste (${st.compares.length} comparisons)`;
 }
 function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] || 0; }
+async function enrichTop(n=300){
+  const btn=$('#enrichbtn');btn.disabled=true;
+  const list=JOBS.filter(passes).sort((a,b)=>fscore(b)-fscore(a)).slice(0,n).filter(j=>!j.e);
+  let spent=0,done=0;
+  for(let i=0;i<list.length;i+=100){
+    const batch=list.slice(i,i+100);btn.textContent=`⚡ enriching ${Math.min(i+100,list.length)}/${list.length}…`;
+    let r;try{r=await fetch((window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev')+'/enrich',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jobs:batch.map(j=>{const [ats,rest]=j.k.split(/\/(.+)/);const [slug,id]=rest.split(/#(.+)/);return{ats,slug,id}})})})}catch(e){btn.textContent='⚡ Enrich (network error)';btn.disabled=false;return}
+    const res=await r.json().catch(()=>({}));
+    for(const [name,b] of Object.entries(res.boards||{}))if(b.company)st.companies[name]={name:b.company.name,website:b.company.website,industry:b.company.industry,size:b.company.size_bucket,hq:(b.company.hq_location||{}).country_code,staffing:b.company.is_staffing_agency,desc:b.company.description};
+    for(const [k,x] of Object.entries(res.jobs||{}))if(x.status==='done'&&x.enrichment){st.enrich[k]=x.enrichment.data;done++}
+    applyEnrich();save();
+    if(r.status===429){btn.textContent=`⚡ rate limited (retry in ${res.retryAfterSeconds}s)`;event({type:'enrich',n:done,rateLimited:true});btn.disabled=false;rebuildFacets();renderFacets();render(false);return}
+    spent+=(res.cost||{}).thisCallUsd||0;
+  }
+  event({type:'enrich',n:done,usd:spent});btn.textContent=`⚡ Enrich top 300 (${done} added, $${spent.toFixed(2)})`;btn.disabled=false;rebuildFacets();renderFacets();render(false)}
+function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(e.work_arrangement&&e.work_arrangement!=='unspecified')j.rm=e.work_arrangement}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
+$('#enrichbtn').onclick=()=>enrichTop(300);
 $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
