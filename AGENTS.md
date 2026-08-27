@@ -95,16 +95,17 @@ become facets (seniority, role family, employment type, salary band, industry, c
 ```
 OPENAI_API_KEY=sk-… uv run tools/rank.py --top 200 --budget 1500 --parallel 8
 ```
-`tools/rank.py` sorts the top N jobs (by taste model if `work/model.json` exists, else by JD
-similarity) with an LLM as the comparator ("given the ideal JD, which of these two postings is the
-better match?"): bottom-up merge sort, merges at each level in parallel, at most M comparisons
-(cached per pair in `work/llm-compares.json`, so re-runs and bigger budgets only pay for new pairs;
-any unfinished level falls back to the base order). N·log₂N comparisons for a full sort ≈ $0.0005
-each on `gpt-5.6-luna` (200 jobs ≈ $0.75, but 15-20 min: the final merge is sequential). Writes `work/llm-ranked.csv` and
+`tools/rank.py` merge-sorts the top N jobs (by taste model if `work/model.json` exists, else by JD
+similarity) and asks the LLM ("given the ideal JD, which of these two postings is the better
+match?") only where it can change the outcome: pairs where both jobs are in the base top K (`--focus`,
+default 40) or within G places of each other in the base order (`--gap`, default 6); everything
+else is decided by the taste/cosine score. At most M comparisons, cached per pair in `work/llm-compares.json` (re-runs
+and bigger budgets only pay for new pairs). ~$0.0005 per comparison on `gpt-5.6-luna`; a 200-job
+sort is typically a few hundred calls, ~$0.15 and a few minutes. Writes `work/llm-ranked.csv` and
 `work/llm-order.json`; the `why` for each comparison is in the cache and is good material for
 revising the ideal JD. **Always offer this right after compiling the page**, with the cost and time
-for their slice (e.g. "I can have Luna hand-sort your top 200 for about $0.75 and 15 minutes with
-your OpenAI key"). If they don't have a key, tell them where to get one; don't skip the offer.
+for their slice (e.g. "I can have Luna hand-sort your top 200 for about 15 cents and a few
+minutes with your OpenAI key"). If they don't have a key, tell them where to get one; don't skip the offer.
 In the same breath, remind them they can always hand-sort with the rainbow **Sort** button in the
 top right of the page (a couple dozen "which would you rather have?" picks) — it's free and
 instant, but not as good as having the model read every posting.
