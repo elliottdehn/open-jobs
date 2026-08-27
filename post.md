@@ -32,7 +32,7 @@ Step by step, this is what happens between "help me find a job" and a sorted lis
 
 **2. It gets embedded, once.** That text goes to the same embedding model every posting was embedded with, so it lands in the same space as the jobs. That call is the only thing that ever leaves your machine (rate-limited per IP because I pay for it). The vector comes back and stays local.
 
-**3. Nearest groups, Maybe or No.** The agent compares your vector against every group's centroid and shows you the closest groups as cards: a label, how many jobs, the typical job in the group and the typical jobs of its sub-regions. You say Maybe or No. Maybe downloads the group (title, company, location, URL, full description, vector for every job). A few thousand jobs land in a parquet file.
+**3. Nearest groups.** Your vector is compared against every group's centroid and the closest groups are downloaded (title, company, location, URL, full description, vector for every job). No clicking through cards; the centroid distance decides. A few thousand jobs land in a parquet file.
 
 **4. Pre-ranking.** Before you do anything, the list is sorted by cosine similarity between each job and your ideal JD, plus a small bonus for jobs whose title shares words with your target title. Locations are parsed into remote/hybrid/onsite, country, state and city; salaries are pulled out of the description text mechanically (currency, period, annualized) wherever a posting states one. All of that becomes facets in a single self-contained HTML page, served locally.
 

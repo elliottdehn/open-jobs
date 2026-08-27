@@ -40,27 +40,20 @@ Interview them briefly and iterate: draft it, show it, ask what's wrong, revise.
 own words for the "what I'd do" and "must-haves". Two or three rounds is normal. Do not embed
 until they say it reads like the job they want. Keep prior versions (`work/ideal-jd.v1.md`, …).
 
-## 2. Embed and look at the neighbourhood
+## 2. Embed and fetch the neighbourhood
 ```
 uv run tools/jobs.py embed --file work/ideal-jd.md --title "<target title>" --location "<pref>"
-uv run tools/jobs.py groups --k 30
+uv run tools/jobs.py fetch --top 12
 ```
-`groups` prints the 30 nearest groups of similar jobs: id, similarity, size, distinct titles, a
-label, and exemplar jobs (the group's typical job, then the typical jobs of its sub-regions).
-Show the person the list in plain language and ask **Maybe / No** per group, or pick for them
-when it's obvious (e.g. clearly wrong profession = No). `groups --k 60` shows more.
+`fetch --top N` ranks every group by the cosine between its centroid and the ideal-JD vector and
+downloads the N nearest (one file each, ~2.5 MB per 400 jobs). There is no per-group Maybe/No
+step: the centroid distance decides. Start with 8–12 groups (2–6k jobs); `groups --k 30` prints
+the ranked list with labels and exemplars if you want to eyeball it or hand-pick
+(`fetch --groups 12,45,301`). Result: `work/jobs.parquet` (+ `work/jobs.duckdb`): `ats, slug, id,
+title, company, location, url, seen_ms, jd (full text), leaf, sim (cosine to the ideal JD),
+vec_b64`. Query it directly with DuckDB for anything the UI doesn't do.
 
-## 3. Fetch the slice
-```
-uv run tools/jobs.py fetch --groups 12,45,301      # the Maybe ids
-uv run tools/jobs.py fetch --top 12                 # or just the 12 nearest
-```
-Downloads those groups (one file each, ~2.5 MB per 400 jobs) and writes `work/jobs.parquet`
-(+ `work/jobs.duckdb`): `ats, slug, id, title, company, location, url, seen_ms, jd (full text),
-leaf, sim (cosine to the ideal JD), vec_b64`. A typical slice is 2–6k jobs. You can query it
-directly with DuckDB for anything the UI doesn't do.
-
-## 4. Compile the search page and serve it (then offer the LLM sort, §4c)
+## 3. Compile the search page and serve it (then offer the LLM sort, §3c)
 ```
 uv run tools/jobs.py html        # -> work/search.html (single file, self-contained)
 uv run tools/jobs.py serve       # http://127.0.0.1:8765/search.html, records interactions
@@ -78,7 +71,7 @@ these count as yes/no labels and shift the anchor vector), then runs pairwise co
 until the model predicts their recent picks reliably, and sorts by that taste. Comparisons are
 logged as `compare {a,b,win}` events; `rank` uses them (taste model) plus any J/K labels.
 
-## 4b. Enrich the slice (optional, metered)
+## 3b. Enrich the slice (optional, metered)
 ```
 uv run tools/jobs.py enrich --top 300     # or --all
 uv run tools/jobs.py html                  # recompile so the page has the structured fields
@@ -91,7 +84,7 @@ $0.001 per job and $0.015 per new company). The page's ⚡ Enrich button does th
 current top 300. On 429 the tool saves what it got and tells you when to retry. Enriched fields
 become facets (seniority, role family, employment type, salary band, industry, company size).
 
-## 4c. LLM sort with their own key (optional)
+## 3c. LLM sort with their own key (optional)
 ```
 OPENAI_API_KEY=sk-… uv run tools/rank.py --top 200 --budget 1500 --parallel 8
 ```
@@ -110,7 +103,7 @@ In the same breath, remind them they can always hand-sort with the rainbow **Sor
 top right of the page (a couple dozen "which would you rather have?" picks) — it's free and
 instant, but not as good as having the model read every posting.
 
-## 5. Watch what they do, then refine
+## 4. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
 - **Labels** → `uv run tools/jobs.py rank` trains a classifier on them and writes
   `work/ranked.csv` + `work/model.json`. Look at the top of the ranking and at the yes/no split
@@ -119,12 +112,12 @@ Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signa
 - **Searches and filters** they keep applying are missing constraints (remote, a city, a stack).
   Bake them into the JD text or into a DuckDB filter you apply before compiling.
 - **Views without a label** are ambiguity; ask about two or three of them.
-- Many **No** in one group → drop the group; re-run `groups` to find neighbours of the yeses.
+- Many **No** in one group → re-run `fetch` after revising the JD; the neighbourhood moves with it.
 
-Loop: revise the JD → `embed` → `groups` → `fetch` (new groups only; already-downloaded ones are
-cached in `work/groups/`) → `html` → they browse again. Each pass should tighten.
+Loop: revise the JD → `embed` → `fetch` (new groups only; already-downloaded ones are cached in
+`work/groups/`) → `html` → they browse again. Each pass should tighten.
 
-## 6. Deliverables to leave behind
+## 5. Deliverables to leave behind
 - `work/ranked.csv`: the shortlist, best first, with their labels.
 - `work/model.json`: `{recipe, w[1536], b, labels}` — the search as a weight vector; re-usable
   against any future slice with the same `recipe`.
