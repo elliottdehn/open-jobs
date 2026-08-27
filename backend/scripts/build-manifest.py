@@ -96,8 +96,10 @@ def two_means(idx, iters=6):
     return lab
 def build(idx, parent, depth):
     global pos
-    cen = X[idx].mean(0); cen /= np.linalg.norm(cen) + 1e-9
-    rad = float((1 - X[idx] @ cen).max())
+    cen = np.zeros(D, dtype=np.float64)
+    for i in range(0, len(idx), 200_000): cen += X[idx[i:i + 200_000]].sum(0, dtype=np.float64)
+    cen = (cen / len(idx)).astype(np.float32); cen /= np.linalg.norm(cen) + 1e-9
+    rad = float((1 - sims_to(idx, cen)).max())
     me = len(nodes); nodes.append({"id": me, "parent": parent, "lo": pos, "hi": None, "radius": round(rad, 4), "depth": depth, "children": [], "_cen": cen})
     split = None
     if len(idx) > args.leaf_max and rad > args.leaf_radius and depth < 40:
@@ -117,6 +119,7 @@ print(f"tree: {len(nodes)} nodes, {len(leaves)} leaves in {time.time()-t:.0f}s; 
 STOP = set("and or of the for a in to with at on & senior sr jr ii iii i lead staff associate assistant manager specialist".split())
 def words(idx, k=4):
     c = collections.Counter()
+    if len(idx) > 20000: idx = np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
     for r in idx:
         for w in re.findall(r"[a-z][a-z+#]+", meta_rows[r][3].lower()):
             if w not in STOP and len(w) > 2: c[w] += 1
@@ -127,11 +130,19 @@ def company(r):
 def norm_title(t):
     return re.sub(r"[^a-z]+", " ", t.lower()).strip()
 
-def sub_medoids(idx, k):
-    """k-means (in PCA space) inside a group; returns medoid row per sub-cluster, largest first."""
-    Zi = Z[idx]
-    r = np.random.default_rng(len(idx))
-    c = Zi[r.choice(len(idx), k, replace=False)].copy()
+def sims_to(idx, cen, chunk=200_000):
+    """X[idx] @ cen without materializing X[idx] for huge nodes."""
+    out = np.empty(len(idx), dtype=np.float32)
+    for i in range(0, len(idx), chunk): out[i:i + chunk] = X[idx[i:i + chunk]] @ cen
+    return out
+
+def sub_medoids(idx, k, rng_seed):
+    """k-means (in PCA space) inside a group, on a sample for big groups; returns medoid row per
+    sub-cluster, largest first."""
+    r = np.random.default_rng(rng_seed)
+    samp = idx if len(idx) <= 5000 else r.choice(idx, 5000, replace=False)
+    Zi = Z[samp]
+    c = Zi[r.choice(len(samp), k, replace=False)].copy()
     for _ in range(8):
         d = ((Zi[:, None, :] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
         for j in range(k):
@@ -141,17 +152,16 @@ def sub_medoids(idx, k):
     for j in np.argsort(-np.bincount(lab, minlength=k)):
         m = np.where(lab == j)[0]
         if len(m) == 0: continue
-        sub = idx[m]; cen = X[sub].mean(0); cen /= np.linalg.norm(cen) + 1e-9
+        sub = samp[m]; cen = X[sub].mean(0); cen /= np.linalg.norm(cen) + 1e-9
         out.append((int(len(m)), sub[int(np.argmax(X[sub] @ cen))]))
     return out
 
 def exemplars_for(idx, cen, k=6):
     """Medoid of the group, then the medoids of its sub-clusters (typical job of each region inside the
     group), largest region first, skipping repeated titles (location-replicated postings)."""
-    V = X[idx]
-    med = idx[int(np.argmax(V @ cen))]
+    med = idx[int(np.argmax(sims_to(idx, cen)))]
     kk = max(2, min(8, len(idx) // 25))
-    cand = [r for _, r in sub_medoids(idx, kk)] if len(idx) >= 10 else list(idx)
+    cand = [r for _, r in sub_medoids(idx, kk, len(idx))] if len(idx) >= 10 else list(idx)
     seen = {norm_title(meta_rows[med][3])}; ex = [med]
     for r in cand:
         t = norm_title(meta_rows[r][3])
@@ -166,7 +176,8 @@ for n in nodes:
     n["size"] = int(len(idx)); n["label"] = " · ".join(words(idx))
     n["exemplars"] = [{"title": meta_rows[r][3][:80], "company": company(r)[:40], "location": meta_rows[r][4][:40]} for r in ex_rows]
     n["medoid"] = meta_rows[ex_rows[0]][3][:80]
-    n["distinct_titles"] = int(len({norm_title(meta_rows[r][3]) for r in idx}))
+    samp = idx if len(idx) <= 20000 else np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
+    n["distinct_titles"] = int(len({norm_title(meta_rows[r][3]) for r in samp}) * (len(idx) / len(samp)))
 
 # outputs
 C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
