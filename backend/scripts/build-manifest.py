@@ -83,6 +83,12 @@ P = Vt[: args.pca].T.astype(np.float32)
 Z = (X - mu) @ P
 print(f"PCA-{args.pca} in {time.time()-t:.0f}s")
 
+def sims_to(idx, cen, chunk=200_000):
+    """X[idx] @ cen without materializing X[idx] for huge nodes."""
+    out = np.empty(len(idx), dtype=np.float32)
+    for i in range(0, len(idx), chunk): out[i:i + chunk] = X[idx[i:i + chunk]] @ cen
+    return out
+
 # recursive bisection
 nodes = []; order = np.empty(N, dtype=np.int64); pos = 0
 def two_means(idx, iters=6):
@@ -129,12 +135,6 @@ def company(r):
     return comp.get((a, s)) or meta_rows[r][6] or s
 def norm_title(t):
     return re.sub(r"[^a-z]+", " ", t.lower()).strip()
-
-def sims_to(idx, cen, chunk=200_000):
-    """X[idx] @ cen without materializing X[idx] for huge nodes."""
-    out = np.empty(len(idx), dtype=np.float32)
-    for i in range(0, len(idx), chunk): out[i:i + chunk] = X[idx[i:i + chunk]] @ cen
-    return out
 
 def sub_medoids(idx, k, rng_seed):
     """k-means (in PCA space) inside a group, on a sample for big groups; returns medoid row per
