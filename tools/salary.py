@@ -70,6 +70,7 @@ def extract(text):
     if not best: return None
     mult = {"hour": 2080, "day": 260, "week": 52, "month": 12, "year": 1}[best["period"]]
     best["annual_min"], best["annual_max"] = round(best["min"] * mult), round(best["max"] * mult)
+    if best["annual_max"] < 8000 * _cap(best["currency"]): return None  # stipends, per-diems, allowances
     best.pop("_s", None)
     return best
 
