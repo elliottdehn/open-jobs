@@ -16,7 +16,9 @@ Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default
 """
 import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
 import numpy as np
-np.seterr(all="ignore")  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
+np.seterr(all="ignore")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from locparse import parse as parse_location  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
 DATA = os.environ.get("DATA_URL", BASE)  # where /data/* is served from (override for a local mirror)
@@ -133,7 +135,11 @@ def cmd_html(a):
         seen.add(key); uniq.append(r)
     if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
     rows = uniq
-    jobs = [{"k": f"{r[0]}/{r[1]}#{r[2]}", "t": r[3], "c": r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11]} for r in rows]
+    jobs = []
+    for r in rows:
+        loc = parse_location(r[5], r[8])
+        jobs.append({"k": f"{r[0]}/{r[1]}#{r[2]}", "t": r[3], "c": r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
+                     "rm": loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"]})
     html = TEMPLATE.replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w").write(html)

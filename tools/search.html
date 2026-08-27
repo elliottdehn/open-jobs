@@ -23,6 +23,7 @@ aside label{display:flex;justify-content:space-between;gap:6px;padding:2px 0;cur
 kbd{background:var(--line);border-radius:4px;padding:0 5px;font:11px ui-monospace,Menlo,monospace}
 button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}button.g{background:transparent;border:1px solid var(--line);color:var(--fg)}
 .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
+#chips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin-right:4px}#chips button.on{background:var(--acc);border-color:var(--acc)}
 #sortbtn{margin-left:auto;font-weight:700;font-size:14px;padding:8px 16px;color:#fff;border:0;border-radius:8px;background:linear-gradient(90deg,#ff4d4d,#ffb347,#ffe94d,#4dff88,#4dc3ff,#b84dff,#ff4d9d);background-size:300% 100%;animation:rb 3s linear infinite;box-shadow:0 0 14px rgba(255,255,255,.25);text-shadow:0 1px 2px rgba(0,0,0,.5)}
 @keyframes rb{0%{background-position:0 0}100%{background-position:300% 0}}
 #cmp{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10;align-items:center;justify-content:center}
@@ -43,6 +44,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <select id="show"><option value="all">show: all</option><option value="unlabeled">show: unlabeled</option><option value="yes">show: yes</option><option value="no">show: no</option></select>
   <button class="g" id="toggleIdeal">ideal JD</button>
   <button class="g" id="export">export model + labels</button>
+  <span id="chips"></span>
   <button id="sortbtn" title="Compare pairs until the model knows your taste, then sort">✨ Sort</button>
   <span class="m" id="stats"></span>
   <span class="m"><kbd>J</kbd> yes <kbd>K</kbd> no <kbd>Space</kbd> open/close <kbd>↑↓</kbd> move <kbd>O</kbd> open link</span>
@@ -55,9 +57,12 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 </div></div>
 <main>
   <aside>
+    <h3>work arrangement</h3><div id="f-rm"></div>
+    <h3>countries</h3><div id="f-co"></div>
+    <h3>regions / states</h3><div id="f-rg"></div>
+    <h3>cities</h3><div id="f-ci"></div>
     <h3>groups</h3><div id="f-g"></div>
     <h3>companies</h3><div id="f-c"></div>
-    <h3>locations</h3><div id="f-l"></div>
     <h3>sources</h3><div id="f-a"></div>
   </aside>
   <div id="list"></div>
@@ -149,14 +154,18 @@ function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b);
 $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
-const facets={g:{},c:{},l:{},a:{}};const sel={g:new Set(),c:new Set(),l:new Set(),a:new Set()};
-const keyOf={g:j=>'group '+j.g,c:j=>j.c||'?',l:j=>(j.l||'?').split(',').slice(-1)[0].trim()||'?',a:j=>j.k.split('/')[0]};
-for(const j of JOBS)for(const f in facets){const k=keyOf[f](j);facets[f][k]=(facets[f][k]||0)+1}
-function renderFacets(){for(const f in facets){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});render()};el.appendChild(l)})}}
+const FACETS=['rm','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
+const NAMES={US:'United States',GB:'United Kingdom',CA:'Canada',DE:'Germany',FR:'France',IN:'India',NL:'Netherlands',ES:'Spain',IT:'Italy',PL:'Poland',PT:'Portugal',IE:'Ireland',SE:'Sweden',CH:'Switzerland',AU:'Australia',SG:'Singapore',JP:'Japan',BR:'Brazil',MX:'Mexico',IL:'Israel',AE:'UAE',AT:'Austria',BE:'Belgium',DK:'Denmark',NO:'Norway',FI:'Finland',CZ:'Czechia',GR:'Greece',KR:'South Korea',HK:'Hong Kong',TW:'Taiwan',NZ:'New Zealand',AR:'Argentina',CO:'Colombia',CL:'Chile',ZA:'South Africa',NG:'Nigeria',KE:'Kenya',PH:'Philippines',UA:'Ukraine',TR:'Türkiye',RO:'Romania',HU:'Hungary'};
+const keysOf={rm:j=>[j.rm||'unknown'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
+for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1;
+function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:f==='rm'?4:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderChips();render()};el.appendChild(l)})}renderChips()}
+// quick chips: remote, and the top 3 countries
+function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
+  for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className=sel[f].has(k)?'on':'';b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render()};el.appendChild(b)}}
 // ---- list
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
-  for(const f in sel)if(sel[f].size&&!sel[f].has(keyOf[f](j)))return false;
+  for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):b.score-a.score);
   if(reset){shown=0;cur=0}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));for(let i=0;i<N;i++)el.appendChild(jobEl(ranked[i],i));shown=N;
@@ -164,7 +173,7 @@ function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passe
   const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
   $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · ${yes} yes / ${no} no`;hi()}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div><div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
+  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div><div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
   d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};
   d.querySelector('.note').onkeydown=e=>e.stopPropagation();return d}

@@ -1,0 +1,81 @@
+"""Turn free-text job locations (+ JD text) into structured fields for faceting.
+parse(location, jd) -> {"remote": "remote|hybrid|onsite|unknown", "countries": [...], "regions": [...], "cities": [...]}
+Heuristic, deterministic, no network. Countries are ISO-3166 alpha-2; US regions are state codes."""
+import re
+
+US_STATES = {"AL":"Alabama","AK":"Alaska","AZ":"Arizona","AR":"Arkansas","CA":"California","CO":"Colorado","CT":"Connecticut","DE":"Delaware","FL":"Florida","GA":"Georgia","HI":"Hawaii","ID":"Idaho","IL":"Illinois","IN":"Indiana","IA":"Iowa","KS":"Kansas","KY":"Kentucky","LA":"Louisiana","ME":"Maine","MD":"Maryland","MA":"Massachusetts","MI":"Michigan","MN":"Minnesota","MS":"Mississippi","MO":"Missouri","MT":"Montana","NE":"Nebraska","NV":"Nevada","NH":"New Hampshire","NJ":"New Jersey","NM":"New Mexico","NY":"New York","NC":"North Carolina","ND":"North Dakota","OH":"Ohio","OK":"Oklahoma","OR":"Oregon","PA":"Pennsylvania","RI":"Rhode Island","SC":"South Carolina","SD":"South Dakota","TN":"Tennessee","TX":"Texas","UT":"Utah","VT":"Vermont","VA":"Virginia","WA":"Washington","WV":"West Virginia","WI":"Wisconsin","WY":"Wyoming","DC":"District of Columbia"}
+STATE_BY_NAME = {v.lower(): k for k, v in US_STATES.items()}
+CA_PROV = {"ON":"Ontario","QC":"Quebec","BC":"British Columbia","AB":"Alberta","MB":"Manitoba","SK":"Saskatchewan","NS":"Nova Scotia","NB":"New Brunswick"}
+PROV_BY_NAME = {v.lower(): k for k, v in CA_PROV.items()}
+COUNTRIES = {
+ "united states":"US","usa":"US","u.s.":"US","u.s.a.":"US","us":"US","america":"US","united states of america":"US",
+ "united kingdom":"GB","uk":"GB","england":"GB","scotland":"GB","wales":"GB","great britain":"GB","northern ireland":"GB",
+ "canada":"CA","germany":"DE","deutschland":"DE","france":"FR","spain":"ES","españa":"ES","italy":"IT","italia":"IT","netherlands":"NL","the netherlands":"NL","belgium":"BE","switzerland":"CH","austria":"AT","sweden":"SE","norway":"NO","denmark":"DK","finland":"FI","ireland":"IE","poland":"PL","polska":"PL","portugal":"PT","czech republic":"CZ","czechia":"CZ","hungary":"HU","romania":"RO","greece":"GR","ukraine":"UA","türkiye":"TR","turkey":"TR",
+ "india":"IN","china":"CN","japan":"JP","south korea":"KR","korea":"KR","singapore":"SG","hong kong":"HK","taiwan":"TW","australia":"AU","new zealand":"NZ","philippines":"PH","indonesia":"ID","malaysia":"MY","thailand":"TH","vietnam":"VN","pakistan":"PK","bangladesh":"BD","sri lanka":"LK",
+ "mexico":"MX","méxico":"MX","brazil":"BR","brasil":"BR","argentina":"AR","colombia":"CO","chile":"CL","peru":"PE","costa rica":"CR","uruguay":"UY",
+ "israel":"IL","united arab emirates":"AE","uae":"AE","dubai":"AE","saudi arabia":"SA","qatar":"QA","egypt":"EG","south africa":"ZA","nigeria":"NG","kenya":"KE","morocco":"MA",
+}
+CITY_COUNTRY = {  # frequent cities without an explicit country
+ "london":"GB","manchester":"GB","birmingham":"GB","edinburgh":"GB","dublin":"IE","paris":"FR","berlin":"DE","munich":"DE","münchen":"DE","hamburg":"DE","frankfurt":"DE","amsterdam":"NL","rotterdam":"NL","brussels":"BE","zurich":"CH","zürich":"CH","geneva":"CH","vienna":"AT","wien":"AT","stockholm":"SE","oslo":"NO","copenhagen":"DK","helsinki":"FI","warsaw":"PL","warszawa":"PL","krakow":"PL","kraków":"PL","prague":"CZ","praha":"CZ","lisbon":"PT","lisboa":"PT","madrid":"ES","barcelona":"ES","milan":"IT","milano":"IT","rome":"IT","athens":"GR","tel aviv":"IL","bangalore":"IN","bengaluru":"IN","hyderabad":"IN","pune":"IN","mumbai":"IN","chennai":"IN","gurgaon":"IN","gurugram":"IN","noida":"IN","delhi":"IN","new delhi":"IN","singapore":"SG","tokyo":"JP","seoul":"KR","sydney":"AU","melbourne":"AU","toronto":"CA","vancouver":"CA","montreal":"CA","montréal":"CA","ottawa":"CA","calgary":"CA","mexico city":"MX","são paulo":"BR","sao paulo":"BR","buenos aires":"AR","bogotá":"CO","bogota":"CO","santiago":"CL","lima":"PE","dubai":"AE","hong kong":"HK","taipei":"TW","manila":"PH","jakarta":"ID","kuala lumpur":"MY","bangkok":"TH","ho chi minh city":"VN","hanoi":"VN","cape town":"ZA","johannesburg":"ZA","lagos":"NG","nairobi":"KE",
+ "new york":"US","new york city":"US","nyc":"US","san francisco":"US","sf":"US","los angeles":"US","seattle":"US","austin":"US","boston":"US","chicago":"US","denver":"US","atlanta":"US","miami":"US","dallas":"US","houston":"US","washington":"US","san jose":"US","san diego":"US","portland":"US","phoenix":"US","philadelphia":"US","minneapolis":"US","salt lake city":"US","raleigh":"US","charlotte":"US","nashville":"US","pittsburgh":"US","detroit":"US","columbus":"US","san francisco bay area":"US","bay area":"US","silicon valley":"US","remote - usa":"US",
+}
+REMOTE_RE = re.compile(r"\b(remote|work from home|wfh|distributed|anywhere)\b", re.I)
+HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
+ONSITE_RE = re.compile(r"\b(on-?site|in-?office|in person)\b", re.I)
+
+def _split(loc):
+    loc = re.sub(r"[()\[\]]", ";", loc)  # "Remote (United States)" -> two segments
+    loc = re.sub(r"\b(remote|hybrid|on-?site|work from home|wfh)\b\s*[-–:]?\s*", lambda m: m.group(1) + ";", loc, flags=re.I)  # "Hybrid - Austin" -> "hybrid; Austin"
+    parts = re.split(r"\s*(?:;|\||/|\bor\b|\band\b|&|•)\s*", loc)
+    return [p.strip(" -–,") for p in parts if p and p.strip(" -–,")]
+
+def _one(seg, out):
+    s = seg.strip().strip("()[]")
+    if not s: return
+    low = s.lower()
+    if REMOTE_RE.search(low) and len(low) < 40: out["remote_hint"] = True
+    # icims style: US-CA-San Jose / US-Remote
+    m = re.match(r"^([A-Z]{2})-([A-Z]{2})-(.+)$", s)
+    if m and m.group(1) == "US" and m.group(2) in US_STATES:
+        out["countries"].add("US"); out["regions"].add(m.group(2)); out["cities"].add(m.group(3).strip().title()); return
+    m = re.match(r"^([A-Z]{2})-(.+)$", s)
+    if m and m.group(1) in ("US","GB","CA","DE","FR","IN","AU"):
+        out["countries"].add(m.group(1)); rest = m.group(2).strip()
+        if rest.lower() != "remote": out["cities"].add(rest.title()); return
+        return
+    toks = [t.strip() for t in re.split(r",", s) if t.strip()]
+    if len(toks) == 1 and REMOTE_RE.fullmatch(toks[0].strip().lower()): return  # bare "Remote"
+    city = None
+    explicit = set(); inferred = set()
+    for t in toks:
+        tl = t.lower().strip(". ")
+        if tl in COUNTRIES: explicit.add(COUNTRIES[tl]); continue
+        if t.upper() in US_STATES and (len(t) == 2): explicit.add("US"); out["regions"].add(t.upper()); continue
+        if tl in STATE_BY_NAME: explicit.add("US"); out["regions"].add(STATE_BY_NAME[tl]); continue
+        if t.upper() in CA_PROV and len(t) == 2: explicit.add("CA"); out["regions"].add("CA-" + t.upper()); continue
+        if tl in PROV_BY_NAME: explicit.add("CA"); out["regions"].add("CA-" + PROV_BY_NAME[tl]); continue
+        if tl in CITY_COUNTRY:
+            inferred.add(CITY_COUNTRY[tl]); out["cities"].add(t.title()); continue
+        if REMOTE_RE.search(tl) or tl in ("worldwide", "global", "emea", "apac", "latam", "europe", "north america"):
+            if tl in ("emea","apac","latam","europe","north america","worldwide","global"): out["regions"].add(tl.upper())
+            continue
+        if city is None and len(t) < 40 and not re.search(r"\d", t) and not REMOTE_RE.search(tl) and not HYBRID_RE.search(tl): city = t
+    if city: out["cities"].add(city.title())
+    # an explicit country/state wins over a country inferred from a city name (Vienna, VA is not Austria)
+    out["countries"] |= explicit if explicit else inferred
+
+def parse(location, jd=""):
+    out = {"countries": set(), "regions": set(), "cities": set(), "remote_hint": False}
+    for seg in _split(location or ""): _one(seg, out)
+    loc = (location or "").lower(); head = (jd or "")[:2500].lower()
+    if HYBRID_RE.search(loc) or HYBRID_RE.search(head): remote = "hybrid"
+    elif out["remote_hint"] or REMOTE_RE.search(loc): remote = "remote"
+    elif re.search(r"\b(fully|100%|entirely) remote\b|\bremote[- ]first\b|\bremote (role|position|job)\b|\bthis (role|position) is remote\b", head): remote = "remote"
+    elif ONSITE_RE.search(loc) or re.search(r"\b(on-?site|in-?office) (role|position|\d+ days)\b|\bthis (role|position) is (on-?site|in-?office)\b", head): remote = "onsite"
+    else: remote = "unknown"
+    return {"remote": remote, "countries": sorted(out["countries"]), "regions": sorted(out["regions"]), "cities": sorted(out["cities"])[:6]}
+
+if __name__ == "__main__":
+    import sys, json
+    for t in ["US-CA-San Jose", "Remote - USA", "Paris; Warsaw; Lisboa; Berlin", "Vienna, VA, USA", "Bengaluru, India", "New York City; Remote / San Francisco", "London, United Kingdom", "Hybrid - Austin, TX", "Toronto, ON", "Berlin, Germany; Frankfurt, Germany", "Remote (United States)"]:
+        print(f"{t:45s} -> {json.dumps(parse(t))}")
