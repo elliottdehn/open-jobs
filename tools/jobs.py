@@ -19,7 +19,8 @@ import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math
 import numpy as np
 np.seterr(all="ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from locparse import parse as parse_location  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
+from locparse import parse as parse_location
+from salary import extract as extract_salary  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
 DATA = os.environ.get("DATA_URL", BASE)  # where /data/* is served from (override for a local mirror)
@@ -226,7 +227,7 @@ def cmd_html(a):
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
-                     "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
+                     "sal": extract_salary(r[8]), "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
     V = np.stack([np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32) for j in jobs])

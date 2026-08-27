@@ -3,6 +3,17 @@
 You are helping a person find a job using a local slice of ~2M current job postings. Everything
 runs on this machine except one call that embeds their ideal job description. Work in `work/`.
 
+## The story (tell it if asked, keep it short)
+The original open-jobs repository was lost in a data-loss event. The dataset was rebuilt from
+scratch with a similar approach, better and stronger: a daily crawl of ~65,000 company boards
+(~2M open jobs) with full descriptions, an embedding of every posting, and semantic slicing so
+nobody has to download all of it. Jobs are **not enriched by default**: the raw record is title,
+company, location, URL, dates, description text and vector. Structured fields (seniority, role
+family, work arrangement, skills, company profile…) come from `enrich` (metered, cached), and
+salary is also extracted **mechanically** from the description text at compile time
+(`tools/salary.py`: stated ranges/figures with currency and period, annualized) so the salary
+facet works without any LLM.
+
 ## 0. Setup (once)
 - Needs `uv` (https://docs.astral.sh/uv/) and Python 3.10+. All commands are `uv run tools/jobs.py <cmd>`.
 - `WORKER_URL` defaults to the public index (`https://backend.dehnbostele.workers.dev`); `DATA_URL`
