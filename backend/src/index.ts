@@ -159,7 +159,7 @@ export default {
 			headers.set("etag", obj.httpEtag);
 			headers.set("accept-ranges", "bytes");
 			headers.set("cache-control", "public, max-age=3600");
-			if (obj.range && "offset" in obj.range && obj.range.offset !== undefined) {
+			if (range && obj.range && "offset" in obj.range && obj.range.offset !== undefined) {
 				const offset = obj.range.offset;
 				const end = offset + (obj.range.length ?? obj.size - offset) - 1;
 				headers.set("content-range", `bytes ${offset}-${end}/${obj.size}`);
