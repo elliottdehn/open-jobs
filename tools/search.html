@@ -65,11 +65,11 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
     <div class="top" style="margin-top:14px"><span id="sc-n"></span><span><button class="g" id="sc-any">anywhere</button> <button id="sc-go">continue →</button></span></div>
   </div>
   <div id="what" style="display:none">
-    <h2 style="margin:0 0 6px">What?</h2>
-    <p class="hint" style="margin:0 0 10px">Terms from the jobs in scope. Click to cycle: neutral → <b style="color:var(--ok)">✚ encourage</b> (boosts) → <b style="color:var(--no)">✖ discourage</b> (hides). Add your own below.</p>
+    <h2 style="margin:0 0 6px">What to ban?</h2>
+    <p class="hint" style="margin:0 0 10px">Terms from the jobs in scope. Click a term to <b style="color:var(--no)">✖ ban</b> it: any job with it in the title (or description, second row) is dropped. Click again to un-ban. Add your own below.</p>
     <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the title</h3><div id="kw-t" class="scchips"></div>
     <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the description</h3><div id="kw-b" class="scchips"></div>
-    <div class="row" style="margin-top:8px"><input id="kw-add" type="text" placeholder="add a term, e.g. rust or 'on-site' … then Enter"><select id="kw-where"><option value="t">in title</option><option value="b">in description</option></select><select id="kw-how"><option value="1">encourage</option><option value="-1">discourage</option></select></div>
+    <div class="row" style="margin-top:8px"><input id="kw-add" type="text" placeholder="ban a term, e.g. frontend or 'on-site' … then Enter"><select id="kw-where"><option value="t">in title</option><option value="b">in description</option></select></div>
     <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button id="wh-go">continue →</button></span></div>
   </div>
   <div id="cmpmain">
@@ -236,8 +236,8 @@ function inScopeJobs(){return JOBS.filter(j=>{for(const f in sel)if(sel[f].size&
 function mineTitle(list){const c={};for(const j of list){const w=(j.t||'').toLowerCase().replace(/[^a-z0-9+#./ -]/g,' ').split(/\s+/).filter(x=>x&&!STOPW.has(x)&&x.length>1);const seen=new Set();for(let i=0;i<w.length;i++){for(const t of [w[i],i+1<w.length?w[i]+' '+w[i+1]:null]){if(!t||seen.has(t))continue;seen.add(t);c[t]=(c[t]||0)+1}}}
   return Object.entries(c).filter(([t,n])=>n>=Math.max(3,list.length*0.01)).sort((a,b)=>b[1]-a[1]).slice(0,28)}
 function mineBody(list){const c={};for(const j of list){const txt=(j.jd||'').toLowerCase();for(const t of TECH)if(hasTerm(txt,t))c[t]=(c[t]||0)+1}return Object.entries(c).filter(([t,n])=>n>=3).sort((a,b)=>b[1]-a[1]).slice(0,40)}
-function chip(kind,t,n){const b=document.createElement('button');const v=st.kw[kind][t]||0;b.className=v>0?'enc':v<0?'dis':'';b.innerHTML=`${v>0?'✚ ':v<0?'✖ ':''}${esc(t)}<span>${n!=null?n:''}</span>`;
-  b.onclick=()=>{const cur=st.kw[kind][t]||0;const nv=cur===0?1:cur===1?-1:0;if(nv===0)delete st.kw[kind][t];else st.kw[kind][t]=nv;save();event({type:'keyword',where:kind,term:t,value:nv});renderWhat()};return b}
+function chip(kind,t,n){const b=document.createElement('button');const v=st.kw[kind][t]||0;b.className=v<0?'dis':'';b.innerHTML=`${v<0?'✖ ':''}${esc(t)}<span>${n!=null?n:''}</span>`;
+  b.onclick=()=>{const nv=(st.kw[kind][t]||0)<0?0:-1;if(nv===0)delete st.kw[kind][t];else st.kw[kind][t]=nv;save();event({type:'ban',where:kind,term:t,on:nv<0});renderWhat()};return b}
 function renderWhat(){
   const list=inScopeJobs();
   const tEl=$('#kw-t'),bEl=$('#kw-b');tEl.innerHTML='';bEl.innerHTML='';
@@ -245,13 +245,13 @@ function renderWhat(){
   for(const [t,n] of tTerms)tEl.appendChild(chip('t',t,n));for(const [t] of Object.entries(st.kw.t))if(!tTerms.some(x=>x[0]===t))tEl.appendChild(chip('t',t,null));
   for(const [t,n] of bTerms)bEl.appendChild(chip('b',t,n));for(const [t] of Object.entries(st.kw.b))if(!bTerms.some(x=>x[0]===t))bEl.appendChild(chip('b',t,null));
   whatCount()}
-function whatCount(){const n=JOBS.filter(passes).length,enc=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v>0).length,dis=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v<0).length;$('#wh-n').textContent=`${n.toLocaleString()} jobs in scope · ${enc} encouraged · ${dis} discouraged`}
-$('#kw-add').onkeydown=e=>{if(e.key!=='Enter')return;e.preventDefault();const t=$('#kw-add').value.trim().toLowerCase();if(!t)return;const kind=$('#kw-where').value,v=+$('#kw-how').value;st.kw[kind][t]=v;save();event({type:'keyword',where:kind,term:t,value:v});$('#kw-add').value='';renderWhat()};
+function whatCount(){const n=JOBS.filter(passes).length,dis=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v<0).length,all=inScopeJobs().length;$('#wh-n').textContent=`${n.toLocaleString()} of ${all.toLocaleString()} jobs remain · ${dis} banned term${dis===1?'':'s'}`}
+$('#kw-add').onkeydown=e=>{if(e.key!=='Enter')return;e.preventDefault();const t=$('#kw-add').value.trim().toLowerCase();if(!t)return;const kind=$('#kw-where').value;st.kw[kind][t]=-1;save();event({type:'ban',where:kind,term:t,on:true});$('#kw-add').value='';renderWhat()};
 function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});$('#scope').style.display='none';$('#what').style.display='block';renderWhat()}
 $('#wh-back').onclick=()=>{$('#what').style.display='none';$('#scope').style.display='block'};
 $('#wh-go').onclick=()=>beginPairs();
 function beginPairs(){
-  event({ type: 'keywords', title: st.kw.t, body: st.kw.b, n: JOBS.filter(passes).length });
+  event({ type: 'bans', title: Object.keys(st.kw.t), body: Object.keys(st.kw.b), n: JOBS.filter(passes).length });
   renderFacets(); render();
   $('#what').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
 }
@@ -285,7 +285,7 @@ function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML=
 // quick chips: remote, and the top 3 countries
 function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
   for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className=sel[f].has(k)?'on':'';b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render()};el.appendChild(b)}
-  for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){const b=document.createElement('button');b.className=v>0?'enc':'dis';b.style.borderColor=v>0?'var(--ok)':'var(--no)';b.textContent=(v>0?'✚ ':'✖ ')+t+(kind==='b'?' (body)':'');b.title='click to remove';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'keyword',where:kind,term:t,value:0});renderFacets();render()};el.appendChild(b)}}
+  for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){if(v>=0)continue;const b=document.createElement('button');b.className='dis';b.style.borderColor='var(--no)';b.textContent='✖ '+t+(kind==='b'?' (body)':'');b.title='click to un-ban';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'ban',where:kind,term:t,on:false});renderFacets();render()};el.appendChild(b)}}
 // ---- list
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
