@@ -4,7 +4,7 @@ One prompt, in whatever agent you use (Claude Code, Codex, Cursor, Gemini CLI, w
 
 > "Clone https://github.com/elliottdehn/open-jobs, it's a job-searching toolchain. Help me find jobs to apply to."
 
-Unfortunately, web and mobile agents are not useful for this because the toolchain requires interent access.
+Unfortunately, web and mobile agents are not useful for this because the toolchain requires internet access to download the dataset.
 
 The agent clones the repo, pulls the slice of the dataset that's relevant to you, and then it's just your agent working over a local table of real, current job postings. Rank them, filter them, dedupe them, summarize the ones worth reading, draft the cover letter, keep a shortlist in a file, check again tomorrow. It does what you tell it.
 
@@ -12,7 +12,7 @@ The agent clones the repo, pulls the slice of the dataset that's relevant to you
 
 Almost every company posts its jobs through an applicant tracking system: Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters, Paycom, iCIMS, and a dozen more. Every one of those has a public careers page, and it is not actually that hard to crawl all of them. The people who do it in bulk charge quadruple digits a month for access.
 
-This is the same data, free. ~2 million open jobs across ~65,000 company boards, refreshed daily, with the full job description, the company, the location, the posting date, and an embedding of every posting. It's parquet. DuckDB eats it for breakfast. There's no business model; I built it for myself and would rather share it than sit on it.
+This is the same data, free. ~2 million open jobs across ~65,000 company boards, refreshed daily, with the full job description, the company, the location, the posting date, and an embedding of every posting in a parquet file. There's no business model; I built it for myself and would rather share it than sit on it.
 
 ## You don't download all of it
 
@@ -24,27 +24,31 @@ So the agent embeds what you're looking for (your résumé, or a paragraph), fin
 
 The algorithm behind the grouping isn't important. The only thing you need to know is that you download slices of the dataset based on a semantic query.
 
-## Why local beats a job site
+# How jobs are ranked for you
 
-Because once the relevant slice is on your machine, the search stops being a query string and becomes whatever you and your agent can compute:
+Step by step, this is what happens between "help me find a job" and a sorted list.
 
-- "Rank these by how close they are to the three jobs I actually applied to."
-- "Drop staffing agencies, drop anything reposted more than twice, drop anything without a salary."
-- "Join with this spreadsheet of companies I've heard good things about."
-- "Train a tiny classifier on the twenty I marked yes/no and re-rank the rest."
-- "Show me what's new since yesterday in my neighbourhood."
+**1. You and the agent write the job you want.** Not a résumé: a job description, in the same shape as a real posting (title, what you'd do day to day, must-haves, arrangement, comp if you care). The agent drafts it, you correct it, two or three rounds. This is the most important step, because everything downstream is measured against it.
 
-Every one of those is a few lines over a local parquet file. No site has that UI, and no site is going to give you a ranking that isn't quietly selling placement.
+**2. It gets embedded, once.** That text goes to the same embedding model every posting was embedded with, so it lands in the same space as the jobs. That call is the only thing that ever leaves your machine (rate-limited per IP because I pay for it). The vector comes back and stays local.
 
-## Under the hood (for the curious)
+**3. Nearest groups, Maybe or No.** The agent compares your vector against every group's centroid and shows you the closest groups as cards: a label, how many jobs, the typical job in the group and the typical jobs of its sub-regions. You say Maybe or No. Maybe downloads the group (title, company, location, URL, full description, vector for every job). A few thousand jobs land in a parquet file.
 
-- One Cloudflare Durable Object per job board; each fetches its board at its own fixed time every day, diffs against yesterday, and pulls the full JD once per new job
-- Embeddings on every job (OpenAI `text-embedding-3-small`, 1536 dims); structured extraction only on demand, so the whole thing runs on pocket change
-- The grouping is a recursive bisection tree over the embeddings; a few-MB sidecar lets a client find your nearest groups with zero server compute
-- Everything is in the repo: the crawler, the 25 ATS fetchers, the export and parquet scripts, the agent-facing tools
+**4. Pre-ranking.** Before you do anything, the list is sorted by cosine similarity between each job and your ideal JD, plus a small bonus for jobs whose title shares words with your target title. Locations are parsed into remote/hybrid/onsite, country, state and city; salaries are pulled out of the description text mechanically (currency, period, annualized) wherever a posting states one. All of that becomes facets in a single self-contained HTML page, served locally.
 
-There's also a small website that does the same flow in a browser tab (paste résumé, say maybe/no to groups, train a classifier on the ones you like). It's a footnote. The agent is the product.
+**5. Sort: Where, What, then compare.** The Sort button in the top right runs three quick screens.
+- *Where?* Chips for remote/hybrid/onsite, countries, states. Anything you don't pick is dropped from what follows.
+- *What?* Two dozen jobs spread across your scope (farthest-point sampled, so they're deliberately different from each other). Mark More like this or Less like this. Those picks shift the anchor vector: ideal JD plus the mean of your Mores minus the mean of your Lesses.
+- *Compare.* It shows two jobs and asks which you'd rather have. A pairwise model (Bradley-Terry over the vector difference, pulled toward the anchor so early picks can't swing it) learns from each answer. The pairs aren't random: a committee of bootstrapped models is refit after every pick, and the next pair is the one they disagree on most, weighted toward jobs that are different from each other (a decision between near-twins teaches nothing) and toward the top of the current ranking. It labels the option it predicts you'll choose, so you can see it learning. It stops after 12 comparisons once the top of the ranking is stable across the committee or it predicts your recent picks reliably, hard stop at 25.
+
+**6. The list re-sorts.** Every job is scored by the learned taste vector. J and K on any row is a yes/no label that refits a classifier on top of it, live.
+
+**7. Optional: have the LLM read them.** With your own OpenAI key, `rank.py` does a merge sort of your top N where the comparator is the model reading both postings against your ideal JD. It doesn't do every comparison: it only asks the model for pairs that are both in the top of the base ranking, or that the base ranking calls a near-tie; everything else is decided by the vectors. A few hundred calls, about fifteen cents, a few minutes, and every "why" is cached.
+
+**8. Everything you did is a file.** Labels, comparisons, bans, notes and searches are logged locally as events. The agent reads them, tells you what your picks say that your JD didn't, and revises the JD. The exported search is a weight vector: 6 KB, no account, reusable against tomorrow's slice.
+
+The jobs are not enriched by default. If you want structured fields (seniority, skills, remote policy, company website and size), the page can request them for the jobs you're looking at; that's metered per IP and cached forever, so whatever anyone enriches is in the next day's dataset for everyone.
 
 Repo: https://github.com/elliottdehn/open-jobs
 
-Happy to answer questions about the crawling, the embeddings, or how badly ATS APIs are designed.
+Happy to answer questions.
