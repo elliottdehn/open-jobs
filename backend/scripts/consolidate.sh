@@ -33,6 +33,6 @@ echo "export/latest -> $DATE"
 
 if [[ " $* " != *" --skip-upload "* ]]; then
   echo "--- 5/5 upload manifest + groups to R2 $(date '+%H:%M:%S')"
-  EXPORT_DIR="$OUT" python3 -u scripts/upload-web.py --workers 8
+  EXPORT_DIR="$OUT" python3 -u scripts/upload-web.py --workers 16
 fi
 echo "=== done $(date '+%H:%M:%S')"

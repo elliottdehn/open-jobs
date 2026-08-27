@@ -283,9 +283,10 @@ skipped via `.done` markers, and interrupted exports resume from their last comp
    Multi-part boards repeat `meta` on every part; the board row is emitted from `part 0` only.
    Query with `read_parquet('export/latest/jobs/*.parquet')`.
 
-4. **Manifest** (`build-manifest.py`, `EXPORT_DIR=<dir>`). Loads all `is_open AND embed_status =
-   done AND embed_model = <dominant recipe>` vectors zero-copy via Arrow (~9 GB for 1.5M × 1536
-   float32; peak ~15 GB), PCA-256 on a 50k sample, recursive 2-means bisection (stop at ≤ 400
+4. **Manifest** (`build-manifest.py`, `EXPORT_DIR=<dir>`). Streams all `is_open AND embed_status =
+   done AND embed_model = <dominant recipe>` vectors in record batches into a preallocated float32
+   array (~12 GB for 2M × 1536; text columns stay in Arrow; peak ~20 GB — never copies the full
+   matrix, big nodes use chunked dot products and sampled sub-medoids), PCA-256 on a 50k sample, recursive 2-means bisection (stop at ≤ 400
    members or radius ≤ 0.30), DFS row order, then per node: label (top title words), medoid,
    sub-cluster medoids as exemplars (title-distinct), radius, `distinct_titles`. Writes
    `web/manifest.json`, `web/centroids.bin` (float16), `web/groups/<leaf>.json` (jobs with JD text
@@ -306,7 +307,8 @@ skipped via `.done` markers, and interrupted exports resume from their last comp
   The daily cron handles steady state; a big recipe change (new `EMBED_TAG`) needs a full
   backfill first (~5 h at the 10M TPM embeddings cap).
 - Disk: ~35 GB NDJSON + ~8 GB parquet + ~5 GB web per day. Keep 2 days.
-- Time: ~1.5 h end to end today (pull ~35 min, parquet ~25, manifest ~15, upload ~10).
+- Time: ~3 h end to end at 2M jobs (pull ~70 min with the 8.7k-job Oracle tenants and Workday,
+  parquet ~25, manifest ~10, upload ~85 min for ~7k group files at 16 workers).
 
 ### Verifying a build
 ```sql
