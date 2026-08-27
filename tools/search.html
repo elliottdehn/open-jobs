@@ -34,7 +34,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 #cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
 #cmp .opt:hover{border-color:var(--acc)}
 .gcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px}.gcard.none{opacity:.4}.gcard .lbl{font-weight:600}.gcard ul{margin:2px 0 0 16px;padding:0;font-size:12px;color:#c9c9d0}.gcard .btns{display:flex;gap:6px;margin-top:6px}.gcard .btns button{flex:1;padding:5px}.gcard .btns .on{background:var(--acc)}
-.scchips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin:0 6px 6px 0;padding:6px 10px}.scchips button.on{background:var(--acc);border-color:var(--acc)}.scchips button span{color:var(--mut);font-size:11px;margin-left:4px}
+.scchips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin:0 6px 6px 0;padding:6px 10px}.scchips button.on{background:var(--acc);border-color:var(--acc)}.scchips button.enc{background:rgba(46,204,113,.18);border-color:var(--ok)}.scchips button.dis{background:rgba(231,76,60,.18);border-color:var(--no);text-decoration:line-through}.scchips button span{color:var(--mut);font-size:11px;margin-left:4px}
 #cmp .guess{font-size:11px;color:var(--mut);letter-spacing:.3px;text-transform:uppercase;min-height:14px}#cmp .guess b{color:#4dff88;font-weight:600}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
 #cmp .conf{height:6px;background:var(--line);border-radius:3px;overflow:hidden;flex:1;margin:0 12px}#cmp .conf i{display:block;height:100%;background:linear-gradient(90deg,#4dc3ff,#4dff88)}
 #ideal{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 14px;white-space:pre-wrap;font-size:12px;color:#c9c9d0;max-height:200px;overflow:auto}
@@ -66,8 +66,10 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   </div>
   <div id="what" style="display:none">
     <h2 style="margin:0 0 6px">What?</h2>
-    <p class="hint" style="margin:0 0 10px">The kinds of jobs in this slice (everything you fetched, split into at most six). <b>None</b> drops a group entirely; <b>Some</b> keeps it for sorting. Sorted by closeness to your ideal JD.</p>
-    <div id="wh-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;max-height:60vh;overflow:auto"></div>
+    <p class="hint" style="margin:0 0 10px">Terms from the jobs in scope. Click to cycle: neutral → <b style="color:var(--ok)">✚ encourage</b> (boosts) → <b style="color:var(--no)">✖ discourage</b> (hides). Add your own below.</p>
+    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the title</h3><div id="kw-t" class="scchips"></div>
+    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">In the description</h3><div id="kw-b" class="scchips"></div>
+    <div class="row" style="margin-top:8px"><input id="kw-add" type="text" placeholder="add a term, e.g. rust or 'on-site' … then Enter"><select id="kw-where"><option value="t">in title</option><option value="b">in description</option></select><select id="kw-how"><option value="1">encourage</option><option value="-1">discourage</option></select></div>
     <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button id="wh-go">continue →</button></span></div>
   </div>
   <div id="cmpmain">
@@ -105,7 +107,7 @@ for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
-if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
+if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
 // ---- model: logistic regression seeded at the ideal vector, refit on every label
@@ -229,24 +231,27 @@ function startCmp(){
   $('#scope').style.display = 'block'; $('#what').style.display = 'none'; $('#cmpmain').style.display = 'none'; renderScope();
   event({ type: 'sort_start', compares: st.compares.length });
 }
+const STOPW=new Set('and or of the for a in to with at on & - senior sr jr ii iii iv i lead staff associate assistant engineer engineering software developer development remote job jobs position role roles team hiring new'.split(' '));
+function inScopeJobs(){return JOBS.filter(j=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})}
+function mineTitle(list){const c={};for(const j of list){const w=(j.t||'').toLowerCase().replace(/[^a-z0-9+#./ -]/g,' ').split(/\s+/).filter(x=>x&&!STOPW.has(x)&&x.length>1);const seen=new Set();for(let i=0;i<w.length;i++){for(const t of [w[i],i+1<w.length?w[i]+' '+w[i+1]:null]){if(!t||seen.has(t))continue;seen.add(t);c[t]=(c[t]||0)+1}}}
+  return Object.entries(c).filter(([t,n])=>n>=Math.max(3,list.length*0.01)).sort((a,b)=>b[1]-a[1]).slice(0,28)}
+function mineBody(list){const c={};for(const j of list){const txt=(j.jd||'').toLowerCase();for(const t of TECH)if(hasTerm(txt,t))c[t]=(c[t]||0)+1}return Object.entries(c).filter(([t,n])=>n>=3).sort((a,b)=>b[1]-a[1]).slice(0,40)}
+function chip(kind,t,n){const b=document.createElement('button');const v=st.kw[kind][t]||0;b.className=v>0?'enc':v<0?'dis':'';b.innerHTML=`${v>0?'✚ ':v<0?'✖ ':''}${esc(t)}<span>${n!=null?n:''}</span>`;
+  b.onclick=()=>{const cur=st.kw[kind][t]||0;const nv=cur===0?1:cur===1?-1:0;if(nv===0)delete st.kw[kind][t];else st.kw[kind][t]=nv;save();event({type:'keyword',where:kind,term:t,value:nv});renderWhat()};return b}
 function renderWhat(){
-  const el=$('#wh-cards');el.innerHTML='';
-  const inScope={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok)(inScope[j.g3]=inScope[j.g3]||[]).push(j)}
-  const norm=t=>(t||'').toLowerCase().replace(/[^a-z]+/g,' ').trim();
-  Object.entries(inScope).sort((a,b)=>(b[1].reduce((s,j)=>s+j.sim,0)/b[1].length)-(a[1].reduce((s,j)=>s+j.sim,0)/a[1].length)).forEach(([g,list])=>{const G=GROUPS3[g]||{label:'group '+g};const n=list.length;const sim=list.reduce((s,j)=>s+j.sim,0)/n;
-    // examples come from the jobs actually in scope: closest to the ideal JD first, distinct titles
-    const seen=new Set(),ex=[];for(const j of [...list].sort((x,y)=>y.sim-x.sim)){const t=norm(j.t);if(seen.has(t))continue;seen.add(t);ex.push(j);if(ex.length>=3)break}
-    const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
-    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} job${n===1?'':'s'} in scope${G.size&&G.size!==n?` (of ${G.size} in the slice)`:''} · sim ${sim.toFixed(2)}</div><ul>${ex.map(j=>`<li>${esc(j.t)}${j.c&&!/^[0-9a-f-]{20,}$/i.test(j.c)?' · <span style="color:var(--mut)">'+esc(j.c)+'</span>':''}${j.l?' <span style="color:var(--mut)">· '+esc(j.l.slice(0,28))+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
-    const [bs,bn]=d.querySelectorAll('button');bs.onclick=()=>{exclG.delete(+g);d.className='gcard';bs.className='g on';bn.className='g';whatCount()};bn.onclick=()=>{exclG.add(+g);d.className='gcard none';bs.className='g';bn.className='g on';whatCount()};
-    el.appendChild(d)});
+  const list=inScopeJobs();
+  const tEl=$('#kw-t'),bEl=$('#kw-b');tEl.innerHTML='';bEl.innerHTML='';
+  const tTerms=mineTitle(list),bTerms=mineBody(list);
+  for(const [t,n] of tTerms)tEl.appendChild(chip('t',t,n));for(const [t] of Object.entries(st.kw.t))if(!tTerms.some(x=>x[0]===t))tEl.appendChild(chip('t',t,null));
+  for(const [t,n] of bTerms)bEl.appendChild(chip('b',t,n));for(const [t] of Object.entries(st.kw.b))if(!bTerms.some(x=>x[0]===t))bEl.appendChild(chip('b',t,null));
   whatCount()}
-function whatCount(){st.exclGroups=[...exclG];save();$('#wh-n').textContent=`${JOBS.filter(passes).length.toLocaleString()} jobs in scope · ${exclG.size} group${exclG.size===1?'':'s'} excluded`}
+function whatCount(){const n=JOBS.filter(passes).length,enc=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v>0).length,dis=Object.values(st.kw.t).concat(Object.values(st.kw.b)).filter(v=>v<0).length;$('#wh-n').textContent=`${n.toLocaleString()} jobs in scope · ${enc} encouraged · ${dis} discouraged`}
+$('#kw-add').onkeydown=e=>{if(e.key!=='Enter')return;e.preventDefault();const t=$('#kw-add').value.trim().toLowerCase();if(!t)return;const kind=$('#kw-where').value,v=+$('#kw-how').value;st.kw[kind][t]=v;save();event({type:'keyword',where:kind,term:t,value:v});$('#kw-add').value='';renderWhat()};
 function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});$('#scope').style.display='none';$('#what').style.display='block';renderWhat()}
 $('#wh-back').onclick=()=>{$('#what').style.display='none';$('#scope').style.display='block'};
 $('#wh-go').onclick=()=>beginPairs();
 function beginPairs(){
-  event({ type: 'scope_groups', excluded: [...exclG], n: JOBS.filter(passes).length });
+  event({ type: 'keywords', title: st.kw.t, body: st.kw.b, n: JOBS.filter(passes).length });
   renderFacets(); render();
   $('#what').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
 }
@@ -263,7 +268,13 @@ $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
 const FACETS=['rm','sn','rf','et','sa','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
-st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);  // groups the user said "None" to
+st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);  // (legacy) groups excluded
+st.kw=st.kw||{t:{},b:{}};  // keyword preferences: {t|b: {term: +1 encourage | -1 discourage}}
+const TECH=['go','golang','rust','python','java','kotlin','scala','c++','c#','.net','typescript','javascript','node','react','vue','angular','swift','ios','android','ruby','rails','php','elixir','erlang','haskell','sql','postgres','postgresql','mysql','mongodb','redis','kafka','rabbitmq','grpc','graphql','rest','kubernetes','k8s','docker','terraform','ansible','aws','gcp','azure','linux','serverless','lambda','spark','flink','airflow','snowflake','databricks','hadoop','elasticsearch','opensearch','prometheus','grafana','datadog','observability','ci/cd','jenkins','github actions','microservices','distributed systems','event-driven','oncall','on-call','on call','pagerduty','sre','devops','platform','infrastructure','security','compliance','soc2','fintech','payments','ledger','blockchain','crypto','web3','solidity','ml','machine learning','llm','ai','pytorch','tensorflow','embedded','firmware','fpga','gpu','cuda','games','unity','unreal','mobile','frontend','front-end','backend','back-end','full stack','fullstack','full-stack','startup','series a','series b','series c','remote','hybrid','on-site','onsite','relocation','visa','sponsorship','clearance','equity','bonus','contract','contractor','c2c','w2','1099','intern','internship','manager','director','staff','principal','lead','senior','junior','mid-level','entry level'];
+function termRe(t){return new RegExp('(^|[^a-z0-9+#.])'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![a-z0-9+#])','i')}
+const kwCache=new Map();function hasTerm(text,t){let r=kwCache.get(t);if(!r){r=termRe(t);kwCache.set(t,r)}return r.test(text)}
+function kwHidden(j){for(const [t,v] of Object.entries(st.kw.t))if(v<0&&hasTerm(j.t,t))return true;for(const [t,v] of Object.entries(st.kw.b))if(v<0&&hasTerm(j.jd||'',t))return true;return false}
+function kwBoost(j){let b=0;for(const [t,v] of Object.entries(st.kw.t))if(v>0&&hasTerm(j.t,t))b+=0.08;for(const [t,v] of Object.entries(st.kw.b))if(v>0&&hasTerm(j.jd||'',t))b+=0.04;return Math.min(b,0.25)}
 const NAMES={US:'United States',GB:'United Kingdom',CA:'Canada',DE:'Germany',FR:'France',IN:'India',NL:'Netherlands',ES:'Spain',IT:'Italy',PL:'Poland',PT:'Portugal',IE:'Ireland',SE:'Sweden',CH:'Switzerland',AU:'Australia',SG:'Singapore',JP:'Japan',BR:'Brazil',MX:'Mexico',IL:'Israel',AE:'UAE',AT:'Austria',BE:'Belgium',DK:'Denmark',NO:'Norway',FI:'Finland',CZ:'Czechia',GR:'Greece',KR:'South Korea',HK:'Hong Kong',TW:'Taiwan',NZ:'New Zealand',AR:'Argentina',CO:'Colombia',CL:'Chile',ZA:'South Africa',NG:'Nigeria',KE:'Kenya',PH:'Philippines',UA:'Ukraine',TR:'Türkiye',RO:'Romania',HU:'Hungary'};
 const salaryBucket=j=>{const e=j.e;if(!e||e.salary_min==null&&e.salary_max==null)return['(not stated)'];const v=(e.salary_max||e.salary_min)*(e.salary_period==='hour'?2080:e.salary_period==='month'?12:e.salary_period==='week'?52:e.salary_period==='day'?260:1);return[v>=250000?'250k+':v>=200000?'200–250k':v>=150000?'150–200k':v>=100000?'100–150k':v>=60000?'60–100k':'<60k']};
 const keysOf={rm:j=>[j.rm||'unknown'],sn:j=>j.e?[j.e.seniority||'unspecified']:['(not enriched)'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
@@ -272,20 +283,22 @@ function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)
 function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:f==='rm'?4:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderChips();render()};el.appendChild(l)})}renderChips()}
 // quick chips: remote, and the top 3 countries
 function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
-  for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className=sel[f].has(k)?'on':'';b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render()};el.appendChild(b)}}
+  for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className=sel[f].has(k)?'on':'';b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render()};el.appendChild(b)}
+  for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){const b=document.createElement('button');b.className=v>0?'enc':'dis';b.style.borderColor=v>0?'var(--ok)':'var(--no)';b.textContent=(v>0?'✚ ':'✖ ')+t+(kind==='b'?' (body)':'');b.title='click to remove';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'keyword',where:kind,term:t,value:0});renderFacets();render()};el.appendChild(b)}}
 // ---- list
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
-  if(exclG.has(j.g3))return false;
+  if(exclG.has(j.g3)||kwHidden(j))return false;
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
-function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):b.score-a.score);
+function fscore(j){return j.score+kwBoost(j)}
+function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a));
   if(reset){shown=0;cur=0}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));for(let i=0;i<N;i++)el.appendChild(jobEl(ranked[i],i));shown=N;
   if(ranked.length>N){const m=document.createElement('button');m.className='g';m.textContent=`show more (${ranked.length-N} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
   const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
   $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · ${yes} yes / ${no} no`;hi()}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${j.score.toFixed(2)} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div>${j.e?`<div class="meta" style="color:#c9c9d0;margin-top:3px">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.work_arrangement!=='unspecified'?j.e.work_arrangement:'',j.e.salary_raw?'💰 '+j.e.salary_raw:'',j.e.visa_sponsorship==='yes'?'visa ✓':'',(j.e.skills_required||[]).slice(0,6).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.staffing?' · staffing agency':''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}<div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
+  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${fscore(j).toFixed(2)}${kwBoost(j)?' ✚':''} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div>${j.e?`<div class="meta" style="color:#c9c9d0;margin-top:3px">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.work_arrangement!=='unspecified'?j.e.work_arrangement:'',j.e.salary_raw?'💰 '+j.e.salary_raw:'',j.e.visa_sponsorship==='yes'?'visa ✓':'',(j.e.skills_required||[]).slice(0,6).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.staffing?' · staffing agency':''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}<div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
   d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};
   d.querySelector('.note').onkeydown=e=>e.stopPropagation();return d}
