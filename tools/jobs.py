@@ -180,7 +180,14 @@ def cmd_html(a):
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
-    html = TEMPLATE.replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
+    # group metadata for the leaves in this slice (labels/exemplars from the manifest)
+    try:
+        m, _ = manifest(); T = m["tree"]
+        leaves = sorted({j["g"] for j in jobs})
+        GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
+    except Exception as e:
+        print(f"(no group metadata: {e})"); GROUPS = {}
+    html = TEMPLATE.replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")

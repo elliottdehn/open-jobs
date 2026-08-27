@@ -33,6 +33,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 #cmp .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
 #cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
 #cmp .opt:hover{border-color:var(--acc)}
+.gcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px}.gcard.none{opacity:.4}.gcard .lbl{font-weight:600}.gcard ul{margin:2px 0 0 16px;padding:0;font-size:12px;color:#c9c9d0}.gcard .btns{display:flex;gap:6px;margin-top:6px}.gcard .btns button{flex:1;padding:5px}.gcard .btns .on{background:var(--acc)}
 .scchips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin:0 6px 6px 0;padding:6px 10px}.scchips button.on{background:var(--acc);border-color:var(--acc)}.scchips button span{color:var(--mut);font-size:11px;margin-left:4px}
 #cmp .guess{font-size:11px;color:var(--mut);letter-spacing:.3px;text-transform:uppercase;min-height:14px}#cmp .guess b{color:#4dff88;font-weight:600}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
 #cmp .conf{height:6px;background:var(--line);border-radius:3px;overflow:hidden;flex:1;margin:0 12px}#cmp .conf i{display:block;height:100%;background:linear-gradient(90deg,#4dc3ff,#4dff88)}
@@ -63,6 +64,12 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
     <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">State / region</h3><div id="sc-rg" class="scchips"></div>
     <div class="top" style="margin-top:14px"><span id="sc-n"></span><span><button class="g" id="sc-any">anywhere</button> <button id="sc-go">continue →</button></span></div>
   </div>
+  <div id="what" style="display:none">
+    <h2 style="margin:0 0 6px">What?</h2>
+    <p class="hint" style="margin:0 0 10px">The kinds of jobs in this slice. <b>None</b> drops a group entirely; <b>Some</b> keeps it for sorting.</p>
+    <div id="wh-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;max-height:60vh;overflow:auto"></div>
+    <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button id="wh-go">continue →</button></span></div>
+  </div>
   <div id="cmpmain">
   <div class="top"><span id="cmpn">comparison 1</span><div class="conf"><i id="cmpbar"></i></div><span id="cmpc">confidence 0%</span><span><kbd>←</kbd> left <kbd>→</kbd> right <kbd>S</kbd> skip <kbd>Esc</kbd> stop</span></div>
   <div class="pair"><div class="opt" id="optA"></div><div class="opt" id="optB"></div></div>
@@ -88,7 +95,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <div id="list"></div>
 </main>
 <script>
-const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__;
+const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__;
 const $=s=>document.querySelector(s);
 function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
@@ -98,7 +105,7 @@ for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
-if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
+if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
 // ---- model: logistic regression seeded at the ideal vector, refit on every label
@@ -219,16 +226,28 @@ function renderScope(){
 function scopeCount(){ const n = JOBS.filter(passes).length; $('#sc-n').textContent = `${n.toLocaleString()} jobs in scope`; }
 function startCmp(){
   fitPairs(); $('#cmp').classList.add('on');
-  $('#scope').style.display = 'block'; $('#cmpmain').style.display = 'none'; renderScope();
+  $('#scope').style.display = 'block'; $('#what').style.display = 'none'; $('#cmpmain').style.display = 'none'; renderScope();
   event({ type: 'sort_start', compares: st.compares.length });
 }
+function renderWhat(){
+  const el=$('#wh-cards');el.innerHTML='';
+  const counts={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok)counts[j.g]=(counts[j.g]||0)+1}
+  Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([g,n])=>{const G=GROUPS[g]||{label:'group '+g,medoid:'',exemplars:[]};const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
+    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} jobs in scope · e.g. ${esc(G.medoid||'')}</div><ul>${(G.exemplars||[]).slice(1,4).map(e=>`<li>${esc(e.title)}${e.company&&!/^[0-9a-f-]{20,}$/i.test(e.company)?' · <span style="color:var(--mut)">'+esc(e.company)+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
+    const [bs,bn]=d.querySelectorAll('button');bs.onclick=()=>{exclG.delete(+g);d.className='gcard';bs.className='g on';bn.className='g';whatCount()};bn.onclick=()=>{exclG.add(+g);d.className='gcard none';bs.className='g';bn.className='g on';whatCount()};
+    el.appendChild(d)});
+  whatCount()}
+function whatCount(){st.exclGroups=[...exclG];save();$('#wh-n').textContent=`${JOBS.filter(passes).length.toLocaleString()} jobs in scope · ${exclG.size} group${exclG.size===1?'':'s'} excluded`}
+function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});$('#scope').style.display='none';$('#what').style.display='block';renderWhat()}
+$('#wh-back').onclick=()=>{$('#what').style.display='none';$('#scope').style.display='block'};
+$('#wh-go').onclick=()=>beginPairs();
 function beginPairs(){
-  event({ type: 'scope', rm: [...sel.rm], co: [...sel.co], rg: [...sel.rg], n: JOBS.filter(passes).length });
+  event({ type: 'scope_groups', excluded: [...exclG], n: JOBS.filter(passes).length });
   renderFacets(); render();
-  $('#scope').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
+  $('#what').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
 }
-$('#sc-go').onclick = beginPairs;
-$('#sc-any').onclick = () => { sel.rm.clear(); sel.co.clear(); sel.rg.clear(); beginPairs(); };
+$('#sc-go').onclick = toWhat;
+$('#sc-any').onclick = () => { sel.rm.clear(); sel.co.clear(); sel.rg.clear(); toWhat(); };
 function stopCmp(){
   $('#cmp').classList.remove('on'); fitPairs(); taste = st.compares.length > 0;
   if (taste) { for (const j of JOBS) j.score = 1 / (1 + Math.exp(-(dot(u, j.vec) - median()))); $('#sort').value = 'model'; }
@@ -240,6 +259,7 @@ $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
 const FACETS=['rm','sn','rf','et','sa','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
+st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);  // groups the user said "None" to
 const NAMES={US:'United States',GB:'United Kingdom',CA:'Canada',DE:'Germany',FR:'France',IN:'India',NL:'Netherlands',ES:'Spain',IT:'Italy',PL:'Poland',PT:'Portugal',IE:'Ireland',SE:'Sweden',CH:'Switzerland',AU:'Australia',SG:'Singapore',JP:'Japan',BR:'Brazil',MX:'Mexico',IL:'Israel',AE:'UAE',AT:'Austria',BE:'Belgium',DK:'Denmark',NO:'Norway',FI:'Finland',CZ:'Czechia',GR:'Greece',KR:'South Korea',HK:'Hong Kong',TW:'Taiwan',NZ:'New Zealand',AR:'Argentina',CO:'Colombia',CL:'Chile',ZA:'South Africa',NG:'Nigeria',KE:'Kenya',PH:'Philippines',UA:'Ukraine',TR:'Türkiye',RO:'Romania',HU:'Hungary'};
 const salaryBucket=j=>{const e=j.e;if(!e||e.salary_min==null&&e.salary_max==null)return['(not stated)'];const v=(e.salary_max||e.salary_min)*(e.salary_period==='hour'?2080:e.salary_period==='month'?12:e.salary_period==='week'?52:e.salary_period==='day'?260:1);return[v>=250000?'250k+':v>=200000?'200–250k':v>=150000?'150–200k':v>=100000?'100–150k':v>=60000?'60–100k':'<60k']};
 const keysOf={rm:j=>[j.rm||'unknown'],sn:j=>j.e?[j.e.seniority||'unspecified']:['(not enriched)'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
@@ -252,6 +272,7 @@ function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','
 // ---- list
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
+  if(exclG.has(j.g))return false;
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):b.score-a.score);
@@ -267,7 +288,7 @@ function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k]
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
 function label(v){const j=ranked[cur];if(!j)return;st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false);cur=Math.min(cur+1,ranked.length-1);hi()}
 function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
-document.addEventListener('keydown',e=>{if($('#cmp').classList.contains('on')){if($('#scope').style.display==='block'){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')beginPairs();return}if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
+document.addEventListener('keydown',e=>{if($('#cmp').classList.contains('on')){if($('#scope').style.display==='block'){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')toWhat();return}if($('#what').style.display==='block'){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')beginPairs();return}if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;const j=ranked[cur];
   if(e.key==='j'||e.key==='J')label(1);else if(e.key==='k'||e.key==='K')label(0);else if(e.key===' '){e.preventDefault();if(j)toggle(j,document.querySelector(`.job[data-i="${cur}"]`))}
   else if(e.key==='ArrowDown'){cur=Math.min(cur+1,ranked.length-1);hi()}else if(e.key==='ArrowUp'){cur=Math.max(0,cur-1);hi()}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}});
