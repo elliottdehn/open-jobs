@@ -66,7 +66,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   </div>
   <div id="what" style="display:none">
     <h2 style="margin:0 0 6px">What?</h2>
-    <p class="hint" style="margin:0 0 10px">The kinds of jobs in this slice. <b>None</b> drops a group entirely; <b>Some</b> keeps it for sorting.</p>
+    <p class="hint" style="margin:0 0 10px">The kinds of jobs in this slice, re-grouped finely over everything you fetched. <b>None</b> drops a group entirely; <b>Some</b> keeps it for sorting. Sorted by closeness to your ideal JD.</p>
     <div id="wh-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;max-height:60vh;overflow:auto"></div>
     <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button id="wh-go">continue →</button></span></div>
   </div>
@@ -95,7 +95,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <div id="list"></div>
 </main>
 <script>
-const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__;
+const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__, GROUPS3=__GROUPS3__;
 const $=s=>document.querySelector(s);
 function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
@@ -231,9 +231,9 @@ function startCmp(){
 }
 function renderWhat(){
   const el=$('#wh-cards');el.innerHTML='';
-  const counts={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok)counts[j.g]=(counts[j.g]||0)+1}
-  Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([g,n])=>{const G=GROUPS[g]||{label:'group '+g,medoid:'',exemplars:[]};const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
-    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} jobs in scope · e.g. ${esc(G.medoid||'')}</div><ul>${(G.exemplars||[]).slice(1,4).map(e=>`<li>${esc(e.title)}${e.company&&!/^[0-9a-f-]{20,}$/i.test(e.company)?' · <span style="color:var(--mut)">'+esc(e.company)+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
+  const counts={},simsum={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok){counts[j.g3]=(counts[j.g3]||0)+1;simsum[j.g3]=(simsum[j.g3]||0)+j.sim}}
+  Object.entries(counts).sort((a,b)=>(simsum[b[0]]/b[1])-(simsum[a[0]]/a[1])).forEach(([g,n])=>{const G=GROUPS3[g]||{label:'group '+g,medoid:'',exemplars:[]};const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
+    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} jobs in scope · sim ${(simsum[g]/n).toFixed(2)} · e.g. ${esc(G.medoid||'')}</div><ul>${(G.exemplars||[]).slice(1,4).map(e=>`<li>${esc(e.title)}${e.company&&!/^[0-9a-f-]{20,}$/i.test(e.company)?' · <span style="color:var(--mut)">'+esc(e.company)+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
     const [bs,bn]=d.querySelectorAll('button');bs.onclick=()=>{exclG.delete(+g);d.className='gcard';bs.className='g on';bn.className='g';whatCount()};bn.onclick=()=>{exclG.add(+g);d.className='gcard none';bs.className='g';bn.className='g on';whatCount()};
     el.appendChild(d)});
   whatCount()}
@@ -272,7 +272,7 @@ function renderChips(){const el=$('#chips');el.innerHTML='';const chips=[['rm','
 // ---- list
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
-  if(exclG.has(j.g))return false;
+  if(exclG.has(j.g3))return false;
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):b.score-a.score);

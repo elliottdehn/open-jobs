@@ -157,6 +157,56 @@ def load_jobs():
     if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
     return duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
 
+def subgroups(vecs, titles, comps, leaf_max=40, leaf_r=0.20):
+    """Re-cluster a slice into fine groups: recursive 2-means on the slice's own vectors.
+    Returns (assignment[i] -> gid, {gid: {label, medoid, size, exemplars}})."""
+    X = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)
+    N = len(X); assign = np.zeros(N, dtype=np.int64); groups = {}; nid = [0]
+    STOP = set("and or of the for a in to with at on & senior sr jr ii iii i lead staff associate assistant manager specialist engineer".split())
+    def norm_t(t): return re.sub(r"[^a-z]+", " ", (t or "").lower()).strip()
+    def words(idx, k=4):
+        c = {}
+        for i in idx:
+            for w in re.findall(r"[a-z][a-z+#]+", (titles[i] or "").lower()):
+                if w not in STOP and len(w) > 2: c[w] = c.get(w, 0) + 1
+        return [w for w, _ in sorted(c.items(), key=lambda x: -x[1])[:k]]
+    def two_means(idx):
+        r = np.random.default_rng(len(idx)); c = X[r.choice(idx, 2, replace=False)].copy()
+        for _ in range(8):
+            lab = ((X[idx] - c[1]) ** 2).sum(1) < ((X[idx] - c[0]) ** 2).sum(1)
+            for k, m in ((0, ~lab), (1, lab)):
+                if m.any(): c[k] = X[idx[m]].mean(0)
+        return lab
+    def build(idx, depth=0):
+        cen = X[idx].mean(0); cen /= np.linalg.norm(cen) + 1e-9; dist = 1 - X[idx] @ cen
+        if len(idx) > leaf_max and dist.max() > leaf_r and depth < 20:
+            lab = two_means(idx); a_, b_ = idx[~lab], idx[lab]
+            if len(a_) and len(b_): build(a_, depth + 1); build(b_, depth + 1); return
+        gid = nid[0]; nid[0] += 1; assign[idx] = gid
+        order = idx[np.argsort(dist)]; med = order[0]
+        # exemplars: medoid + sub-medoids of 3 sub-clusters, title-distinct
+        ex = [int(med)]; seen = {norm_t(titles[med])}
+        if len(idx) >= 9:
+            r = np.random.default_rng(gid); c = X[r.choice(idx, 3, replace=False)].copy()
+            for _ in range(6):
+                lab = ((X[idx, None, :] - c[None]) ** 2).sum(-1).argmin(1)
+                for k in range(3):
+                    m = lab == k
+                    if m.any(): c[k] = X[idx[m]].mean(0)
+            for k in np.argsort(-np.bincount(lab, minlength=3)):
+                m = idx[lab == k]
+                if not len(m): continue
+                cc = X[m].mean(0); cc /= np.linalg.norm(cc) + 1e-9; sm = m[int(np.argmax(X[m] @ cc))]
+                if norm_t(titles[sm]) in seen: continue
+                seen.add(norm_t(titles[sm])); ex.append(int(sm))
+        for i in order:
+            if len(ex) >= 4: break
+            if norm_t(titles[i]) not in seen: seen.add(norm_t(titles[i])); ex.append(int(i))
+        groups[gid] = {"label": " · ".join(words(idx)), "medoid": titles[med], "size": int(len(idx)), "radius": round(float(dist.max()), 3),
+                       "exemplars": [{"title": titles[i], "company": comps[i] or ""} for i in ex[:4]]}
+    build(np.arange(N))
+    return assign, groups
+
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
@@ -180,6 +230,11 @@ def cmd_html(a):
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
+    # fine groups over the pooled slice (what the "What?" step shows)
+    V = np.stack([np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32) for j in jobs])
+    assign, G3 = subgroups(V, [j["t"] for j in jobs], [j["c"] for j in jobs])
+    for j, g in zip(jobs, assign): j["g3"] = int(g)
+    print(f"{len(G3)} fine groups over the slice (median {int(np.median([g['size'] for g in G3.values()]))} jobs each)")
     # group metadata for the leaves in this slice (labels/exemplars from the manifest)
     try:
         m, _ = manifest(); T = m["tree"]
@@ -187,7 +242,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
-    html = TEMPLATE.replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
+    html = TEMPLATE.replace("__GROUPS3__", json.dumps(G3)).replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")
