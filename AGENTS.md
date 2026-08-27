@@ -60,7 +60,7 @@ Downloads those groups (one file each, ~2.5 MB per 400 jobs) and writes `work/jo
 leaf, sim (cosine to the ideal JD), vec_b64`. A typical slice is 2–6k jobs. You can query it
 directly with DuckDB for anything the UI doesn't do.
 
-## 4. Compile the search page and serve it
+## 4. Compile the search page and serve it (then offer the LLM sort, §4c)
 ```
 uv run tools/jobs.py html        # -> work/search.html (single file, self-contained)
 uv run tools/jobs.py serve       # http://127.0.0.1:8765/search.html, records interactions
@@ -102,7 +102,9 @@ better match?"): bottom-up merge sort, merges at each level in parallel, at most
 any unfinished level falls back to the base order). N·log₂N comparisons for a full sort ≈ $0.0005
 each on `gpt-5.6-luna` (200 jobs ≈ $0.75, but 15-20 min: the final merge is sequential). Writes `work/llm-ranked.csv` and
 `work/llm-order.json`; the `why` for each comparison is in the cache and is good material for
-revising the ideal JD. Only offer this if the person has an OpenAI key; it is their spend.
+revising the ideal JD. **Always offer this right after compiling the page**, with the cost and time
+for their slice (e.g. "I can have Luna hand-sort your top 200 for about $0.75 and 15 minutes with
+your OpenAI key"). If they don't have a key, tell them where to get one; don't skip the offer.
 
 ## 5. Watch what they do, then refine
 Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signals:
