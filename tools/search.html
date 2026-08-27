@@ -102,10 +102,12 @@ function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.le
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
 function dot(a,b){let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s}
 const ideal=norm(IDEAL.vector);
+const TITLE_TERMS=(IDEAL.title||'').toLowerCase().split(/[^a-z0-9+#]+/).filter(t=>t.length>2&&!['and','the','engineer','senior','software'].includes(t));
+function titleFit(j){if(!TITLE_TERMS.length)return 0;const t=(j.t||'').toLowerCase();let n=0;for(const w of TITLE_TERMS)if(t.includes(w))n++;return 0.03*n}
+for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.pre=j.sim+titleFit(j);j.score=j.pre}
 let prior=Float32Array.from(ideal);  // anchor for the models: ideal JD, shifted by the More/Less seed sets
 function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(ideal);return}
   const v=Float32Array.from(ideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.vec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.vec[i]/N.length;prior=norm(v)}
-for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
@@ -300,7 +302,8 @@ function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passe
   if(reset){shown=0;cur=0}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));for(let i=0;i<N;i++)el.appendChild(jobEl(ranked[i],i));shown=N;
   if(ranked.length>N){const m=document.createElement('button');m.className='g';m.textContent=`show more (${ranked.length-N} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
   const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
-  $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · ${yes} yes / ${no} no`;hi()}
+  const personalized=taste||(st.compares||[]).length||yes||no;
+  $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · `+(personalized?`${yes} yes / ${no} no · ${(st.compares||[]).length} comparisons`:`pre-ranked by fit to your ideal JD${IDEAL.title?' ("'+IDEAL.title+'")':''} — press Sort to personalize`);hi()}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
   d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${fscore(j).toFixed(2)}${kwBoost(j)?' ✚':''} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div>${j.e?`<div class="meta" style="color:#c9c9d0;margin-top:3px">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.work_arrangement!=='unspecified'?j.e.work_arrangement:'',j.e.salary_raw?'💰 '+j.e.salary_raw:'',j.e.visa_sponsorship==='yes'?'visa ✓':'',(j.e.skills_required||[]).slice(0,6).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}${!j.e&&j.sal?`<div class="meta">💰 ${esc(j.sal.raw)}${j.sal.period!=='year'?' /'+esc(j.sal.period):''}${j.sal.currency!=='USD'?' '+esc(j.sal.currency):''}</div>`:''}${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.staffing?' · staffing agency':''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}<div class="jd">${esc(j.jd||'(no description)')}</div><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}">`;
   d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
