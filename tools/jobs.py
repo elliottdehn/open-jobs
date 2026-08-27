@@ -157,7 +157,7 @@ def load_jobs():
     if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
     return duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
 
-def subgroups(vecs, titles, comps, leaf_max=40, leaf_r=0.20):
+def subgroups(vecs, titles, comps, leaf_max=80, leaf_r=0.25):
     """Re-cluster a slice into fine groups: recursive 2-means on the slice's own vectors.
     Returns (assignment[i] -> gid, {gid: {label, medoid, size, exemplars}})."""
     X = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)

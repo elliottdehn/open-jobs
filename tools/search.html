@@ -231,9 +231,13 @@ function startCmp(){
 }
 function renderWhat(){
   const el=$('#wh-cards');el.innerHTML='';
-  const counts={},simsum={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok){counts[j.g3]=(counts[j.g3]||0)+1;simsum[j.g3]=(simsum[j.g3]||0)+j.sim}}
-  Object.entries(counts).sort((a,b)=>(simsum[b[0]]/b[1])-(simsum[a[0]]/a[1])).forEach(([g,n])=>{const G=GROUPS3[g]||{label:'group '+g,medoid:'',exemplars:[]};const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
-    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} jobs in scope · sim ${(simsum[g]/n).toFixed(2)} · e.g. ${esc(G.medoid||'')}</div><ul>${(G.exemplars||[]).slice(1,4).map(e=>`<li>${esc(e.title)}${e.company&&!/^[0-9a-f-]{20,}$/i.test(e.company)?' · <span style="color:var(--mut)">'+esc(e.company)+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
+  const inScope={};for(const j of JOBS){const ok=(()=>{for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})();if(ok)(inScope[j.g3]=inScope[j.g3]||[]).push(j)}
+  const norm=t=>(t||'').toLowerCase().replace(/[^a-z]+/g,' ').trim();
+  Object.entries(inScope).sort((a,b)=>(b[1].reduce((s,j)=>s+j.sim,0)/b[1].length)-(a[1].reduce((s,j)=>s+j.sim,0)/a[1].length)).forEach(([g,list])=>{const G=GROUPS3[g]||{label:'group '+g};const n=list.length;const sim=list.reduce((s,j)=>s+j.sim,0)/n;
+    // examples come from the jobs actually in scope: closest to the ideal JD first, distinct titles
+    const seen=new Set(),ex=[];for(const j of [...list].sort((x,y)=>y.sim-x.sim)){const t=norm(j.t);if(seen.has(t))continue;seen.add(t);ex.push(j);if(ex.length>=3)break}
+    const d=document.createElement('div');d.className='gcard'+(exclG.has(+g)?' none':'');
+    d.innerHTML=`<div class="lbl">${esc(G.label||('group '+g))}</div><div class="meta" style="color:var(--mut);font-size:12px">${n} job${n===1?'':'s'} in scope${G.size&&G.size!==n?` (of ${G.size} in the slice)`:''} · sim ${sim.toFixed(2)}</div><ul>${ex.map(j=>`<li>${esc(j.t)}${j.c&&!/^[0-9a-f-]{20,}$/i.test(j.c)?' · <span style="color:var(--mut)">'+esc(j.c)+'</span>':''}${j.l?' <span style="color:var(--mut)">· '+esc(j.l.slice(0,28))+'</span>':''}</li>`).join('')}</ul><div class="btns"><button class="g ${exclG.has(+g)?'':'on'}">Some</button><button class="g ${exclG.has(+g)?'on':''}">None</button></div>`;
     const [bs,bn]=d.querySelectorAll('button');bs.onclick=()=>{exclG.delete(+g);d.className='gcard';bs.className='g on';bn.className='g';whatCount()};bn.onclick=()=>{exclG.add(+g);d.className='gcard none';bs.className='g';bn.className='g on';whatCount()};
     el.appendChild(d)});
   whatCount()}
