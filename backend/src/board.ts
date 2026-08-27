@@ -761,7 +761,7 @@ export class Board extends DurableObject<Env> {
 			.exec<{ n: number }>(
 				`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL
 				   AND (embed_status IS NULL OR embed_status IN ('pending', 'error') OR embed_model != ?)
-				   AND (detail_status IN ('done','na') OR detail_status IS NULL)`,
+				   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`,
 				EMBED_TAG,
 			)
 			.one().n;
@@ -791,19 +791,25 @@ export class Board extends DurableObject<Env> {
 	 */
 	private async runEmbed(meta: BoardMeta): Promise<void> {
 		if (!this.autoEmbed()) return;
-		if (meta.embedBackoffUntil && meta.embedBackoffUntil > Date.now()) return;
-		const rows = this.ctx.storage.sql
-			.exec<JobRow>(
-				`SELECT * FROM jobs WHERE removed_at IS NULL
-				   AND (embed_status IS NULL OR embed_status IN ('pending', 'error') OR embed_model != ?)
-				   AND (detail_status IN ('done','na') OR detail_status IS NULL)
-				 ORDER BY CASE WHEN embed_status = 'error' THEN 1 ELSE 0 END, first_seen_at LIMIT ?`,
-				EMBED_TAG,
-				EMBED_BATCH,
-			)
-			.toArray();
-		if (rows.length === 0) return;
-		await this.embedRows(rows, meta);
+		// Several batches per tick while there is backlog (giant boards would otherwise drain ~100/min),
+		// bounded by wall time so the alarm stays well inside its limit. Detail-errored jobs embed from
+		// their listing text rather than waiting a day for the detail retry.
+		const deadline = Date.now() + 40_000;
+		for (let i = 0; i < 12 && Date.now() < deadline; i++) {
+			if (meta.embedBackoffUntil && meta.embedBackoffUntil > Date.now()) return;
+			const rows = this.ctx.storage.sql
+				.exec<JobRow>(
+					`SELECT * FROM jobs WHERE removed_at IS NULL
+					   AND (embed_status IS NULL OR embed_status IN ('pending', 'error') OR embed_model != ?)
+					   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)
+					 ORDER BY CASE WHEN embed_status = 'error' THEN 1 ELSE 0 END, first_seen_at LIMIT ?`,
+					EMBED_TAG,
+					EMBED_BATCH,
+				)
+				.toArray();
+			if (rows.length === 0) return;
+			await this.embedRows(rows, meta);
+		}
 	}
 
 	private async embedRows(allRows: JobRow[], meta: BoardMeta): Promise<void> {
