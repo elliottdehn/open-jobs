@@ -14,6 +14,16 @@ salary is also extracted **mechanically** from the description text at compile t
 (`tools/salary.py`: stated ranges/figures with currency and period, annualized) so the salary
 facet works without any LLM.
 
+## This code is meant to be changed
+Nothing here is ossified. `tools/jobs.py`, `tools/search.html`, `tools/locparse.py`,
+`tools/salary.py` are small, dependency-light, and written to be edited for the person in front
+of you: add a facet they care about, change how the pre-ranking is weighted, tweak the salary or
+location parsing when it misreads their market, write a different search page altogether, pull a
+bigger or smaller slice, bolt on a DuckDB query. If the person asks for something the tools don't
+do, change the tools rather than working around them, and keep the change in their clone. The only
+fixed contracts are the data (`work/jobs.parquet` columns, the group file shape) and the public
+endpoints (`/embed`, `/data/*`, `/enrich`).
+
 ## 0. Setup (once)
 - Needs `uv` (https://docs.astral.sh/uv/) and Python 3.10+. All commands are `uv run tools/jobs.py <cmd>`.
 - `WORKER_URL` defaults to the public index (`https://backend.dehnbostele.workers.dev`); `DATA_URL`
