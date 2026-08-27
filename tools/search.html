@@ -32,7 +32,8 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
 #cmp .top{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:13px}
 #cmp .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
 #cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
-#cmp .opt:hover{border-color:var(--acc)}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
+#cmp .opt:hover{border-color:var(--acc)}
+#cmp .guess{font-size:11px;color:var(--mut);letter-spacing:.3px;text-transform:uppercase;min-height:14px}#cmp .guess b{color:#4dff88;font-weight:600}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
 #cmp .conf{height:6px;background:var(--line);border-radius:3px;overflow:hidden;flex:1;margin:0 12px}#cmp .conf i{display:block;height:100%;background:linear-gradient(90deg,#4dc3ff,#4dff88)}
 #ideal{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 14px;white-space:pre-wrap;font-size:12px;color:#c9c9d0;max-height:200px;overflow:auto}
 </style></head>
@@ -168,15 +169,21 @@ function showPair(){
   const conf = Math.min(1, 0.3 * Math.min(n, 12) / 12 + 0.35 * cmpStab + 0.35 * (n >= 13 ? cmpAcc : 0));
   $('#cmpbar').style.width = `${conf * 100}%`;
   $('#cmpc').textContent = `confidence ${Math.round(conf * 100)}% · top-100 stable ${Math.round(cmpStab * 100)}%` + (n >= 13 ? ` · predicted ${Math.round(cmpAcc * 100)}% of your last 10` : '');
-  for (const [el, j] of [[$('#optA'), cmpPair[0]], [$('#optB'), cmpPair[1]]])
-    el.innerHTML = `<b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
+  // the committee's guess: mean model's P(A beats B), with committee agreement as the confidence
+  const [A, B] = cmpPair; const dm = dot(u, A.vec) - dot(u, B.vec); const pA = 1 / (1 + Math.exp(-dm * 4));
+  const votesA = committee.filter(w => dot(w, A.vec) - dot(w, B.vec) > 0).length, agree = Math.max(votesA, committee.length - votesA) / (committee.length || 1);
+  const guess = st.compares.length < 3 ? null : (pA >= 0.5 ? 'a' : 'b');
+  const gp = Math.round(100 * Math.max(pA, 1 - pA));
+  for (const [el, j, side] of [[$('#optA'), A, 'a'], [$('#optB'), B, 'b']])
+    el.innerHTML = `<div class="guess">${guess === side ? `<b>▲ model's guess</b> · ${gp}% · committee ${Math.round(agree * 100)}% agreed` : (guess ? '&nbsp;' : 'no guess yet')}</div><b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
   if (n >= 15 && cmpAcc >= 0.8 && cmpStab >= 0.9) $('#cmpmsg').textContent = `The ranking is stable and I predict your picks ${Math.round(cmpAcc * 100)}% of the time. One more, or stop & sort.`;
   else $('#cmpmsg').textContent = 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.';
 }
 function pick(win){
   if (!cmpPair) return; const [a, b] = cmpPair;
   st.compares.push({ a: a.k, b: b.k, win }); save();
-  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c, n: st.compares.length });
+  const guessed = st.compares.length >= 4 ? ((dot(u, a.vec) - dot(u, b.vec) >= 0) ? 'a' : 'b') : null;
+  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c, n: st.compares.length, guess: guessed, surprised: guessed !== null && guessed !== win });
   fitPairs();
   const n = st.compares.length;
   if (n >= 15 && n % 5 === 0 && predictsRecent() >= 0.8 && topSetStability() >= 0.9) { stopCmp(); return; }
