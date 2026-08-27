@@ -36,15 +36,33 @@ q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'')
         FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"""
 # Load via Arrow: the FLOAT[] column comes back as a ListArray whose flat values view is a zero-copy
 # float32 buffer -> reshape to (N, D). Metadata columns go through Python objects (small).
-tbl = con.execute(q).to_arrow_table()
-emb = tbl.column("embedding").combine_chunks()
-vals = emb.values.to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
-offsets = emb.offsets.to_numpy()
-D = int(offsets[1] - offsets[0])
-cols = [tbl.column(c).to_pylist() for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "jd", "enrichment")]
-meta_rows = list(zip(*cols))
-X = np.array(vals.reshape(-1, D))  # Arrow buffers are read-only; one writable copy (~9 GB), then drop the table
-del tbl, emb, vals, cols
+# Stream in record batches: vectors go straight into a preallocated float32 array (N x D), small
+# columns become Python lists, and the big text columns (jd, enrichment) stay in Arrow until a group
+# file needs them. Peak memory ≈ 4·N·D bytes + text, instead of ~3x that.
+import pyarrow as pa
+N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
+D = 1536
+X = np.empty((N, D), dtype=np.float32)
+small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms")}
+text_batches = []
+pos_ = 0
+reader = con.execute(q).fetch_record_batch(50_000)
+while True:
+    try: b = reader.read_next_batch()
+    except StopIteration: break
+    emb = b.column("embedding")
+    vals = emb.values.to_numpy(zero_copy_only=False)
+    n = len(b)
+    X[pos_:pos_ + n] = vals.reshape(n, -1)[:, :D]
+    for c in small: small[c].extend(b.column(c).to_pylist())
+    text_batches.append(b.select(["jd", "enrichment"]))
+    pos_ += n
+    print(f"\r  loaded {pos_:,}/{N:,}", end="", file=sys.stderr, flush=True)
+print(file=sys.stderr)
+texts = pa.Table.from_batches(text_batches); del text_batches, reader
+jd_col = texts.column("jd"); enr_col = texts.column("enrichment")
+meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"]))
+del small
 X = np.nan_to_num(X, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them (unit-normalized below)
 X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
 N, D = X.shape
@@ -166,7 +184,8 @@ for n in leaves:
     V = X[idx].astype(np.float32)  # exact vectors (unit length), float32 little-endian base64
     jobs = []
     for i, r in enumerate(idx):
-        a, s, jid, title, loc, url, _, fs, jd, enr = meta_rows[r]
+        a, s, jid, title, loc, url, _, fs = meta_rows[r]
+        jd = jd_col[int(r)].as_py(); enr = enr_col[int(r)].as_py()
         jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "jd": jd,
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
                      "v": base64.b64encode(V[i].tobytes()).decode()})
