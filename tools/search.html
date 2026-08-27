@@ -98,83 +98,98 @@ function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=
 st.compares = st.compares || [];  // [{a,b,win}] keys
 const byKey = Object.fromEntries(JOBS.map(j => [j.k, j]));
 let u = new Float32Array(ideal.length), taste = false;  // taste=true once a confident model exists
-function fitPairs(){
-  const C = st.compares.map(c => [byKey[c.a], byKey[c.b], c.win]).filter(c => c[0] && c[1]);
-  u = Float32Array.from(ideal); if (!C.length) return;
+const K_COMMITTEE = 5; let committee = [];
+function fitOn(C, iters = 60){
+  const w = Float32Array.from(ideal); if (!C.length) return w;
   const lr = .7, l2 = .02;
-  for (let ep = 0; ep < 60; ep++) for (const [a, b, win] of C) {
-    const d = new Float32Array(u.length); for (let i = 0; i < u.length; i++) d[i] = a.vec[i] - b.vec[i];
-    const y = win === 'a' ? 1 : 0, p = 1 / (1 + Math.exp(-dot(u, d))), g = p - y;
-    for (let i = 0; i < u.length; i++) u[i] -= lr * (g * d[i] + l2 * (u[i] - ideal[i]));
+  for (let ep = 0; ep < iters; ep++) for (const [a, b, win] of C) {
+    let s = 0; for (let i = 0; i < w.length; i++) s += w[i] * (a.vec[i] - b.vec[i]);
+    const y = win === 'a' ? 1 : 0, p = 1 / (1 + Math.exp(-s)), g = p - y;
+    for (let i = 0; i < w.length; i++) w[i] -= lr * (g * (a.vec[i] - b.vec[i]) + l2 * (w[i] - ideal[i]));
+  }
+  return w;
+}
+function pairsFrom(list){ return list.map(c => [byKey[c.a], byKey[c.b], c.win]).filter(c => c[0] && c[1]); }
+function fitPairs(){
+  const C = pairsFrom(st.compares);
+  u = fitOn(C);
+  // committee: bootstrap resamples of the comparisons (query-by-committee); with few comparisons they disagree a lot
+  committee = [];
+  for (let k = 0; k < K_COMMITTEE; k++) {
+    const R = []; for (let i = 0; i < C.length; i++) R.push(C[Math.floor(Math.random() * C.length)]);
+    committee.push(fitOn(R, 40));
   }
 }
 function predictsRecent(k = 10){  // how often a model fit on all-but-the-last-k predicts the last k picks
   if (st.compares.length < k + 3) return 0;
-  const saved = st.compares; st.compares = saved.slice(0, -k); fitPairs(); st.compares = saved;
-  let ok = 0;
-  for (const c of saved.slice(-k)) { const a = byKey[c.a], b = byKey[c.b]; if (!a || !b) continue; const d = dot(u, a.vec) - dot(u, b.vec); if ((d > 0) === (c.win === 'a')) ok++; }
-  fitPairs(); return ok / k;
+  const w = fitOn(pairsFrom(st.compares.slice(0, -k)));
+  let ok = 0, n = 0;
+  for (const c of st.compares.slice(-k)) { const a = byKey[c.a], b = byKey[c.b]; if (!a || !b) continue; n++; if ((dot(w, a.vec) - dot(w, b.vec) > 0) === (c.win === 'a')) ok++; }
+  return n ? ok / n : 0;
+}
+function topSetStability(N = 100){  // how much the committee agrees on the top-N set (mean pairwise Jaccard)
+  if (committee.length < 2) return 0;
+  const tops = committee.map(w => new Set(JOBS.map(j => [dot(w, j.vec), j.k]).sort((x, y) => y[0] - x[0]).slice(0, N).map(x => x[1])));
+  let s = 0, n = 0;
+  for (let i = 0; i < tops.length; i++) for (let j = i + 1; j < tops.length; j++) { let inter = 0; for (const k of tops[i]) if (tops[j].has(k)) inter++; s += inter / (2 * N - inter); n++; }
+  return s / n;
 }
 function tasteScore(j){ return dot(u, j.vec); }
-let cmpPair = null, cmpAcc = 0;
+let cmpPair = null, cmpAcc = 0, cmpStab = 0;
 function nextPair(){
-  // candidates: top 300 by current taste (or similarity), pick the pair the model is least sure about,
-  // with some spread so we don't keep asking about near-duplicates
-  const pool = JOBS.filter(j => st.labels[j.k] !== 0).sort((x, y) => (taste || st.compares.length ? tasteScore(y) - tasteScore(x) : y.sim - x.sim)).slice(0, 300);
-  let best = null, bestU = Infinity;
-  for (let t = 0; t < 400; t++) {
-    const a = pool[Math.floor(Math.random() * pool.length)], b = pool[Math.floor(Math.random() * pool.length)];
-    if (a === b || (a.c === b.c && a.t === b.t)) continue;
-    if (st.compares.some(c => (c.a === a.k && c.b === b.k) || (c.a === b.k && c.b === a.k))) continue;
-    const unc = Math.abs(dot(u, a.vec) - dot(u, b.vec)) + 0.15 * dot(a.vec, b.vec);  // uncertain and not near-identical
-    if (unc < bestU) { bestU = unc; best = [a, b]; }
+  // Candidates: the frontier of the current ranking (soft bias to ranks ~1-150, where sort quality is felt),
+  // excluding No-labelled jobs. Score each candidate pair by committee disagreement × leverage:
+  //   disagreement = variance across committee of (w_k · (va − vb))   -> genuine uncertainty, not just a tie
+  //   leverage     = ||va − vb||                                      -> a decision between different-looking jobs moves the model more
+  // and skip near-twins (same company+title, or cosine > .95) which would teach nothing.
+  const pool = JOBS.filter(j => st.labels[j.k] !== 0).sort((x, y) => tasteScore(y) - tasteScore(x)).slice(0, 400);
+  if (pool.length < 2) return null;
+  const drawIdx = () => Math.min(pool.length - 1, Math.floor(Math.pow(Math.random(), 1.6) * pool.length));  // front-heavy
+  let best = null, bestS = -Infinity;
+  const seen = new Set(st.compares.map(c => c.a + '|' + c.b));
+  for (let t = 0; t < 600; t++) {
+    const a = pool[drawIdx()], b = pool[drawIdx()];
+    if (a === b || (a.c === b.c && a.t === b.t) || seen.has(a.k + '|' + b.k) || seen.has(b.k + '|' + a.k)) continue;
+    const cos = dot(a.vec, b.vec); if (cos > 0.95) continue;
+    let mean = 0, m2 = 0; const ds = [];
+    for (const w of committee) { const d = dot(w, a.vec) - dot(w, b.vec); ds.push(d); mean += d; }
+    mean /= committee.length; for (const d of ds) m2 += (d - mean) * (d - mean); m2 /= committee.length;
+    const lev = Math.sqrt(Math.max(0, 2 - 2 * cos));                 // ||va−vb|| for unit vectors
+    const unsure = Math.exp(-Math.abs(mean) * 8);                   // near the boundary under the mean model
+    const score = (Math.sqrt(m2) + 0.05) * lev * (0.5 + unsure);
+    if (score > bestS) { bestS = score; best = [a, b]; }
   }
   return best;
 }
 function showPair(){
   cmpPair = nextPair(); if (!cmpPair) { stopCmp(); return; }
   const n = st.compares.length; $('#cmpn').textContent = `comparison ${n + 1}`;
-  cmpAcc = predictsRecent();
-  const conf = Math.min(1, (Math.min(n, 15) / 15) * 0.5 + (n >= 13 ? cmpAcc : 0) * 0.5);
-  $('#cmpbar').style.width = `${conf * 100}%`; $('#cmpc').textContent = `confidence ${Math.round(conf * 100)}%` + (n >= 13 ? ` (predicted ${Math.round(cmpAcc * 100)}% of your last 10)` : '');
+  cmpAcc = predictsRecent(); cmpStab = topSetStability();
+  const conf = Math.min(1, 0.3 * Math.min(n, 12) / 12 + 0.35 * cmpStab + 0.35 * (n >= 13 ? cmpAcc : 0));
+  $('#cmpbar').style.width = `${conf * 100}%`;
+  $('#cmpc').textContent = `confidence ${Math.round(conf * 100)}% · top-100 stable ${Math.round(cmpStab * 100)}%` + (n >= 13 ? ` · predicted ${Math.round(cmpAcc * 100)}% of your last 10` : '');
   for (const [el, j] of [[$('#optA'), cmpPair[0]], [$('#optB'), cmpPair[1]]])
-    el.innerHTML = `<b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
-  if (n >= 15 && cmpAcc >= 0.8) { $('#cmpmsg').textContent = `I think I've got your taste (${Math.round(cmpAcc * 100)}% on your last 10). One more or stop & sort.`; }
+    el.innerHTML = `<b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
+  if (n >= 15 && cmpAcc >= 0.8 && cmpStab >= 0.9) $('#cmpmsg').textContent = `The ranking is stable and I predict your picks ${Math.round(cmpAcc * 100)}% of the time. One more, or stop & sort.`;
+  else $('#cmpmsg').textContent = 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.';
 }
 function pick(win){
   if (!cmpPair) return; const [a, b] = cmpPair;
   st.compares.push({ a: a.k, b: b.k, win }); save();
-  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c });
+  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c, n: st.compares.length });
   fitPairs();
-  const n = st.compares.length, acc = predictsRecent();
-  if (n >= 15 && acc >= 0.8 && n % 5 === 0) { stopCmp(); return; }
+  const n = st.compares.length;
+  if (n >= 15 && n % 5 === 0 && predictsRecent() >= 0.8 && topSetStability() >= 0.9) { stopCmp(); return; }
   showPair();
 }
 function startCmp(){ fitPairs(); $('#cmp').classList.add('on'); event({ type: 'sort_start', compares: st.compares.length }); showPair(); }
 function stopCmp(){
   $('#cmp').classList.remove('on'); fitPairs(); taste = st.compares.length > 0;
   if (taste) { for (const j of JOBS) j.score = 1 / (1 + Math.exp(-(dot(u, j.vec) - median()))); $('#sort').value = 'model'; }
-  event({ type: 'sort_done', compares: st.compares.length, accuracy: predictsRecent() });
+  event({ type: 'sort_done', compares: st.compares.length, accuracy: predictsRecent(), stability: topSetStability() });
   render(); $('#stats').textContent += ` · sorted by taste (${st.compares.length} comparisons)`;
 }
 function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] || 0; }
-async function enrichTop(n=300){
-  const btn=$('#enrichbtn');btn.disabled=true;
-  const list=JOBS.filter(passes).sort((a,b)=>b.score-a.score).slice(0,n).filter(j=>!j.e);
-  let spent=0,done=0;
-  for(let i=0;i<list.length;i+=100){
-    const batch=list.slice(i,i+100);btn.textContent=`⚡ enriching ${Math.min(i+100,list.length)}/${list.length}…`;
-    let r;try{r=await fetch((location.protocol.startsWith('http')&&location.port!=='8765'?'':(window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev'))+'/enrich',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jobs:batch.map(j=>{const [ats,rest]=j.k.split('/',2);const [slug,id]=rest.split('#');return{ats,slug,id}})})})}catch(e){btn.textContent='⚡ Enrich (network error)';btn.disabled=false;return}
-    const res=await r.json().catch(()=>({}));
-    for(const [name,b] of Object.entries(res.boards||{}))if(b.company)st.companies[name]={name:b.company.name,website:b.company.website,industry:b.company.industry,size:b.company.size_bucket,hq:(b.company.hq_location||{}).country_code,staffing:b.company.is_staffing_agency,desc:b.company.description};
-    for(const [k,x] of Object.entries(res.jobs||{}))if(x.status==='done'&&x.enrichment){st.enrich[k]=x.enrichment.data;done++}
-    applyEnrich();save();
-    if(r.status===429){btn.textContent=`⚡ rate limited (retry in ${res.retryAfterSeconds}s)`;event({type:'enrich',n:done,rateLimited:true});btn.disabled=false;rebuildFacets();renderFacets();render(false);return}
-    spent+=(res.cost||{}).thisCallUsd||0;
-  }
-  event({type:'enrich',n:done,usd:spent});btn.textContent=`⚡ Enrich top 300 (${done} added, $${spent.toFixed(2)})`;btn.disabled=false;rebuildFacets();renderFacets();render(false)}
-function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(e.work_arrangement&&e.work_arrangement!=='unspecified')j.rm=e.work_arrangement}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
-$('#enrichbtn').onclick=()=>enrichTop(300);
 $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
 // ---- facets
