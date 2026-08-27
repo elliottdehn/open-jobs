@@ -45,6 +45,7 @@ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 1
   <select id="show"><option value="all">show: all</option><option value="unlabeled">show: unlabeled</option><option value="yes">show: yes</option><option value="no">show: no</option></select>
   <button class="g" id="toggleIdeal">ideal JD</button>
   <button class="g" id="export">export model + labels</button>
+  <button class="g" id="reset" title="Wipe labels, comparisons and notes for this search (keeps enrichment)">reset</button>
   <span id="chips"></span>
   <button class="g" id="enrichbtn" title="Structured extraction (seniority, salary, remote policy, skills…) + company info for the visible ranking. Metered per IP: $5/h, $50/day; cached results are free.">⚡ Enrich top 300</button>
   <button id="sortbtn" title="Compare pairs until the model knows your taste, then sort">✨ Sort</button>
@@ -86,6 +87,7 @@ for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.score=j.sim}
 // ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
+if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
 // ---- model: logistic regression seeded at the ideal vector, refit on every label
@@ -166,9 +168,12 @@ function showPair(){
   cmpPair = nextPair(); if (!cmpPair) { stopCmp(); return; }
   const n = st.compares.length; $('#cmpn').textContent = `comparison ${n + 1}`;
   cmpAcc = predictsRecent(); cmpStab = topSetStability();
-  const conf = Math.min(1, 0.3 * Math.min(n, 12) / 12 + 0.35 * cmpStab + 0.35 * (n >= 13 ? cmpAcc : 0));
+  // progress toward the stop rule: MIN comparisons, then stop once stable or predictive; hard stop at MAX
+  const MIN = 12, MAX = 25;
+  const conf = Math.min(1, Math.max(n / MAX, n >= MIN ? Math.max(cmpStab / 0.75, cmpAcc / 0.8) : n / MIN * 0.6));
   $('#cmpbar').style.width = `${conf * 100}%`;
-  $('#cmpc').textContent = `confidence ${Math.round(conf * 100)}% · top-100 stable ${Math.round(cmpStab * 100)}%` + (n >= 13 ? ` · predicted ${Math.round(cmpAcc * 100)}% of your last 10` : '');
+  const left = n < MIN ? `${MIN - n} more, then it stops when the ranking settles (${MAX} max)` : `stops at ${MAX} at the latest (${MAX - n} left)`;
+  $('#cmpc').textContent = `${left} · top-100 stable ${Math.round(cmpStab * 100)}%` + (n >= 13 ? ` · predicted ${Math.round(cmpAcc * 100)}% of your last 10` : '');
   // the committee's guess: mean model's P(A beats B), with committee agreement as the confidence
   const [A, B] = cmpPair; const dm = dot(u, A.vec) - dot(u, B.vec); const pA = 1 / (1 + Math.exp(-dm * 4));
   const votesA = committee.filter(w => dot(w, A.vec) - dot(w, B.vec) > 0).length, agree = Math.max(votesA, committee.length - votesA) / (committee.length || 1);
@@ -176,8 +181,7 @@ function showPair(){
   const gp = Math.round(100 * Math.max(pA, 1 - pA));
   for (const [el, j, side] of [[$('#optA'), A, 'a'], [$('#optB'), B, 'b']])
     el.innerHTML = `<div class="guess">${guess === side ? `<b>▲ model's guess</b> · ${gp}% · committee ${Math.round(agree * 100)}% agreed` : (guess ? '&nbsp;' : 'no guess yet')}</div><b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
-  if (n >= 15 && cmpAcc >= 0.8 && cmpStab >= 0.9) $('#cmpmsg').textContent = `The ranking is stable and I predict your picks ${Math.round(cmpAcc * 100)}% of the time. One more, or stop & sort.`;
-  else $('#cmpmsg').textContent = 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.';
+  $('#cmpmsg').textContent = 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.';
 }
 function pick(win){
   if (!cmpPair) return; const [a, b] = cmpPair;
@@ -186,7 +190,7 @@ function pick(win){
   event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c, n: st.compares.length, guess: guessed, surprised: guessed !== null && guessed !== win });
   fitPairs();
   const n = st.compares.length;
-  if (n >= 15 && n % 5 === 0 && predictsRecent() >= 0.8 && topSetStability() >= 0.9) { stopCmp(); return; }
+  if (n >= 25 || (n >= 12 && (topSetStability() >= 0.75 || predictsRecent() >= 0.8))) { stopCmp(); return; }
   showPair();
 }
 function startCmp(){ fitPairs(); $('#cmp').classList.add('on'); event({ type: 'sort_start', compares: st.compares.length }); showPair(); }
