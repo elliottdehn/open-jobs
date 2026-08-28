@@ -12,3 +12,4 @@ backend/node_modules/
 backend/.wrangler/
 __pycache__/
 .DS_Store
+other/
