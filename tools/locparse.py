@@ -125,17 +125,21 @@ def find_places(text):
         if f" {st} " in t: cs.add("US")
     return cs, rs
 
-def eligibility(pref, location, jd="", title=""):
+def eligibility(pref, location, jd="", title="", arrangement=None):
     """Is a job eligible for someone with location preference `pref` (e.g. "Remote, US", "Berlin",
     "US or Canada")? Returns (eligible: bool|None, reason). None = can't tell (no location info).
     Rules: the job's countries must intersect the user's; a remote job with no country and no
     restricting phrase is eligible; region-restricted remotes (Remote - LATAM, India-only) are not;
-    JD phrases like "must be located in the US" / "authorized to work in the UK" restrict too."""
+    JD phrases like "must be located in the US" / "authorized to work in the UK" restrict too.
+    A remote-only preference (no city, e.g. "Remote, US") makes onsite and hybrid jobs ineligible;
+    `arrangement` overrides the parsed one (pass the enrichment's work_arrangement when known)."""
     p = parse(pref or "")
+    j = parse(location or "", jd, title)
+    rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
+    if p["remote"] == "remote" and not p["cities"] and rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
     if not want: return None, "no country in preference"
-    j = parse(location or "", jd, title)
     have = set(j["countries"])
     for r in j["regions"]: have |= MACRO.get(r, set())
     # restricting phrases in the JD text add countries/regions to `have`

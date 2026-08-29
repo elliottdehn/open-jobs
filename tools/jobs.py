@@ -234,14 +234,14 @@ def cmd_html(a):
     jobs = []
     for r in rows:
         loc = parse_location(r[5], r[8], r[3])
-        el, elr = loc_eligibility(pref, r[5], r[8], r[3]) if pref else (None, "")
+        key = f"{r[0]}/{r[1]}#{r[2]}"
+        e = (enr["jobs"].get(key) or {}).get("data")
+        el, elr = loc_eligibility(pref, r[5], r[8], r[3], (e or {}).get("work_arrangement")) if pref else (None, "")
         est = None
         if sm is not None:
             vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
             mid = float(np.exp(vec @ sm[0] + sm[1])); k = float(np.exp(sm[2]))
             est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
-        key = f"{r[0]}/{r[1]}#{r[2]}"
-        e = (enr["jobs"].get(key) or {}).get("data")
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
