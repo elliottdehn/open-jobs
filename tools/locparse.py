@@ -21,6 +21,8 @@ CITY_COUNTRY = {  # frequent cities without an explicit country
 }
 REMOTE_RE = re.compile(r"\b(remote|work from home|wfh|distributed|anywhere)\b", re.I)
 HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
+# words that mean remote *work* ("distributed systems" and "work from anywhere in the office" do not)
+REMOTE_WORDS = re.compile(r"\bremote(?:ly|-friendly|-first)?\b|\bwork(?:ing)? from home\b|\bwfh\b|\btelecommut", re.I)
 ONSITE_RE = re.compile(r"\b(on-?site|in-?office|in person)\b", re.I)
 
 ISO3 = {"usa":"US","gbr":"GB","ind":"IN","can":"CA","deu":"DE","fra":"FR","aus":"AU","nld":"NL","esp":"ES","ita":"IT","pol":"PL","prt":"PT","irl":"IE","swe":"SE","che":"CH","sgp":"SG","jpn":"JP","bra":"BR","mex":"MX","isr":"IL","are":"AE","phl":"PH","idn":"ID","mys":"MY","vnm":"VN","kor":"KR","chn":"CN","hkg":"HK","twn":"TW","nzl":"NZ","arg":"AR","col":"CO","chl":"CL","zaf":"ZA","nga":"NG","ken":"KE","ukr":"UA","tur":"TR","rou":"RO","hun":"HU","cze":"CZ","grc":"GR","aut":"AT","bel":"BE","dnk":"DK","nor":"NO","fin":"FI"}
@@ -139,7 +141,7 @@ def eligibility(pref, location, jd="", title="", arrangement=None):
     rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
     if p["remote"] == "remote" and not p["cities"]:
         if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
-        if rm == "unknown" and j["cities"] and not REMOTE_RE.search(jd or "") and not HYBRID_RE.search(jd or ""):
+        if rm == "unknown" and j["cities"] and not REMOTE_WORDS.search(jd or "") and not HYBRID_RE.search(jd or ""):
             return False, f"{j['cities'][0]}, no remote mention"
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
