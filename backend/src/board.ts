@@ -112,6 +112,8 @@ export interface JobQuery {
 	embed?: boolean;
 	/** Restrict to these job ids. */
 	ids?: string[];
+	/** Include the provider's detail payload (`detailRaw`); off by default — large and duplicates `content`. */
+	detailRaw?: boolean;
 	/** Page within a board (used by the export when vectors make responses large). */
 	jobOffset?: number;
 	jobLimit?: number;
@@ -939,6 +941,7 @@ export class Board extends DurableObject<Env> {
 		}
 		const jobs = this.ctx.storage.sql.exec<JobRow>(sql, ...params).toArray().map((r) => rowToJob(r, opts.embed));
 		if (opts.slim) for (const j of jobs) { j.raw = undefined; j.content = null; }
+		if (!opts.detailRaw) for (const j of jobs) j.detailRaw = null;
 		return jobs;
 	}
 

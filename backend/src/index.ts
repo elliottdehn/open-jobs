@@ -30,6 +30,7 @@ function jobQuery(url: URL): JobQuery {
 		since: q.get("since") ? Number(q.get("since")) : undefined,
 		slim: q.get("slim") === "1",
 		embed: q.get("embed") === "1",
+		detailRaw: q.get("detailRaw") === "1",
 		ids: q.get("ids")?.split(",").filter(Boolean),
 	};
 }
@@ -241,7 +242,10 @@ export default {
 			}
 			if (action === "embed" && request.method === "POST") return Response.json(await stub.embedNow());
 			if (action === "runs") return Response.json(await stub.getRuns());
-			if (!action) return Response.json(await stub.getState(jobQuery(url)));
+			if (!action) {
+				try { return Response.json(await stub.getState(jobQuery(url))); }
+				catch (e) { return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 }); }
+			}
 		}
 
 		// POST /jobs/enrich  body {"jobs":[{"ats","slug","id"}...], "force"?: bool}
@@ -289,7 +293,7 @@ export default {
 			// Pull-driven stream with backpressure: the client's read pace bounds Worker memory (a page of big
 			// boards with vectors + JD bodies is hundreds of MB — eagerly enqueuing it OOMs the isolate).
 			// Big boards are paged internally (PAGE jobs per DO call) and emitted as multi-part lines.
-			const PAGE = query.embed ? 300 : 0;
+			const PAGE = query.embed ? 150 : 0;
 			const enc2 = enc;
 			let bi = 0; // next board index
 			let cur: { slug: string; part: number; done: boolean } | null = null;
@@ -309,14 +313,26 @@ export default {
 							if (skipEmpty && st.jobs.length === 0) continue;
 							return JSON.stringify({ ats, slug, meta: st.meta, jobs: st.jobs });
 						}
-						const part = cur.part;
-						const st: BoardState =
-							part === 0
-								? await stub.getState({ ...query, jobLimit: PAGE, jobOffset: 0 })
-								: { meta: null, jobs: await stub.getJobs({ ...query, jobLimit: PAGE, jobOffset: part * PAGE }) };
-						if (part === 0) cur.done = false;
-						const more = st.jobs.length === PAGE;
-						if (more) cur.part++; else cur = null;
+						// Page size adapts per board: a DO RPC response is capped at 32 MiB, and boards with big
+						// provider payloads can exceed it at 300 jobs; halve until it fits (min 25).
+						const c = cur as { slug: string; part: number; done: boolean; page?: number; off?: number };
+						c.page = c.page ?? PAGE; c.off = c.off ?? 0;
+						let st: BoardState | null = null;
+						for (;;) {
+							try {
+								st = c.off === 0
+									? await stub.getState({ ...query, jobLimit: c.page, jobOffset: 0 })
+									: { meta: null, jobs: await stub.getJobs({ ...query, jobLimit: c.page, jobOffset: c.off }) };
+								break;
+							} catch (e) {
+								const msg = e instanceof Error ? e.message : String(e);
+								if (/32MiB|limited to 32/i.test(msg) && c.page > 25) { c.page = Math.max(25, Math.floor(c.page / 2)); continue; }
+								throw e;
+							}
+						}
+						const part = c.part;
+						const more = st.jobs.length === c.page;
+						if (more) { c.part++; c.off += c.page; } else cur = null;
 						if (part === 0 && skipEmpty && st.jobs.length === 0) continue;
 						return JSON.stringify({ ats, slug, meta: st.meta, jobs: st.jobs, part, more });
 					} catch (e) {
