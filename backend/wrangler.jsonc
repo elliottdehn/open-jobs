@@ -46,7 +46,8 @@
 		"ENRICH_HOUR_USD": "5",
 		"ENRICH_DAY_USD": "50",
 		"EMBED_RATE_LIMIT": "10",
-		"EMBED_RATE_WINDOW_MS": "600000"
+		"EMBED_RATE_WINDOW_MS": "600000",
+		"IDEAS_MENTION": "@egd"
 	},
 	// Export pages with JD bodies + vectors are ~100 MB of JSON; the default 30 s CPU limit cuts them off.
 	"limits": { "cpu_ms": 300000 },

@@ -165,10 +165,14 @@ export default {
 			const where = file ? (line ? `<${repo}${file}#L${line}|${file}:${line}>` : `<${repo}${file}|${file}>`) : "";
 			const tags = (body?.tags ?? []).slice(0, 5).map((x) => "`" + String(x).slice(0, 24) + "`").join(" ");
 			const ctx = [via ? `👤 ${via.replace(/[<>|]/g, "")}` : "🤖 anonymous agent", tags, `<!date^${Math.floor(Date.now() / 1000)}^{date_short} {time}|now>`].filter(Boolean).join("   ·   ");
+			// IDEAS_MENTION: a Slack member ID (U…/W…) renders as a real <@mention>; a plain "@name" relies on link_names.
+			const who = (env.IDEAS_MENTION ?? "@egd").trim();
+			const mention = /^[UW][A-Z0-9]{6,}$/.test(who) ? `<@${who}>` : who;
 			const payload = {
-				text: `${file ? file + (line ? ":" + line : "") + " — " : ""}${idea}`,
+				text: `${mention} ${file ? file + (line ? ":" + line : "") + " — " : ""}${idea}`,
+				link_names: true,
 				blocks: [
-					...(where ? [{ type: "section", text: { type: "mrkdwn", text: `💡 *${where}*` } }] : [{ type: "section", text: { type: "mrkdwn", text: "💡 *idea*" } }]),
+					{ type: "section", text: { type: "mrkdwn", text: `${mention} 💡 *${where || "idea"}*` } },
 					{ type: "section", text: { type: "mrkdwn", text: idea } },
 					{ type: "context", elements: [{ type: "mrkdwn", text: ctx }] },
 					{ type: "divider" },

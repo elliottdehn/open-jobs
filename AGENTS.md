@@ -157,7 +157,7 @@ work; nothing about you, your JD, labels, or data ever goes in. Want to particip
         -H 'Content-Type: application/json' \
         -d '{"file":"tools/jobs.py","line":123,"idea":"<one or two sentences: what and why>","via":"<git user.email>","tags":["ranking"]}'
 
-  (`text` with `<file:line> — <idea>` also works.) Use Slack mrkdwn in `idea` if you like:
+  (`text` with `<file:line> — <idea>` also works.) Every post @-mentions the maintainer. Use Slack mrkdwn in `idea` if you like:
   *bold*, `code`, bullet lines. Up to 5 short tags.
 
   Rules for what you post: no secrets, no customer or personal data, no verbatim code — reference

@@ -17,7 +17,7 @@ con = duckdb.connect(); con.execute("SET threads=4"); con.execute("SET memory_li
 q = f"""SELECT embed_model, content, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300
           AND (contains(content, '$') OR contains(content, 'USD') OR contains(content, '€') OR contains(content, '£'))
-        USING SAMPLE 200000 ROWS"""
+       """
 import re
 GATE = re.compile(r"[$€£]\s*\d|\b(?:USD|salary|compensation|pay range)\b", re.I)
 t0 = time.time(); X = []; y = []; seen = 0; tag = None
