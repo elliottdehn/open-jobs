@@ -26,7 +26,7 @@ def worker():
         except queue.Empty: return
         t = time.time()
         p = subprocess.run(["node", "scripts/export.mjs", ats, a.base, f"--out={a.out}", *a.flags], capture_output=True, text=True)
-        tail = [l for l in (p.stdout + p.stderr).replace("\r", "\n").splitlines() if l.startswith("wrote") or "truncated" in l or "Error" in l][-2:]
+        tail = [l[:300] for l in (p.stdout + p.stderr).replace("\r", "\n").splitlines() if l.startswith("wrote") or "truncated" in l or ("Error" in l and not l.startswith("{"))][-2:]
         with lock:
             print(f"[{ats}] {'ok' if p.returncode == 0 else 'FAILED'} in {time.time()-t:.0f}s :: {' | '.join(tail)}", flush=True)
             if p.returncode == 0: open(os.path.join(a.out, ".done", ats), "w").close()
