@@ -164,7 +164,7 @@ Python `urllib` user agent — send any custom UA (curl is fine).
 |---|---|---|
 | POST | `/enrich` | **public**, per-IP metered (`ENRICH_HOUR_USD` 5 / `ENRICH_DAY_USD` 50, actual token + web-search cost; cached results free): body `{jobs:[{ats,slug,id}…]}` (≤ 300) → `{boards:{name:{company,…}}, jobs:{key:{status,enrichment,cached}}, cost:{thisCallUsd,hourUsd,dayUsd,…}}`; 429 + `retry-after` when a window is exhausted (cached part still returned). Runs job extraction + company resolution, both one-shot |
 | GET | `/enrich/budget` | this IP's hour/day spend and limits |
-| POST | `/ideas` | **public**: `{text}` relayed to the #multipenny-ideas Slack channel (`SLACK_IDEAS_WEBHOOK` secret); 30/hour per IP |
+| POST | `/ideas` | **public**: `{file, line, idea, via, tags[]}` (or `{text}`) relayed to the #multipenny-ideas Slack channel as a Block Kit message with a GitHub-linked file:line header (`SLACK_IDEAS_WEBHOOK` secret); 30/hour per IP |
 | POST | `/embed` | **public**, IP rate-limited (`EMBED_RATE_LIMIT` per `EMBED_RATE_WINDOW_MS`, default 10 / 10 min): body `{text, title?, location?}` → `{vector[1536], recipe}`; 429 with `retry-after` when limited, 503 when the embeddings API is saturated |
 | GET | `/data/<key>` | **public**: object from the `jobscream-data` R2 bucket (manifest, centroids, group files), Range + CORS |
 | GET | `/ats[?all=1]` | providers fetched by the Worker fleet → slug counts; `all=1` includes local-only ones |
