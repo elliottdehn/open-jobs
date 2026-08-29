@@ -29,7 +29,7 @@ once, then A/B cards) and work/rank-pairs.json. The agent reads the .md, judges 
 work/rank-answers.json as {"<pair id>": {"winner": "A"|"B", "confidence": 0-1, "why": "..."}}, and
 re-runs the same command. Answers land in the same cache; the sort resumes and emits the next batch,
 until it prints "done". A 200-job sort is usually 3-6 batches. Exit status 3 means "pairs pending"."""
-import argparse, base64, json, os, random, sys, threading, time, urllib.request, urllib.error
+import argparse, base64, json, os, random, re, sys, threading, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 np.seterr(all="ignore")
@@ -46,7 +46,11 @@ ap.add_argument("--focus", type=int, default=40, help="K: ask the LLM whenever b
 ap.add_argument("--agent", action="store_true", help="no API: write pairs for the coding agent to judge, ingest work/rank-answers.json, repeat")
 ap.add_argument("--batch", type=int, default=40, help="agent mode: max pairs to hand over per run")
 ap.add_argument("--gap", type=int, default=6, help="G: outside the top K, ask the LLM only when the two jobs are within G places of each other in the base order; otherwise trust it")
+ap.add_argument("--no-eligibility", action="store_true", help="sort every job, not just the ones eligible for the location in work/ideal.json (and not hidden)")
 a = ap.parse_args()
+_focus_set = any(x.startswith("--focus") for x in sys.argv); _gap_set = any(x.startswith("--gap") for x in sys.argv)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from locparse import eligibility as loc_eligibility
 if not a.key and not a.agent: sys.exit("set OPENAI_API_KEY (or use --agent to let the coding agent judge)")
 
 # ---------- load slice + base order ----------
@@ -61,15 +65,34 @@ if os.path.exists(mp):
     print(f"base order: taste model from work/model.json")
 else:
     base = np.asarray([r[8] for r in rows], dtype=np.float32); print("base order: similarity to the ideal JD")
+    # raw cosine is a weak base order: widen the region where the judge is consulted unless the user set it
+    if not _focus_set: a.focus = max(a.focus, 80)
+    if not _gap_set: a.gap = max(a.gap, 12)
+    print(f"  (no taste model: focus {a.focus}, gap {a.gap})")
 order = np.argsort(-base)
-# dedupe identical (company, title) postings so we don't burn comparisons on mirrors
+# only jobs the page would show: eligible for the ideal.json location, not from a hidden company
+pref = (ideal.get("location") or "").strip(); hidden = set(); skipped = {"ineligible": 0, "hidden": 0, "empty": 0, "dup": 0}
+ipath = os.path.join(WORK, "interactions.jsonl")
+if os.path.exists(ipath):
+    for line in open(ipath, encoding="utf-8"):
+        try: ev = json.loads(line)
+        except Exception: continue
+        if ev.get("type") == "hide_company" and ev.get("board"): (hidden.add if ev.get("on", True) else hidden.discard)(ev["board"])
+def _norm_title(t): return re.sub(r"\s*[-–(\[|].*$", "", (t or "").lower()).strip()  # "SRE - EMEA" == "SRE (US)"
 seen = set(); idx = []
 for i in order:
-    k = ((rows[i][4] or "").lower().strip(), (rows[i][3] or "").lower().strip())
-    if k in seen: continue
-    seen.add(k); idx.append(int(i))
+    r = rows[i]
+    if not a.no_eligibility:
+        if f"{r[0]}/{r[1]}" in hidden: skipped["hidden"] += 1; continue
+        if pref and loc_eligibility(pref, r[5] or "", r[7] or "", r[3] or "")[0] is False: skipped["ineligible"] += 1; continue
+    if len((r[7] or "").strip()) < 200: skipped["empty"] += 1; continue  # no description: nothing to judge, and the page shows it anyway
+    k = ((r[4] or "").lower().strip(), _norm_title(r[3]), (r[7] or "")[:300])  # same company, same title stem, same opening = one req split by region
+    k2 = ((r[4] or "").lower().strip(), (r[3] or "").lower().strip())
+    if k in seen or k2 in seen: skipped["dup"] += 1; continue
+    seen.add(k); seen.add(k2); idx.append(int(i))
     if len(idx) >= a.top: break
 jobs = [rows[i] for i in idx]
+print(f"pool: {len(jobs)} of {len(rows)} jobs (skipped {skipped['ineligible']} ineligible for {pref!r}, {skipped['hidden']} hidden companies, {skipped['empty']} without a description, {skipped['dup']} duplicates)" + ("  [--no-eligibility]" if a.no_eligibility else ""))
 key = lambda r: f"{r[0]}/{r[1]}#{r[2]}"
 N = len(jobs)
 levels = int(np.ceil(np.log2(max(N, 2))))
@@ -170,15 +193,35 @@ while len(runs) > 1:
     runs = merged
     json.dump(cache, open(cache_path, "w", encoding="utf-8"))
 final = runs[0]
+# promotion pass: a job outside the top K that the judge preferred (confidence >= 0.8) over a job inside the top K
+# moves up to just above it. Merge sort only asks about neighbours, so a strong job can be stranded by base order.
+K = a.focus; promoted = 0
+for _ in range(2):
+    pos = {key(r): i for i, r in enumerate(final)}
+    for r in list(final[K:]):
+        k = key(r); best = None
+        for t in final[:K]:
+            ck = k + "||" + key(t) if k < key(t) else key(t) + "||" + k; c = cache.get(ck)
+            if c and c["winner"] == k and (c.get("confidence") or 0) >= 0.8: best = pos[key(t)] if best is None else min(best, pos[key(t)]); 
+        if best is not None:
+            final.remove(r); final.insert(best, r); promoted += 1; pos = {key(x): i for i, x in enumerate(final)}
+if promoted: print(f"promotion pass: {promoted} jobs moved into the top {K} on high-confidence judge wins")
 json.dump(cache, open(cache_path, "w", encoding="utf-8"))
 if a.agent and needed:
     asked = {}; md = ["# Pairs to judge\n", "For each pair, decide which posting is the better match for THIS person's ideal job description: role, seniority, the work itself, stack, arrangement/location, compensation if stated, company type. Ignore posting length and polish. If genuinely equal, pick the one whose day-to-day work is closer to the ideal.\n",
                       f"Write `work/rank-answers.json` as `{{\"<pair id>\": {{\"winner\": \"A\"|\"B\", \"confidence\": 0-1, \"why\": \"one sentence\"}}}}` for every pair below, then re-run `uv run tools/rank.py --agent --top {a.top}`.\n",
                       "## Ideal job description\n", ideal_text[:4000], "\n"]
+    shown = {}  # key -> short ref; a posting is printed in full the first time only
+    def ref(r):
+        k = key(r)
+        if k in shown: return f"### {shown[k]} (see above): {r[3]} | {r[4]} | {r[5]}\n"
+        shown[k] = f"J{len(shown) + 1}"
+        return f"### {shown[k]}: {r[3]} | {r[4]} | {r[5]}\n" + (r[7] or "")[:a.excerpt] + "\n"
     for n, (ck, x, y) in enumerate(needed, 1):
         A, B = (y, x) if random.random() < 0.5 else (x, y); pid = f"p{n}"
         asked[pid] = {"id": ck, "A": key(A), "B": key(B)}
-        md += [f"\n---\n## {pid}\n", f"### A: {A[3]} | {A[4]} | {A[5]}\n", (A[7] or "")[:a.excerpt], "\n", f"### B: {B[3]} | {B[4]} | {B[5]}\n", (B[7] or "")[:a.excerpt], "\n"]
+        md += [f"\n---\n## {pid}: A = {shown.get(key(A), 'new')} · B = {shown.get(key(B), 'new')}\n", "**A** " + ref(A), "**B** " + ref(B)]
+    md.insert(3, "Postings are printed in full the first time they appear (as J1, J2, …) and referenced by that label afterwards.\n")
     json.dump(asked, open(pairs_json, "w", encoding="utf-8")); open(pairs_md, "w", encoding="utf-8").write("\n".join(md))
     print(f"\n{len(needed)} pairs need your judgment -> work/rank-pairs.md  (write work/rank-answers.json, then re-run this command). Partial ranking below.")
 # ---------- outputs ----------
