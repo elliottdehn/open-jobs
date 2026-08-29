@@ -15,7 +15,7 @@
 
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
 """
-import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
+import re, argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
 import numpy as np
 np.seterr(all="ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -291,10 +291,12 @@ def cmd_html(a):
         sn = seniority_of(r[3]) or SENIORITY_FROM_ENRICH.get((e or {}).get("seniority") or "")
         sne = None
         if not sn:
-            if snm is not None:
+            # "Member of Technical Staff" is a generic IC title (the model reads the word "Staff"): default to mid
+            if snm is not None and not re.search(r"member of (?:the )?technical staff|\bMTS\b", r[3] or "", re.I):
                 vec_s = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec_s = vec_s / (np.linalg.norm(vec_s) + 1e-9)
                 z = snm[0] @ vec_s + snm[1]; z = z - z.max(); pr = np.exp(z); pr /= pr.sum(); k = int(pr.argmax())
-                sne = {"v": snm[2][k], "p": round(float(pr[k]), 2)} if pr[k] >= snm[3] else {"v": "mid", "p": None}
+                # untitled postings are harder than the titled holdout (the embedding contains the title), so the bar is 0.85
+                sne = {"v": snm[2][k], "p": round(float(pr[k]), 2)} if pr[k] >= max(snm[3], 0.85) else {"v": "mid", "p": None}
             else: sne = {"v": "mid", "p": None}
             n_est_sn += 1
         rm_known = (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"]
