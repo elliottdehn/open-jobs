@@ -226,10 +226,22 @@ def arrangement_model():
     except Exception:
         return None
 
+def location_table():
+    """Country estimates for location strings the rules can't place (nearest-neighbour vote over location-string
+    embeddings, built by backend/scripts/build-location-table.py); cached in work/, installed into locparse."""
+    import locparse
+    p = os.path.join(WORK, "location-countries.json")
+    try:
+        if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
+            open(p, "w", encoding="utf-8").write(json.dumps(get("/data/location-countries.json"), ensure_ascii=False))
+        t = json.load(open(p, encoding="utf-8")); locparse.LOC_TABLE = t["table"]; return t
+    except Exception:
+        return None
+
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
-    sm = salary_model(); am = arrangement_model(); n_est_rm = 0
+    sm = salary_model(); am = arrangement_model(); lt = location_table(); n_est_rm = 0; n_est_co = 0
     # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
     seen = set(); uniq = []
     for r in rows:
@@ -260,6 +272,10 @@ def cmd_html(a):
         key = f"{r[0]}/{r[1]}#{r[2]}"
         e = (enr["jobs"].get(key) or {}).get("data")
         el, elr = loc_eligibility(pref, r[5], r[8], r[3], (e or {}).get("work_arrangement")) if pref else (None, "")
+        coe = loc.get("country_est")
+        if coe:
+            n_est_co += 1
+            if el is None and elr == "no location info": elr = f"no stated country (est. {coe['country']} {coe['p']:.0%})"
         rm_known = (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"]
         rme = None
         if am is not None and rm_known == "unknown":
@@ -280,7 +296,7 @@ def cmd_html(a):
             est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
-                     "rm": rm_known, "rme": rme, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
+                     "rm": rm_known, "rme": rme, "coe": coe, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
@@ -295,6 +311,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
+    if lt is not None: print(f"country estimates from the published location table (n={lt['n']:,}, held-out accuracy {lt['holdout_accuracy']:.0%}): {n_est_co} jobs with no stated country get an estimate")
     if am is not None: print(f"work arrangement estimates from the published model (n={am[4]['n']:,}, holdout {am[4]['holdout']['accuracy']:.0%}): {n_est_rm} jobs with unknown arrangement get an estimate at p>={am[3]}")
     if sm is not None: print(f"salary estimates from the published model (n={sm[3]['n']:,}, ±{100*(np.exp(sm[2])-1):.0f}%): {sum(1 for j in jobs if not j['sal'])} jobs without a stated salary get an estimated band")
     if pref:

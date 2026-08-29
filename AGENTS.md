@@ -30,7 +30,7 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
   can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
-**Estimated fields:** salary bands and work arrangement marked `est.` come from small models on
+**Estimated fields:** salary bands, work arrangement, and country marked `est.` come from small models on
 the embedding (published with the index), applied only where the posting itself doesn't say.
 They are facet values of their own (`remote (est.)` etc.) so nobody mistakes them for stated
 facts; eligibility never uses them.

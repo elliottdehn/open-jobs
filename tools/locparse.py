@@ -34,9 +34,21 @@ for _k, _v in ISO_NAMES.items(): COUNTRIES.setdefault(_k, _v)
 for _k, _v in ISO3_ALL.items(): COUNTRIES.setdefault(_k, _v)
 # "Georgia" is both a US state and a country: bare "Georgia" stays the state (far more common in job
 # postings); these forms, or a Georgian city in the same segment, mean the country.
+COUNTRIES.update({"nederland": "NL", "österreich": "AT", "oesterreich": "AT", "schweiz": "CH", "suisse": "CH", "svizzera": "CH", "polska": "PL", "česko": "CZ", "cesko": "CZ",
+                  "česká republika": "CZ", "sverige": "SE", "norge": "NO", "danmark": "DK", "suomi": "FI", "magyarország": "HU", "românia": "RO", "belgië": "BE", "belgique": "BE",
+                  "éire": "IE", "lietuva": "LT", "latvija": "LV", "eesti": "EE", "hrvatska": "HR", "srbija": "RS", "slovensko": "SK", "slovenija": "SI", "българия": "BG", "ísland": "IS",
+                  "perú": "PE", "日本": "JP", "中国": "CN", "대한민국": "KR", "한국": "KR", "việt nam": "VN", "भारत": "IN", "россия": "RU", "україна": "UA", "ελλάδα": "GR", "台灣": "TW", "香港": "HK",
+                  "المملكة العربية السعودية": "SA", "الإمارات": "AE", "मुंबई": "IN", "united states of america (usa)": "US"})
 COUNTRIES.update({"democratic republic of the congo": "CD", "dr congo": "CD", "drc": "CD", "congo": "CG", "republic of the congo": "CG", "congo-brazzaville": "CG", "congo-kinshasa": "CD",
                   "georgia (country)": "GE", "country of georgia": "GE", "republic of georgia": "GE", "sakartvelo": "GE", "georgia country": "GE"})
 CITY_COUNTRY.update({"tbilisi": "GE", "batumi": "GE", "kutaisi": "GE"})
+import os as _os, json as _json
+try:  # ~5k bare city names that resolve to one country ≥90% of the time in the corpus (build-city-table.py)
+    for _k, _v in _json.load(open(_os.path.join(_os.path.dirname(__file__), "city_countries.json"), encoding="utf-8")).items(): CITY_COUNTRY.setdefault(_k, _v)
+except Exception: pass
+# optional fallback for strings the rules can't place: {location string: [country, confidence]} from the
+# published location-countries table (nearest-neighbour vote over location-string embeddings). jobs.py fills it.
+LOC_TABLE = {}
 GEORGIAN_CITIES = {"tbilisi", "batumi", "kutaisi", "rustavi"}
 TZ_CODES = {"EST", "PST", "CST", "MST", "HST", "AKST", "EDT", "PDT", "CDT", "MDT", "GMT", "UTC", "CET", "IST", "BST", "AEST"}
 
@@ -46,6 +58,7 @@ def _split(loc):
     def hy(m):
         a, b = m.group(1), m.group(2)
         if f"{a}-{b}".lower() in COUNTRIES: return m.group(0)  # Guinea-Bissau, Timor-Leste
+        if b.isupper() and len(b) == 2 and b in US_STATES and a[:1].isupper(): return f"{a}, {b}"  # "Boston-MA"
         return f"{a}; {b}" if (a.lower() in COUNTRIES or b.lower() in COUNTRIES or REMOTE_RE.fullmatch(a) or REMOTE_RE.fullmatch(b)) else m.group(0)
     loc = re.sub(r"\bgeorgia\s*\(\s*country\s*\)", "georgia country", loc, flags=re.I)  # "(country)" must not become its own segment
     loc = re.sub(r"\b([A-Za-z.]+(?: [A-Za-z.]+)?)\s*[-–]\s*([A-Za-z.]+)\b", hy, loc)  # also "Czech Republic-Prague"
@@ -70,6 +83,13 @@ def _one(seg, out):
         if rest.lower() != "remote": out["cities"].add(rest.title()); return
         return
     toks = [t.strip() for t in re.split(r",", s) if t.strip()]
+    toks2 = []
+    for t in toks:  # "SD USA" -> "SD", "USA"
+        m2 = re.match(r"^([A-Z]{2})\s+(.+)$", t.strip())
+        if m2 and m2.group(1) in US_STATES and m2.group(2).lower().strip(". ") in COUNTRIES: toks2 += [m2.group(1), m2.group(2)]
+        elif m2 and m2.group(1) in US_STATES and re.fullmatch(r"\d{5}(?:-\d{4})?", m2.group(2).strip()): toks2.append(m2.group(1))  # "TN 37090"
+        else: toks2.append(t)
+    toks = toks2
     if len(toks) == 1 and REMOTE_RE.fullmatch(toks[0].strip().lower()): return  # bare "Remote"
     city = None
     explicit = set(); inferred = set()
@@ -122,7 +142,11 @@ def parse(location, jd="", title=""):
     elif re.search(r"\b(?:100%|fully|entirely) remote (?:role|position|job|opportunity)\b|\bremote (role|position|job)\b|\bthis (role|position) is (?:fully |100% )?remote\b|\bwork(?:ing)? remotely from anywhere\b|\bwork location:?\s*(?:fully |100% )?remote\b|\b(?:fully|100%) remote\s*(?:[—–\-:,.!]|\n|we hire|must|you)", head): remote = "remote"
     elif not out["cities"] and re.search(r"\b(fully|100%|entirely) remote\b|\bremote[- ]first\b", head): remote = "remote"
     else: remote = "unknown"
-    return {"remote": remote, "countries": sorted(out["countries"]), "regions": sorted(out["regions"]), "cities": sorted(out["cities"])[:6]}
+    est = None
+    if not out["countries"] and LOC_TABLE:
+        hit = LOC_TABLE.get((location or "").strip()) or LOC_TABLE.get((location or "").strip().lower())
+        if hit: est = {"country": hit[0], "p": hit[1]}
+    return {"remote": remote, "countries": sorted(out["countries"]), "regions": sorted(out["regions"]), "cities": sorted(out["cities"])[:6], "country_est": est}
 
 if __name__ == "__main__":
     import sys, json

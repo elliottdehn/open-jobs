@@ -43,7 +43,7 @@ CASES = [  # (location, jd, expected countries, expected regions)
     ("Ulaanbaatar, Mongolia", "", {"MN"}, set()),
     # ISO coverage beyond the hand-written aliases
     ("Remote, Estonia", "", {"EE"}, set()),
-    ("Tallinn, Eesti", "", set(), set()),  # native names are not covered; must not become something else
+    ("Tallinn, Eesti", "", {"EE"}, set()),  # native-language names
     ("Luxembourg", "", {"LU"}, set()),
     ("Reykjavik, Iceland", "", {"IS"}, set()),
     ("Kathmandu, Nepal", "", {"NP"}, set()),
@@ -75,6 +75,17 @@ CASES = [  # (location, jd, expected countries, expected regions)
     ("Lagos, Nigeria", "", {"NG"}, set()),
     ("Seoul, South Korea", "", {"KR"}, set()),
     ("Kinshasa, Democratic Republic of the Congo", "", {"CD"}, set()),
+    # parser misses from the corpus
+    ("Rapid City, SD USA", "", {"US"}, {"SD"}),
+    ("Store 7010 - Lebanon, TN 37090", "", {"US"}, {"TN"}),
+    ("Alexandria, MN 56308", "", {"US"}, {"MN"}),
+    ("Boston-MA", "", {"US"}, {"MA"}),
+    ("Utrecht, Utrecht, Nederland", "", {"NL"}, set()),
+    ("Charleston", "", {"US"}, set()),           # bare city, unambiguous in the corpus
+    ("Shanghai", "", {"CN"}, set()),
+    ("Warsaw", "", {"PL"}, set()),               # hand-written alias wins over the (ambiguous) corpus stat
+    ("Hamilton", "", set(), set()),              # CA/US/NZ: stays unknown
+    ("Main Campus", "", set(), set()),
 ]
 
 fails = 0
