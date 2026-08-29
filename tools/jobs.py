@@ -206,9 +206,20 @@ def subgroups(vecs, titles, comps, k=6, min_size=8):
                        "exemplars": [{"title": titles[i], "company": comps[i] or ""} for i in ex]}
     return assign, groups
 
+def salary_model():
+    """Salary estimator (ridge on the embedding -> log annual USD), published with the index; cached in work/."""
+    p = os.path.join(WORK, "salary-model.json")
+    try:
+        if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
+            open(p, "w").write(json.dumps(get("/data/salary-model.json")))
+        m = json.load(open(p)); return np.asarray(m["w"], dtype=np.float32), float(m["b"]), float(m["sigma"]), m
+    except Exception:
+        return None
+
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
+    sm = salary_model()
     # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
     seen = set(); uniq = []
     for r in rows:
@@ -224,12 +235,17 @@ def cmd_html(a):
     for r in rows:
         loc = parse_location(r[5], r[8])
         el, elr = loc_eligibility(pref, r[5], r[8]) if pref else (None, "")
+        est = None
+        if sm is not None:
+            vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
+            mid = float(np.exp(vec @ sm[0] + sm[1])); k = float(np.exp(sm[2]))
+            est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
         key = f"{r[0]}/{r[1]}#{r[2]}"
         e = (enr["jobs"].get(key) or {}).get("data")
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
-                     "el": el, "elr": elr, "sal": extract_salary(r[8]), "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
+                     "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
     V = np.stack([np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32) for j in jobs])
@@ -243,6 +259,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
+    if sm is not None: print(f"salary estimates from the published model (n={sm[3]['n']:,}, ±{100*(np.exp(sm[2])-1):.0f}%): {sum(1 for j in jobs if not j['sal'])} jobs without a stated salary get an estimated band")
     if pref:
         ne = sum(1 for j in jobs if j["el"] is False); nu = sum(1 for j in jobs if j["el"] is None)
         print(f"eligibility for '{pref}': {len(jobs) - ne - nu} eligible, {ne} ineligible (hidden by default), {nu} unknown")
