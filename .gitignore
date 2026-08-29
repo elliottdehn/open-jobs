@@ -13,3 +13,6 @@ backend/.wrangler/
 __pycache__/
 .DS_Store
 other/
+
+# per-user Claude Code permissions (the /ideas opt-in rule lives here, never in the repo)
+.claude/settings.local.json
