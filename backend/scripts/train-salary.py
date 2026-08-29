@@ -15,7 +15,10 @@ root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR"
 J = os.path.join(root, "jobs", "*.parquet")
 con = duckdb.connect(); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
 q = f"""SELECT embed_model, content, embedding FROM read_parquet('{J}')
-        WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300 USING SAMPLE 700000 ROWS"""
+        WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300
+          AND (contains(content, '$') OR contains(content, 'USD') OR contains(content, '€') OR contains(content, '£'))"""
+import re
+GATE = re.compile(r"[$€£]\s*\d|\b(?:USD|salary|compensation|pay range)\b", re.I)
 t0 = time.time(); X = []; y = []; seen = 0; tag = None
 reader = con.execute(q).fetch_record_batch(20_000)
 while True:
@@ -26,6 +29,7 @@ while True:
     vals = emb.values.to_numpy(zero_copy_only=False); offs = emb.offsets.to_numpy()
     for i, c in enumerate(contents):
         seen += 1
+        if not GATE.search(c): continue  # cheap check before the heavy extractor
         s = extract(c)
         if not s or s["currency"] != "USD" or s["period"] not in ("year", "hour") or not (30_000 <= s["annual_max"] <= 1_000_000): continue
         mid = (s["annual_min"] + s["annual_max"]) / 2 if s["annual_min"] > 0 else s["annual_max"]
