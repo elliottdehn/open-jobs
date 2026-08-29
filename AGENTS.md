@@ -47,7 +47,10 @@ uv run tools/jobs.py fetch --top 12
 ```
 `fetch --top N` ranks every group by the cosine between its centroid and the ideal-JD vector and
 downloads the N nearest (one file each, ~2.5 MB per 400 jobs). There is no per-group Maybe/No
-step: the centroid distance decides. Start with 8–12 groups (2–6k jobs); `groups --k 30` prints
+step: the centroid distance decides. Start with 8–12 groups (2–6k jobs); The `--location` you pass to `embed` also drives a hard **eligibility** filter at `html` time
+(country match, remote with no stated region, or JD phrases like "must be located in the US";
+region-restricted remotes such as "Remote - LATAM" are ineligible). The page hides ineligible jobs
+by default with a chip showing the count; without `--location` nothing is hidden. `groups --k 30` prints
 the ranked list with labels and exemplars if you want to eyeball it or hand-pick
 (`fetch --groups 12,45,301`). Result: `work/jobs.parquet` (+ `work/jobs.duckdb`): `ats, slug, id,
 title, company, location, url, seen_ms, jd (full text), leaf, sim (cosine to the ideal JD),

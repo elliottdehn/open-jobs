@@ -19,7 +19,7 @@ import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math
 import numpy as np
 np.seterr(all="ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from locparse import parse as parse_location
+from locparse import parse as parse_location, eligibility as loc_eligibility
 from salary import extract as extract_salary  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
@@ -217,17 +217,19 @@ def cmd_html(a):
         seen.add(key); uniq.append(r)
     if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
     rows = uniq
+    pref = (d.get("location") or "").strip()
     ep = os.path.join(WORK, "enrichment.json")
     enr = json.load(open(ep)) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
     jobs = []
     for r in rows:
         loc = parse_location(r[5], r[8])
+        el, elr = loc_eligibility(pref, r[5], r[8]) if pref else (None, "")
         key = f"{r[0]}/{r[1]}#{r[2]}"
         e = (enr["jobs"].get(key) or {}).get("data")
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
-                     "sal": extract_salary(r[8]), "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
+                     "el": el, "elr": elr, "sal": extract_salary(r[8]), "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
     V = np.stack([np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32) for j in jobs])
@@ -241,7 +243,10 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
-    html = TEMPLATE.replace("__GROUPS3__", json.dumps(G3)).replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
+    if pref:
+        ne = sum(1 for j in jobs if j["el"] is False); nu = sum(1 for j in jobs if j["el"] is None)
+        print(f"eligibility for '{pref}': {len(jobs) - ne - nu} eligible, {ne} ineligible (hidden by default), {nu} unknown")
+    html = TEMPLATE.replace("__PREF__", json.dumps(pref)).replace("__GROUPS3__", json.dumps(G3)).replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")

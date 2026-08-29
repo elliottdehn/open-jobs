@@ -89,3 +89,46 @@ if __name__ == "__main__":
     import sys, json
     for t in ["US-CA-San Jose", "Remote - USA", "Paris; Warsaw; Lisboa; Berlin", "Vienna, VA, USA", "Bengaluru, India", "New York City; Remote / San Francisco", "London, United Kingdom", "Hybrid - Austin, TX", "Toronto, ON", "Berlin, Germany; Frankfurt, Germany", "Remote (United States)"]:
         print(f"{t:45s} -> {json.dumps(parse(t))}")
+
+
+# ---- eligibility against the user's stated location preference ----
+RESTRICT_RE = re.compile(r"\b(must (?:be|reside|live|be located|be based)[^.]{0,40}?\b(in|within)\b|(?:only|exclusively) (?:for|open to)? ?(?:candidates|applicants|residents)?[^.]{0,20}?(?:in|based in|located in|from)\b|(?:authori[sz]ed|eligible) to work in|(?:based|located|residing) in|(?:us|u\.s\.|united states)[- ]?(?:only|based)|(?:latam|emea|apac|europe|india|canada|uk)[- ]?only)\b[^.\n]{0,60}", re.I)
+MACRO = {"Latam": {"MX","BR","AR","CO","CL","PE","CR","UY"}, "Emea": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","SE","NO","DK","FI","IE","PL","PT","CZ","HU","RO","GR","UA","TR","IL","AE","SA","QA","EG","ZA","NG","KE","MA"}, "Apac": {"IN","CN","JP","KR","SG","HK","TW","AU","NZ","PH","ID","MY","TH","VN","PK","BD","LK"}, "Europe": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","SE","NO","DK","FI","IE","PL","PT","CZ","HU","RO","GR","UA"}, "Eastern Europe": {"PL","CZ","HU","RO","UA","GR"}, "Western Europe": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","IE","PT"}, "North America": {"US","CA","MX"}, "South America": {"BR","AR","CO","CL","PE","UY"}, "Asia": {"IN","CN","JP","KR","SG","HK","TW","PH","ID","MY","TH","VN","PK","BD","LK"}, "Africa": {"ZA","NG","KE","EG","MA"}}
+
+_PLACE_KEYS = sorted(COUNTRIES.keys(), key=len, reverse=True)
+_MACRO_KEYS = sorted(MACRO.keys(), key=len, reverse=True)
+def find_places(text):
+    """Countries (ISO-2) and macro-regions named anywhere in a phrase, e.g. 'must be located in the United States'."""
+    t = " " + re.sub(r"[^a-z0-9. ]+", " ", (text or "").lower()) + " "
+    cs, rs = set(), set()
+    for k in _PLACE_KEYS:
+        if len(k) < 3 and k not in ("uk", "us"): continue  # skip 2-letter noise except uk/us
+        if f" {k} " in t or f" {k}. " in t: cs.add(COUNTRIES[k])
+    for k in _MACRO_KEYS:
+        if f" {k.lower()} " in t: rs.add(k)
+    for st in STATE_BY_NAME:  # US state names imply US
+        if f" {st} " in t: cs.add("US")
+    return cs, rs
+
+def eligibility(pref, location, jd=""):
+    """Is a job eligible for someone with location preference `pref` (e.g. "Remote, US", "Berlin",
+    "US or Canada")? Returns (eligible: bool|None, reason). None = can't tell (no location info).
+    Rules: the job's countries must intersect the user's; a remote job with no country and no
+    restricting phrase is eligible; region-restricted remotes (Remote - LATAM, India-only) are not;
+    JD phrases like "must be located in the US" / "authorized to work in the UK" restrict too."""
+    p = parse(pref or "")
+    want = set(p["countries"])
+    for r in p["regions"]: want |= MACRO.get(r, set())
+    if not want: return None, "no country in preference"
+    j = parse(location or "", jd)
+    have = set(j["countries"])
+    for r in j["regions"]: have |= MACRO.get(r, set())
+    # restricting phrases in the JD text add countries/regions to `have`
+    for m in RESTRICT_RE.finditer((jd or "")[:6000]):
+        cs, rs = find_places(m.group(0))
+        have |= cs
+        for r in rs: have |= MACRO.get(r, set())
+    if have & want: return True, "location matches"
+    if have: return False, f"restricted to {', '.join(sorted(have))[:40]}"
+    if j["remote"] == "remote": return True, "remote, no stated region"
+    return None, "no location info"
