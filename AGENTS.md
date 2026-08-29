@@ -30,6 +30,11 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
   can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
+**Estimated fields:** salary bands and work arrangement marked `est.` come from small models on
+the embedding (published with the index), applied only where the posting itself doesn't say.
+They are facet values of their own (`remote (est.)` etc.) so nobody mistakes them for stated
+facts; eligibility never uses them.
+
 **Location preference gotchas:** `tools/locparse.py` covers every ISO-3166 country by name and
 alpha-3 code, but a few names are ambiguous and the parser resolves them deterministically: bare
 "Georgia" is the US state; write "Georgia (country)" or "Tbilisi" for the country. "Washington, DC"

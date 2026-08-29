@@ -216,10 +216,20 @@ def salary_model():
     except Exception:
         return None
 
+def arrangement_model():
+    """Work-arrangement estimator (softmax on the embedding -> remote/hybrid/onsite), published with the index; cached in work/."""
+    p = os.path.join(WORK, "arrangement-model.json")
+    try:
+        if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
+            open(p, "w", encoding="utf-8").write(json.dumps(get("/data/arrangement-model.json")))
+        m = json.load(open(p, encoding="utf-8")); return np.asarray(m["W"], dtype=np.float32), np.asarray(m["b"], dtype=np.float32), m["classes"], float(m.get("threshold", 0.7)), m
+    except Exception:
+        return None
+
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
-    sm = salary_model()
+    sm = salary_model(); am = arrangement_model(); n_est_rm = 0
     # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
     seen = set(); uniq = []
     for r in rows:
@@ -250,6 +260,19 @@ def cmd_html(a):
         key = f"{r[0]}/{r[1]}#{r[2]}"
         e = (enr["jobs"].get(key) or {}).get("data")
         el, elr = loc_eligibility(pref, r[5], r[8], r[3], (e or {}).get("work_arrangement")) if pref else (None, "")
+        rm_known = (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"]
+        rme = None
+        if am is not None and rm_known == "unknown":
+            vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
+            z = am[0] @ vec + am[1]; z = z - z.max(); pr = np.exp(z); pr /= pr.sum(); pk = {c: float(pr[i]) for i, c in enumerate(am[2])}
+            # the model's job is to spot remote/hybrid signals; a posting that names a place and shows neither is onsite by default
+            # hybrid needs a higher bar: the labelled hybrid jobs are mostly "tech company in a city", so the model
+            # leans hybrid on prior alone; remote signals are crisper (holdout precision 95%)
+            if pk.get("remote", 0) >= am[3]: rme = {"v": "remote", "p": round(pk["remote"], 2)}
+            elif pk.get("hybrid", 0) >= max(am[3], 0.85): rme = {"v": "hybrid", "p": round(pk["hybrid"], 2)}
+            elif loc["cities"] or loc["regions"]: rme = {"v": "onsite", "p": None}  # default: names a place, nothing says remote/hybrid
+            if rme: n_est_rm += 1
+            if rme and el is False and elr == "not labelled remote": elr = f"not labelled remote (est. {rme['v']}" + (f" {rme['p']:.0%})" if rme['p'] else ")")
         est = None
         if sm is not None:
             vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
@@ -257,7 +280,7 @@ def cmd_html(a):
             est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
-                     "rm": (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"], "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
+                     "rm": rm_known, "rme": rme, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
@@ -272,6 +295,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
+    if am is not None: print(f"work arrangement estimates from the published model (n={am[4]['n']:,}, holdout {am[4]['holdout']['accuracy']:.0%}): {n_est_rm} jobs with unknown arrangement get an estimate at p>={am[3]}")
     if sm is not None: print(f"salary estimates from the published model (n={sm[3]['n']:,}, ±{100*(np.exp(sm[2])-1):.0f}%): {sum(1 for j in jobs if not j['sal'])} jobs without a stated salary get an estimated band")
     if pref:
         ne = sum(1 for j in jobs if j["el"] is False); nu = sum(1 for j in jobs if j["el"] is None)

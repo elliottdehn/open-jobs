@@ -27,6 +27,8 @@ def worker():
 ts = [threading.Thread(target=worker) for _ in range(a.workers)]; [t.start() for t in ts]; [t.join() for t in ts]
 missing = [g for g in groups if not os.path.exists(os.path.join(mark, g))]
 if missing: sys.exit(f"{len(missing)} group files failed; re-run to retry")
+for name in ("salary-model.json", "arrangement-model.json"):  # estimators trained by consolidate.sh step 4b
+    if os.path.exists(os.path.join(web, name)): put(name, os.path.join(web, name), "application/json")
 put("centroids.bin", os.path.join(web, "centroids.bin"), "application/octet-stream")
 put("manifest.json", os.path.join(web, "manifest.json"), "application/json")
 print("uploaded centroids + manifest; done", flush=True)
