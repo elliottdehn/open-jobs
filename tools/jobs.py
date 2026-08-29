@@ -396,15 +396,17 @@ def cmd_probe(a):
     if os.path.exists(jp):
         import duckdb
         local = duckdb.connect().execute(f"SELECT leaf, sim, title, location FROM read_parquet('{jp}') WHERE ats=? AND slug=? AND id=?", [r["ats"], r["slug"], job["id"]]).fetchone()
-    if local: n = T[int(local[0])]; how = ""
-    else:
-        n = T[0]
-        while n["children"]: n = max((T[c] for c in n["children"]), key=lambda c: float(C[c["id"]] @ v))
-        how = " (by tree descent; approximate)"
+    # group by tree descent (the build's assignment rule, nearest sub-centroid); node ids are per build, so
+    # the parquet's stale `leaf` column can't be compared against today's manifest
+    n = T[0]
+    while n["children"]: n = max((T[c] for c in n["children"]), key=lambda c: float(C[c["id"]] @ v))
     leaves = nearest(m, C, ideal_v, len(T)); rank = next(i for i, (lf, _) in enumerate(leaves, 1) if lf["id"] == n["id"])
     gp = os.path.join(WORK, "groups.json"); fetched = [g["id"] for g in json.load(open(gp, encoding="utf-8"))] if os.path.exists(gp) else []
-    print(f"  similarity to your ideal JD: {sim:.3f} · group {n['id']} ({n['label']}){how} is rank {rank} of {len(leaves)} groups for your JD")
-    if fetched:
+    leaf_ids = {lf["id"] for lf, _ in leaves}; stale = fetched and not all(g in leaf_ids for g in fetched)
+    print(f"  similarity to your ideal JD: {sim:.3f} · group {n['id']} ({n['label']}) is rank {rank} of {len(leaves)} groups for your JD")
+    if local: pass  # membership is settled below by the parquet itself
+    elif stale: print(f"  (work/groups.json predates today's manifest, so group ids can't be compared; you fetched {len(fetched)} groups and this one ranks {rank}: re-run `fetch --top {max(rank, len(fetched))}` to be sure)")
+    elif fetched:
         if n["id"] in fetched: print(f"  ✓ that group IS in your slice (you fetched {len(fetched)} groups)")
         else: print(f"  ✗ that group is NOT in your slice: you fetched {len(fetched)} groups and it ranks {rank}. `fetch --top {max(rank, len(fetched))}` (or `--groups {n['id']}`) would include it.")
     if os.path.exists(jp):
