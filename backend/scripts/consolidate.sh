@@ -3,7 +3,7 @@
 # Never deletes previous exports: each run writes export/<YYYY-MM-DD>/ and repoints export/latest.
 # Logs stream (unbuffered) to logs/consolidate-<date>.log. Re-runnable: finished ATSes are skipped via .done markers.
 #
-# Usage: scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload]
+# Usage: scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BASE="${1:-${WORKER_URL:-https://backend.dehnbostele.workers.dev}}"; [ $# -gt 0 ] && shift || true
@@ -28,12 +28,18 @@ EXPORT_DIR="$OUT" uv run scripts/build-parquet.py
 echo "--- 4/5 manifest (tree + centroids + group files) $(date '+%H:%M:%S')"
 EXPORT_DIR="$OUT" uv run scripts/build-manifest.py
 
-echo "--- 4b/5 estimators: salary (ridge) + work arrangement (softmax) from the embeddings $(date '+%H:%M:%S')"
-EXPORT_DIR="$OUT" uv run scripts/train-salary.py 2>&1 | grep -v Warning
-EXPORT_DIR="$OUT" uv run scripts/train-arrangement.py 2>&1 | grep -v Warning
-EXPORT_DIR="$OUT" uv run scripts/train-seniority.py 2>&1 | grep -v Warning
-EXPORT_DIR="$OUT" uv run scripts/build-city-table.py
-EXPORT_DIR="$OUT" uv run scripts/build-location-table.py 2>&1 | grep -v Warning   # embeds only new location strings (pennies)
+if [[ " $* " != *" --skip-models "* ]]; then
+  echo "--- 4b/5 estimators: salary, work arrangement, seniority, country table $(date '+%H:%M:%S')"
+  EXPORT_DIR="$OUT" uv run scripts/train-salary.py 2>&1 | grep -v Warning
+  EXPORT_DIR="$OUT" uv run scripts/train-arrangement.py 2>&1 | grep -v Warning
+  EXPORT_DIR="$OUT" uv run scripts/train-seniority.py 2>&1 | grep -v Warning
+  EXPORT_DIR="$OUT" uv run scripts/build-city-table.py
+  EXPORT_DIR="$OUT" uv run scripts/build-location-table.py 2>&1 | grep -v Warning   # embeds only new location strings (pennies)
+else
+  echo "--- 4b/5 estimators skipped (--skip-models); carrying yesterday's model files forward"
+  mkdir -p "$OUT/web"; for f in salary-model.json arrangement-model.json seniority-model.json location-countries.json; do
+    [ -f "export/latest/web/$f" ] && [ ! -f "$OUT/web/$f" ] && cp "export/latest/web/$f" "$OUT/web/$f" || true; done
+fi
 
 ln -sfn "$DATE" export/latest
 echo "export/latest -> $DATE"
