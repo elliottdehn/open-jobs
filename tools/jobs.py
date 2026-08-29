@@ -20,6 +20,7 @@ import numpy as np
 np.seterr(all="ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from locparse import parse as parse_location, eligibility as loc_eligibility
+from seniority import extract as seniority_of, FROM_ENRICH as SENIORITY_FROM_ENRICH
 from salary import extract as extract_salary  # Apple Accelerate emits spurious divide/overflow warnings on large matmuls
 
 BASE = os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev")
@@ -238,10 +239,20 @@ def location_table():
     except Exception:
         return None
 
+def seniority_model():
+    """Seniority estimator (softmax on the embedding -> title levels), published with the index; cached in work/."""
+    p = os.path.join(WORK, "seniority-model.json")
+    try:
+        if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
+            open(p, "w", encoding="utf-8").write(json.dumps(get("/data/seniority-model.json")))
+        m = json.load(open(p, encoding="utf-8")); return np.asarray(m["W"], dtype=np.float32), np.asarray(m["b"], dtype=np.float32), m["classes"], float(m.get("threshold", 0.7)), m
+    except Exception:
+        return None
+
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
-    sm = salary_model(); am = arrangement_model(); lt = location_table(); n_est_rm = 0; n_est_co = 0
+    sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
     # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
     seen = set(); uniq = []
     for r in rows:
@@ -276,6 +287,16 @@ def cmd_html(a):
         if coe:
             n_est_co += 1
             if el is None and elr == "no location info": elr = f"no stated country (est. {coe['country']} {coe['p']:.0%})"
+        # seniority: the title, else the enrichment, else the estimator, else "mid" by default
+        sn = seniority_of(r[3]) or SENIORITY_FROM_ENRICH.get((e or {}).get("seniority") or "")
+        sne = None
+        if not sn:
+            if snm is not None:
+                vec_s = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec_s = vec_s / (np.linalg.norm(vec_s) + 1e-9)
+                z = snm[0] @ vec_s + snm[1]; z = z - z.max(); pr = np.exp(z); pr /= pr.sum(); k = int(pr.argmax())
+                sne = {"v": snm[2][k], "p": round(float(pr[k]), 2)} if pr[k] >= snm[3] else {"v": "mid", "p": None}
+            else: sne = {"v": "mid", "p": None}
+            n_est_sn += 1
         rm_known = (e or {}).get("work_arrangement") if e and e.get("work_arrangement") != "unspecified" else loc["remote"]
         rme = None
         if am is not None and rm_known == "unknown":
@@ -296,7 +317,7 @@ def cmd_html(a):
             est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
         jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
-                     "rm": rm_known, "rme": rme, "coe": coe, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
+                     "rm": rm_known, "rme": rme, "coe": coe, "sn": sn, "sne": sne, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
     # fine groups over the pooled slice (what the "What?" step shows)
@@ -311,6 +332,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
+    if snm is not None: print(f"seniority estimates from the published model (n={snm[4]['n']:,}, holdout {snm[4]['holdout']['accuracy']:.0%}): {n_est_sn} jobs whose title doesn't state a level get one (model at p>={snm[3]}, else mid)")
     if lt is not None: print(f"country estimates from the published location table (n={lt['n']:,}, held-out accuracy {lt['holdout_accuracy']:.1%}): {n_est_co} jobs with no stated country get an estimate")
     if am is not None: print(f"work arrangement estimates from the published model (n={am[4]['n']:,}, holdout {am[4]['holdout']['accuracy']:.0%}): {n_est_rm} jobs with unknown arrangement get an estimate at p>={am[3]}")
     if sm is not None: print(f"salary estimates from the published model (n={sm[3]['n']:,}, ±{100*(np.exp(sm[2])-1):.0f}%): {sum(1 for j in jobs if not j['sal'])} jobs without a stated salary get an estimated band")

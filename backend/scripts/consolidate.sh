@@ -31,6 +31,7 @@ EXPORT_DIR="$OUT" uv run scripts/build-manifest.py
 echo "--- 4b/5 estimators: salary (ridge) + work arrangement (softmax) from the embeddings $(date '+%H:%M:%S')"
 EXPORT_DIR="$OUT" uv run scripts/train-salary.py 2>&1 | grep -v Warning
 EXPORT_DIR="$OUT" uv run scripts/train-arrangement.py 2>&1 | grep -v Warning
+EXPORT_DIR="$OUT" uv run scripts/train-seniority.py 2>&1 | grep -v Warning
 EXPORT_DIR="$OUT" uv run scripts/build-city-table.py
 EXPORT_DIR="$OUT" uv run scripts/build-location-table.py 2>&1 | grep -v Warning   # embeds only new location strings (pennies)
 
