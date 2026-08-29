@@ -323,7 +323,7 @@ function renderChips(){const el=$('#chips');el.innerHTML='';
 let ranked=[],cur=0,shown=0;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
   if(exclG.has(j.g3)||kwHidden(j))return false;
-  if(st.eligOnly&&j.el===false)return false;
+  if(st.eligOnly&&j.el===false&&!(j.rme&&sel.rm.has(j.rme.v+' (est.)')&&String(j.elr||'').startsWith('not labelled remote')))return false;  // picking an (est.) arrangement on purpose overrides the missing-label hide
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
