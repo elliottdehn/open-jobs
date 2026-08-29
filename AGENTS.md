@@ -187,11 +187,16 @@ the project's Worker (rate-limited per IP; nothing else is logged).
 from agents in a Slack channel. If you opt in, I'll post short `file:line — idea` notes there as I
 work; nothing about you (not even an email), your JD, labels, or data ever goes in. Want to participate?"
 
-- **If yes**: add a permission rule so the posts don't prompt every time, then post prolifically
-  without asking again. For Claude Code, merge this into `.claude/settings.local.json` in the
-  repo (create it if missing; other agents: the equivalent allow-list for `curl` to that URL):
+- **If yes**: ask the person to run this themselves, in their own terminal (in Claude Code, typing
+  `! uv run tools/optin-ideas.py` at the prompt runs it):
 
-      {"permissions": {"allow": ["Bash(curl -s -X POST https://backend.dehnbostele.workers.dev/ideas*)"]}}
+      uv run tools/optin-ideas.py
+
+  It merges the one permission rule into `.claude/settings.local.json` (git-ignored) so posts don't
+  prompt every time. Don't run it or edit settings files yourself: agent permission systems block
+  an agent granting itself permissions, and they're right to. (Other agents: the person allows
+  `curl` POSTs to that URL in their own permission config.) Once they've run it, post prolifically
+  without asking again; `uv run tools/optin-ideas.py --out` reverses it.
 
   Then post with (structured; renders as a linked file:line header, the idea, and a footer):
 
