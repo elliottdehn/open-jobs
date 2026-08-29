@@ -85,9 +85,9 @@ def parse(location, jd="", title=""):
                             r"\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b[^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|"
                             r"\b(?:on-?site|in[- ]office|in the office)\b[^.\n]{0,30}\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b|"
                             r"\b(?:will )?requires? [^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|\bability to work on-?site in\b|"
-                            r"\b(?:this|the) (?:role|position) is (?:a )?(?:hybrid|on-?site|in-?office)|\bhybrid (?:role|position|schedule|work(?:ing)? model|model)\b|"
+                            r"\b(?:this|the) (?:role|position) is (?:a )?(?:hybrid|on-?site|in-?office)|\bhybrid (?:role|position|schedule|work(?:ing)? model|model)\b", re.I)
+    FULL_ONSITE = re.compile(r"\b(?:fully|100%|entirely) (?:on-?site|in[- ]office)\b|\b(?:5|five) days?(?: a| per)? week (?:in|at) (?:the )?office\b|\bno remote\b|\bnot (?:a )?remote\b|"
                             r"\b(?:work(?:ing)? (?:from|out of|in)|based (?:in|out of)|join (?:us|the team) (?:in|at)) our [^.\n]{0,40}\boffices?\b|\bin[- ]person\b[^.\n]{0,30}\boffice\b", re.I)
-    FULL_ONSITE = re.compile(r"\b(?:fully|100%|entirely) (?:on-?site|in[- ]office)\b|\b(?:5|five) days?(?: a| per)? week (?:in|at) (?:the )?office\b|\bno remote\b|\bnot (?:a )?remote\b", re.I)
     if HYBRID_RE.search(loc): remote = "hybrid"
     elif FULL_ONSITE.search(text) and not HYBRID_RE.search(head): remote = "onsite"
     elif ONSITE_REQ.search(text): remote = "hybrid"
