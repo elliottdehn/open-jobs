@@ -47,7 +47,11 @@ def extract(text):
         if period is None: period = "hour" if hi < 500 else "year" if hi >= 20000 else None
         if period is None or hi <= 0: continue
         cur = CUR.get(c, c.upper()); f = _cap(cur)
+        # a k-suffixed range is annual whatever the surrounding prose says ("$91k - $105K … on a daily basis")
+        if m.group(3) and m.group(7) and hi >= 20000 * f: period = "year"
         if period == "hour" and not (5 * f <= hi <= 500 * f): continue
+        if period == "day" and not (20 * f <= hi <= 5_000 * f): continue
+        if period == "week" and not (100 * f <= hi <= 25_000 * f): continue
         if period == "year" and not (8000 * f <= hi <= 2_000_000 * f): continue
         if period == "month" and not (500 * f <= hi <= 100_000 * f): continue
         score = 2 + (1 if CONTEXT.search(before) else 0) + (0.5 if hi != lo else 0)
@@ -64,8 +68,12 @@ def extract(text):
             if period is None:
                 if v >= 20000 * f: period = "year"
                 else: continue
+            if m.group(3) and v >= 20000 * f: period = "year"  # "$95k" is annual regardless of nearby prose
             if period == "year" and not (8000 * f <= v <= 2_000_000 * f): continue
             if period == "hour" and not (5 * f <= v <= 500 * f): continue
+            if period == "day" and not (20 * f <= v <= 5_000 * f): continue
+            if period == "week" and not (100 * f <= v <= 25_000 * f): continue
+            if period == "month" and not (500 * f <= v <= 100_000 * f): continue
             best = {"min": v, "max": v, "currency": cur, "period": period, "raw": t[m.start():m.end()].strip(), "_s": 1}; break
     if not best: return None
     mult = {"hour": 2080, "day": 260, "week": 52, "month": 12, "year": 1}[best["period"]]
@@ -75,5 +83,6 @@ def extract(text):
     return best
 
 if __name__ == "__main__":
-    for s in ["The base salary range for this role is $180,000 - $220,000 per year plus equity.", "Compensation: $85–$110/hour, W2", "Salary: £70,000 to £90,000 depending on experience", "Pay: €65k - €80k", "USD 150K - 190K annually", "We were founded in 2015 and serve 2,000 - 5,000 customers", "Base pay range: $190,000.00 - $250,000.00", "Rate: $65 per hour", "Total compensation of ₹25,00,000 - ₹40,00,000", "salary 120k-150k"]:
+    for s in ["The base salary range for this role is $180,000 - $220,000 per year plus equity.", "Compensation: $85–$110/hour, W2", "Salary: £70,000 to £90,000 depending on experience", "Pay: €65k - €80k", "USD 150K - 190K annually", "We were founded in 2015 and serve 2,000 - 5,000 customers", "Base pay range: $190,000.00 - $250,000.00", "Rate: $65 per hour", "Total compensation of ₹25,00,000 - ₹40,00,000", "salary 120k-150k",
+              "OTE compensation: $91k - $105K (base + variable) Work on a daily basis with the founding team", "Pay: $200/day plus expenses", "Stipend of $50 weekly"]:
         print(f"{s[:60]:60s} -> {extract(s)}")
