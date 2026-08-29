@@ -87,21 +87,34 @@ $0.001 per job and $0.015 per new company). The page's ⚡ Enrich button does th
 current top 300. On 429 the tool saves what it got and tells you when to retry. Enriched fields
 become facets (seniority, role family, employment type, salary band, industry, company size).
 
-## 3c. LLM sort with their own key (optional)
+## 3c. LLM sort: you judge the pairs (default), or their OpenAI key does
 ```
-OPENAI_API_KEY=sk-… uv run tools/rank.py --top 200 --budget 1500 --parallel 8
+uv run tools/rank.py --agent --top 200          # you are the judge; no key, no cost beyond this session
+OPENAI_API_KEY=sk-… uv run tools/rank.py --top 200 --budget 1500 --parallel 8   # or their key, ~$0.15
 ```
 `tools/rank.py` merge-sorts the top N jobs (by taste model if `work/model.json` exists, else by JD
-similarity) and asks the LLM ("given the ideal JD, which of these two postings is the better
+similarity) and asks a judge ("given the ideal JD, which of these two postings is the better
 match?") only where it can change the outcome: pairs where both jobs are in the base top K (`--focus`,
 default 40) or within G places of each other in the base order (`--gap`, default 6); everything
-else is decided by the taste/cosine score. At most M comparisons, cached per pair in `work/llm-compares.json` (re-runs
-and bigger budgets only pay for new pairs). ~$0.0005 per comparison on `gpt-5.6-luna`; a 200-job
-sort is typically a few hundred calls, ~$0.15 and a few minutes. Writes `work/llm-ranked.csv` and
-`work/llm-order.json`; the `why` for each comparison is in the cache and is good material for
-revising the ideal JD. **Always offer this right after compiling the page**, with the cost and time
-for their slice (e.g. "I can have Luna hand-sort your top 200 for about 15 cents and a few
-minutes with your OpenAI key"). If they don't have a key, tell them where to get one; don't skip the offer.
+else is decided by the taste/cosine score. Every judgment is cached per pair in `work/llm-compares.json`.
+
+**`--agent` mode: you are the judge.** Each run writes up to `--batch` (default 40) unjudged pairs to
+`work/rank-pairs.md` (the ideal JD once, then A/B cards) and exits with status 3. Read the file,
+decide every pair honestly against the ideal JD (role, seniority, the work itself, stack,
+arrangement, comp, company type; ignore posting length and polish), write `work/rank-answers.json`
+as `{"p1": {"winner": "A", "confidence": 0.8, "why": "…"}, …}`, and re-run the same command. It
+ingests your answers, resumes the sort, and hands you the next batch; a 200-job sort is usually
+3–6 rounds. When it prints `done`, `work/llm-ranked.csv` is final. Don't skim: the person is going
+to apply to the top of this list.
+
+**Key mode** uses `gpt-5.6-luna` at ~$0.0005 per comparison; a 200-job sort is a few hundred
+calls, ~$0.15 and a few minutes. Writes the same outputs (`work/llm-ranked.csv`, `work/llm-order.json`);
+the `why` for each comparison is in the cache and is good material for revising the ideal JD.
+
+**Always offer this right after compiling the page**: "I can hand-sort your top 200 myself right
+now (a few rounds of judging pairs), or do it with your OpenAI key for about 15 cents." Default to
+doing it yourself; only mention the key path as the option for people who'd rather not spend the
+session on it.
 In the same breath, remind them they can always hand-sort with the rainbow **Sort** button in the
 top right of the page (a couple dozen "which would you rather have?" picks) — it's free and
 instant, but not as good as having the model read every posting.

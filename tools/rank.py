@@ -18,7 +18,17 @@ work/llm-compares.json (pair-keyed, A/B order randomized per call), so re-runs a
 --budget later only pays for new pairs. Output: work/llm-ranked.csv, work/llm-order.json.
 Cost: ~$0.0005 per LLM comparison on gpt-5.6-luna. With the defaults (--focus 40, --gap 6) a
 200-job sort uses a few hundred calls (~$0.15) and a few minutes; raise --focus/--gap to spend
-more of the budget, lower them to spend less."""
+more of the budget, lower them to spend less.
+
+No key? The coding agent driving this repo can be the judge instead (--agent):
+
+  uv run tools/rank.py --agent --top 200 [--batch 40]
+
+Same sort, but on a cache miss the pair is written to work/rank-pairs.md (readable: the ideal JD
+once, then A/B cards) and work/rank-pairs.json. The agent reads the .md, judges every pair, writes
+work/rank-answers.json as {"<pair id>": {"winner": "A"|"B", "confidence": 0-1, "why": "..."}}, and
+re-runs the same command. Answers land in the same cache; the sort resumes and emits the next batch,
+until it prints "done". A 200-job sort is usually 3-6 batches. Exit status 3 means "pairs pending"."""
 import argparse, base64, json, os, random, sys, threading, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -33,9 +43,11 @@ ap.add_argument("--model", default="gpt-5.6-luna")
 ap.add_argument("--key", default=os.environ.get("OPENAI_API_KEY"))
 ap.add_argument("--excerpt", type=int, default=1500, help="chars of each JD sent per comparison")
 ap.add_argument("--focus", type=int, default=40, help="K: ask the LLM whenever both jobs are in the base top K (the region where rank matters)")
+ap.add_argument("--agent", action="store_true", help="no API: write pairs for the coding agent to judge, ingest work/rank-answers.json, repeat")
+ap.add_argument("--batch", type=int, default=40, help="agent mode: max pairs to hand over per run")
 ap.add_argument("--gap", type=int, default=6, help="G: outside the top K, ask the LLM only when the two jobs are within G places of each other in the base order; otherwise trust it")
 a = ap.parse_args()
-if not a.key: sys.exit("set OPENAI_API_KEY (or --key)")
+if not a.key and not a.agent: sys.exit("set OPENAI_API_KEY (or use --agent to let the coding agent judge)")
 
 # ---------- load slice + base order ----------
 import duckdb
@@ -67,6 +79,17 @@ print(f"{N} jobs to sort, {levels} merge levels, ≈{N * levels:,} comparisons f
 cache_path = os.path.join(WORK, "llm-compares.json")
 cache = json.load(open(cache_path)) if os.path.exists(cache_path) else {}
 lock = threading.Lock(); used = [0]; spent = [0.0]; over_budget = [False]
+needed = []; needed_keys = set()  # agent mode: pairs awaiting judgment this run
+pairs_json = os.path.join(WORK, "rank-pairs.json"); pairs_md = os.path.join(WORK, "rank-pairs.md"); answers_path = os.path.join(WORK, "rank-answers.json")
+if a.agent and os.path.exists(answers_path) and os.path.exists(pairs_json):
+    asked = json.load(open(pairs_json)); answers = json.load(open(answers_path)); n_in = 0
+    for pid, ans in answers.items():
+        q = asked.get(pid)
+        if not q or str(ans.get("winner", "")).upper() not in ("A", "B"): continue
+        win = q["A"] if str(ans["winner"]).upper() == "A" else q["B"]; lose = q["B"] if win == q["A"] else q["A"]
+        cache[q["id"]] = {"winner": win, "loser": lose, "confidence": ans.get("confidence"), "why": ans.get("why"), "model": "agent"}; n_in += 1
+    json.dump(cache, open(cache_path, "w")); os.remove(answers_path)
+    print(f"ingested {n_in} agent answers from work/rank-answers.json ({len(cache)} cached total)")
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["winner", "confidence", "why"],
           "properties": {"winner": {"type": "string", "enum": ["A", "B"]}, "confidence": {"type": "number"}, "why": {"type": "string"}}}
 INSTR = ("You are helping one specific person find the job they want. You will be given their ideal job description, "
@@ -81,6 +104,9 @@ def llm_compare(x, y):
     ck = kx + "||" + ky if kx < ky else ky + "||" + kx
     with lock:
         if ck in cache: return cache[ck]["winner"] == kx
+        if a.agent:
+            if ck not in needed_keys and len(needed) < a.batch: needed_keys.add(ck); needed.append((ck, x, y))
+            over_budget[0] = True; return None
         if used[0] >= a.budget: over_budget[0] = True; return None
         used[0] += 1
     flip = random.random() < 0.5
@@ -145,13 +171,25 @@ while len(runs) > 1:
     json.dump(cache, open(cache_path, "w"))
 final = runs[0]
 json.dump(cache, open(cache_path, "w"))
+if a.agent and needed:
+    asked = {}; md = ["# Pairs to judge\n", "For each pair, decide which posting is the better match for THIS person's ideal job description: role, seniority, the work itself, stack, arrangement/location, compensation if stated, company type. Ignore posting length and polish. If genuinely equal, pick the one whose day-to-day work is closer to the ideal.\n",
+                      f"Write `work/rank-answers.json` as `{{\"<pair id>\": {{\"winner\": \"A\"|\"B\", \"confidence\": 0-1, \"why\": \"one sentence\"}}}}` for every pair below, then re-run `uv run tools/rank.py --agent --top {a.top}`.\n",
+                      "## Ideal job description\n", ideal_text[:4000], "\n"]
+    for n, (ck, x, y) in enumerate(needed, 1):
+        A, B = (y, x) if random.random() < 0.5 else (x, y); pid = f"p{n}"
+        asked[pid] = {"id": ck, "A": key(A), "B": key(B)}
+        md += [f"\n---\n## {pid}\n", f"### A: {A[3]} | {A[4]} | {A[5]}\n", (A[7] or "")[:a.excerpt], "\n", f"### B: {B[3]} | {B[4]} | {B[5]}\n", (B[7] or "")[:a.excerpt], "\n"]
+    json.dump(asked, open(pairs_json, "w")); open(pairs_md, "w").write("\n".join(md))
+    print(f"\n{len(needed)} pairs need your judgment -> work/rank-pairs.md  (write work/rank-answers.json, then re-run this command). Partial ranking below.")
 # ---------- outputs ----------
 outp = os.path.join(WORK, "llm-ranked.csv")
 with open(outp, "w") as f:
     f.write("rank,title,company,location,url,key\n")
     for n, r in enumerate(final, 1):
         f.write(f"{n},\"{(r[3] or '').replace(chr(34), chr(39))}\",\"{(r[4] or '').replace(chr(34), chr(39))}\",\"{(r[5] or '').replace(chr(34), chr(39))}\",{r[6]},{key(r)}\n")
-json.dump({"model": a.model, "top": N, "comparisons": used[0], "usd": round(spent[0], 4), "order": [key(r) for r in final], "budget_exhausted": over_budget[0]}, open(os.path.join(WORK, "llm-order.json"), "w"))
+json.dump({"model": "agent" if a.agent else a.model, "top": N, "pending": len(needed), "comparisons": used[0], "usd": round(spent[0], 4), "order": [key(r) for r in final], "budget_exhausted": over_budget[0]}, open(os.path.join(WORK, "llm-order.json"), "w"))
 print(f"\ndone: {stats['llm']} LLM decisions ({used[0]} new, ${spent[0]:.2f}), {stats['base']} decided by base order, {len(cache)} cached total, {time.time() - t0:.0f}s" + (" — budget ran out; remainder by base order" if over_budget[0] else ""))
 print(f"wrote {outp} and {WORK}/llm-order.json\nTop 15:")
 for n, r in enumerate(final[:15], 1): print(f"  {n:2d}. {r[3][:55]:55s} | {r[4] or '':22s} | {(r[5] or '')[:24]}")
+if a.agent and needed: sys.exit(3)
+if a.agent: print("done: no pending pairs; work/llm-ranked.csv is final")
