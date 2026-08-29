@@ -74,14 +74,29 @@ def _one(seg, out):
     # an explicit country/state wins over a country inferred from a city name (Vienna, VA is not Austria)
     out["countries"] |= explicit if explicit else inferred
 
-def parse(location, jd=""):
+def parse(location, jd="", title=""):
     out = {"countries": set(), "regions": set(), "cities": set(), "remote_hint": False}
     for seg in _split(location or ""): _one(seg, out)
-    loc = (location or "").lower(); head = (jd or "")[:2500].lower()
-    if HYBRID_RE.search(loc) or HYBRID_RE.search(head): remote = "hybrid"
+    loc = ((location or "") + " | " + (title or "")).lower(); text = (jd or "").lower(); head = text[:2500]
+    # An explicit in-office requirement anywhere in the JD beats a "Remote" location (many "Remote - US"
+    # postings then say "anchor days Mon/Tue/Fri" or "Monday-Thursday onsite"). Requirement-shaped phrases
+    # only, so "hybrid cloud", "onsite interview", "for in-office employees" don't count.
+    ONSITE_REQ = re.compile(r"\b(?:\d|one|two|three|four|five)\+? days?(?: a| per| each)? week (?:in|at|from) (?:the |our )?office|anchor days?|"
+                            r"\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b[^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|"
+                            r"\b(?:on-?site|in[- ]office|in the office)\b[^.\n]{0,30}\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b|"
+                            r"\b(?:will )?requires? [^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|\bability to work on-?site in\b|"
+                            r"\b(?:this|the) (?:role|position) is (?:a )?(?:hybrid|on-?site|in-?office)|\bhybrid (?:role|position|schedule|work(?:ing)? model|model)\b", re.I)
+    FULL_ONSITE = re.compile(r"\b(?:fully|100%|entirely) (?:on-?site|in[- ]office)\b|\b(?:5|five) days?(?: a| per)? week (?:in|at) (?:the )?office\b|\bno remote\b|\bnot (?:a )?remote\b", re.I)
+    if HYBRID_RE.search(loc): remote = "hybrid"
+    elif FULL_ONSITE.search(text) and not HYBRID_RE.search(head): remote = "onsite"
+    elif ONSITE_REQ.search(text): remote = "hybrid"
+    elif HYBRID_RE.search(head): remote = "hybrid"
     elif out["remote_hint"] or REMOTE_RE.search(loc): remote = "remote"
-    elif re.search(r"\b(fully|100%|entirely) remote\b|\bremote[- ]first\b|\bremote (role|position|job)\b|\bthis (role|position) is remote\b", head): remote = "remote"
     elif ONSITE_RE.search(loc) or re.search(r"\b(on-?site|in-?office) (role|position|\d+ days)\b|\bthis (role|position) is (on-?site|in-?office)\b", head): remote = "onsite"
+    # a role-specific remote statement in the JD counts anywhere; a company blurb ("remote-first", "fully remote team")
+    # counts only when the location isn't a specific city
+    elif re.search(r"\b(?:100%|fully|entirely) remote (?:role|position|job|opportunity)\b|\bremote (role|position|job)\b|\bthis (role|position) is (?:fully |100% )?remote\b|\bwork(?:ing)? remotely from anywhere\b|\bwork location:?\s*(?:fully |100% )?remote\b|\b(?:fully|100%) remote\s*(?:[—–\-:,.!]|\n|we hire|must|you)", head): remote = "remote"
+    elif not out["cities"] and re.search(r"\b(fully|100%|entirely) remote\b|\bremote[- ]first\b", head): remote = "remote"
     else: remote = "unknown"
     return {"remote": remote, "countries": sorted(out["countries"]), "regions": sorted(out["regions"]), "cities": sorted(out["cities"])[:6]}
 
@@ -110,7 +125,7 @@ def find_places(text):
         if f" {st} " in t: cs.add("US")
     return cs, rs
 
-def eligibility(pref, location, jd=""):
+def eligibility(pref, location, jd="", title=""):
     """Is a job eligible for someone with location preference `pref` (e.g. "Remote, US", "Berlin",
     "US or Canada")? Returns (eligible: bool|None, reason). None = can't tell (no location info).
     Rules: the job's countries must intersect the user's; a remote job with no country and no
@@ -120,7 +135,7 @@ def eligibility(pref, location, jd=""):
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
     if not want: return None, "no country in preference"
-    j = parse(location or "", jd)
+    j = parse(location or "", jd, title)
     have = set(j["countries"])
     for r in j["regions"]: have |= MACRO.get(r, set())
     # restricting phrases in the JD text add countries/regions to `have`

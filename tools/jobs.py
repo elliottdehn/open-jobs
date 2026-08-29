@@ -233,8 +233,8 @@ def cmd_html(a):
     enr = json.load(open(ep)) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
     jobs = []
     for r in rows:
-        loc = parse_location(r[5], r[8])
-        el, elr = loc_eligibility(pref, r[5], r[8]) if pref else (None, "")
+        loc = parse_location(r[5], r[8], r[3])
+        el, elr = loc_eligibility(pref, r[5], r[8], r[3]) if pref else (None, "")
         est = None
         if sm is not None:
             vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
