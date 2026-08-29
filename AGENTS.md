@@ -30,6 +30,13 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
   can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
+**Location preference gotchas:** `tools/locparse.py` covers every ISO-3166 country by name and
+alpha-3 code, but a few names are ambiguous and the parser resolves them deterministically: bare
+"Georgia" is the US state; write "Georgia (country)" or "Tbilisi" for the country. "Washington, DC"
+is the city. Two-letter codes after a city are US states ("Denver, CO" is Colorado, not Colombia).
+If someone's preference names an ambiguous place, ask which they mean before embedding.
+`uv run tools/test_locparse.py` is the spec; add a case whenever a location parses wrong.
+
 **Windows note:** the tools open every file as UTF-8 explicitly, so the system code page doesn't matter. If an older checkout throws `UnicodeDecodeError: 'charmap' codec…`, set `PYTHONUTF8=1` in the environment and it goes away.
 
 ## 1. Shop the ideal JD (the important part)
