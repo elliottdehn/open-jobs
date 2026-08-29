@@ -24,7 +24,7 @@
 	// Static data for the local-first client: tree manifest, group files, parquet. Served via GET /data/*.
 	"r2_buckets": [{ "binding": "DATA", "bucket_name": "jobscream-data" }],
 	// The web client (web/). Served at / ; API routes take precedence via run_worker_first.
-	"assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/embed", "/enrich", "/enrich/*", "/data/*", "/ats", "/sync", "/sync/*", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
+	"assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/embed", "/enrich", "/enrich/*", "/ideas", "/data/*", "/ats", "/sync", "/sync/*", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
 	"triggers": {
 		// Daily sweep that (re)arms every board's alarm. Boards fetch at their own fixed slot.
 		"crons": ["0 0 * * *"]

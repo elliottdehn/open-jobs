@@ -143,6 +143,19 @@ export default {
 			return Response.json({ boards, jobs, cost: { thisCallUsd: +actual.toFixed(4), hourUsd: +st.hourUsd.toFixed(4), dayUsd: +st.dayUsd.toFixed(4), hourLimit, dayLimit } }, { headers: cors });
 		}
 
+		// POST /ideas {"text": "..."} -> relays to the #multipenny-ideas Slack channel (webhook is a secret; per-IP limit)
+		if (parts[0] === "ideas" && parts.length === 1 && request.method === "POST") {
+			if (!env.SLACK_IDEAS_WEBHOOK) return Response.json({ error: "idea relay not configured" }, { status: 503, headers: cors });
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			const rl = await env.RATELIMIT.getByName(`ideas:${ip}`).hit(30, 3_600_000);
+			if (!rl.ok) return Response.json({ error: "rate limited" }, { status: 429, headers: { ...cors, "retry-after": String(Math.ceil(rl.resetMs / 1000)) } });
+			const body = (await request.json().catch(() => null)) as { text?: string } | null;
+			const text = (body?.text ?? "").toString().trim().slice(0, 2000);
+			if (text.length < 10) return Response.json({ error: "text (>= 10 chars) required" }, { status: 400, headers: cors });
+			const r = await fetch(env.SLACK_IDEAS_WEBHOOK, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+			return Response.json({ ok: r.ok }, { status: r.ok ? 200 : 502, headers: cors });
+		}
+
 		// GET /enrich/budget -> this IP's spend windows
 		if (parts[0] === "enrich" && parts[1] === "budget" && request.method === "GET") {
 			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
