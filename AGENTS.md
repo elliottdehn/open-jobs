@@ -130,6 +130,9 @@ Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signa
 - **Searches and filters** they keep applying are missing constraints (remote, a city, a stack).
   Bake them into the JD text or into a DuckDB filter you apply before compiling.
 - **Views without a label** are ambiguity; ask about two or three of them.
+- **Hidden companies** (`hide_company` events, the "✖ never show X again" button) are honored by
+  `html` at compile time, so they stay gone across re-runs. A cluster of them (staffing agencies,
+  a sector) is a filter worth adding to the JD or a DuckDB `WHERE`.
 - Many **No** in one group → re-run `fetch` after revising the JD; the neighbourhood moves with it.
 
 Loop: revise the JD → `embed` → `fetch` (new groups only; already-downloaded ones are cached in

@@ -228,6 +228,19 @@ def cmd_html(a):
         seen.add(key); uniq.append(r)
     if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
     rows = uniq
+    # "never show <company> again" clicks are logged as hide_company events; honor the final state at compile time
+    hidden = {}
+    ip = os.path.join(WORK, "interactions.jsonl")
+    if os.path.exists(ip):
+        for line in open(ip, encoding="utf-8"):
+            try: ev = json.loads(line)
+            except Exception: continue
+            if ev.get("type") == "hide_company" and ev.get("board"):
+                if ev.get("on", True): hidden[ev["board"]] = ev.get("company") or ev["board"]
+                else: hidden.pop(ev["board"], None)
+    if hidden:
+        before = len(rows); rows = [r for r in rows if f"{r[0]}/{r[1]}" not in hidden]
+        print(f"hidden companies ({len(hidden)}): {', '.join(sorted(hidden.values()))[:120]} -> dropped {before - len(rows)} postings")
     pref = (d.get("location") or "").strip()
     ep = os.path.join(WORK, "enrichment.json")
     enr = json.load(open(ep, encoding="utf-8")) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
