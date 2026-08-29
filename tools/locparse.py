@@ -65,6 +65,7 @@ def _split(loc):
     loc = loc.replace(">", ";")  # "Hungary > Budapest"
     loc = re.sub(r"[()\[\]]", ";", loc)  # "Remote (United States)" -> two segments
     loc = re.sub(r"\b(remote|hybrid|on-?site|work from home|wfh)\b\s*[-–:]?\s*", lambda m: m.group(1) + ";", loc, flags=re.I)  # "Hybrid - Austin" -> "hybrid; Austin"
+    loc = re.sub(r"(\S)\s+(remote|hybrid);", r"\1; \2;", loc, flags=re.I)  # "US Remote" -> "US; remote;"
     parts = re.split(r"\s*(?:;|\||/|:|\bor\b|\band\b|&|•)\s*", loc)  # ":" too: "US: PST or EST"
     return [p.strip(" -–,") for p in parts if p and p.strip(" -–,")]
 

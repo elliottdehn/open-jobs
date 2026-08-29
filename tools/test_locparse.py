@@ -79,6 +79,9 @@ CASES = [  # (location, jd, expected countries, expected regions)
     ("Rapid City, SD USA", "", {"US"}, {"SD"}),
     ("Store 7010 - Lebanon, TN 37090", "", {"US"}, {"TN"}),
     ("Alexandria, MN 56308", "", {"US"}, {"MN"}),
+    ("US Remote", "", {"US"}, set()),
+    ("USA Remote", "", {"US"}, set()),
+    ("Germany Remote", "", {"DE"}, set()),
     ("Boston-MA", "", {"US"}, {"MA"}),
     ("Utrecht, Utrecht, Nederland", "", {"NL"}, set()),
     ("Charleston", "", {"US"}, set()),           # bare city, unambiguous in the corpus

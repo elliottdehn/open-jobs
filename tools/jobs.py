@@ -311,7 +311,7 @@ def cmd_html(a):
         GROUPS = {int(g): {"label": T[g]["label"], "medoid": T[g]["medoid"], "size": T[g]["size"], "exemplars": T[g]["exemplars"][:4]} for g in leaves if g < len(T)}
     except Exception as e:
         print(f"(no group metadata: {e})"); GROUPS = {}
-    if lt is not None: print(f"country estimates from the published location table (n={lt['n']:,}, held-out accuracy {lt['holdout_accuracy']:.0%}): {n_est_co} jobs with no stated country get an estimate")
+    if lt is not None: print(f"country estimates from the published location table (n={lt['n']:,}, held-out accuracy {lt['holdout_accuracy']:.1%}): {n_est_co} jobs with no stated country get an estimate")
     if am is not None: print(f"work arrangement estimates from the published model (n={am[4]['n']:,}, holdout {am[4]['holdout']['accuracy']:.0%}): {n_est_rm} jobs with unknown arrangement get an estimate at p>={am[3]}")
     if sm is not None: print(f"salary estimates from the published model (n={sm[3]['n']:,}, ±{100*(np.exp(sm[2])-1):.0f}%): {sum(1 for j in jobs if not j['sal'])} jobs without a stated salary get an estimated band")
     if pref:

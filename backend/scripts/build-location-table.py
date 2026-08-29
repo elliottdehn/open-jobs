@@ -28,6 +28,7 @@ for s in strings:
     p = parse(s, "", "")
     if len(p["countries"]) == 1: placed[s] = p["countries"][0]
     elif not p["countries"]:
+        if p["regions"]: continue  # "Eastern Europe", "EMEA", "North America": a region is the right answer, not a guessed country
         bare = REMOTE_RE.sub("", s.lower()); bare = "".join(ch for ch in bare if ch.isalnum())
         if bare in ("", "job", "jobs", "position", "role", "worldwide", "global", "anywhere", "fully", "100"): continue  # "Remote", "Remote job": no country is the right answer
         unplaced.append(s)
