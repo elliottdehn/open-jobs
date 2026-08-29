@@ -15,14 +15,12 @@ That's the entire setup. It reads `AGENTS.md` and takes it from there. (It needs
 5. **Optionally lets the model read them.** With your own OpenAI key, `rank.py` merge-sorts the top of the list, asking the LLM only about near-ties. About fifteen cents.
 6. **Watches you work.** Everything you click is a local event log. Ask Claude "what do I seem to like?" and it reads the log and tells you, then tightens the JD and re-runs.
 
-On my own search, the offer I just accepted came out 4th of ~1,750. (Yes, it worked. I start soon.)
+On my own search, the offer I just accepted came out 4th of ~1,750. I start soon!
 
 ## Why it's built for a coding agent instead of a website
 
 Because the agent is the UI. Every step is a small Python script in `tools/`, and `AGENTS.md` says plainly: the code is meant to be changed. Want a facet that doesn't exist, a different ranking rule, a filter for "no staffing agencies"? Tell Claude and it edits the tool. Half of the features in the repo started as someone's bug report pasted into a chat.
 
-There's also an opt-in idea channel: if you say yes, Claude posts `file:line, idea` notes to a shared Slack as it works (anonymous, nothing about you or your search). The best ones get built.
-
-The dataset is CC0, refreshed daily, and the crawler is in the repo too. No business model, I just wanted this to exist.
+The dataset is CC0, refreshed daily, and the crawler is in the repo too. No business model, I just wanted this to exist. It skews US.
 
 repo: https://github.com/elliottdehn/open-jobs
