@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST https://hooks.slack.com/services/*)",
+      "Bash(curl -s -o /dev/null -w * -X POST https://hooks.slack.com/services/*)"
+    ]
+  }
+}
