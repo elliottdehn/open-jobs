@@ -85,7 +85,8 @@ def parse(location, jd="", title=""):
                             r"\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b[^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|"
                             r"\b(?:on-?site|in[- ]office|in the office)\b[^.\n]{0,30}\b(?:monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri)\b|"
                             r"\b(?:will )?requires? [^.\n]{0,40}\b(?:on-?site|in[- ]office|in the office)|\bability to work on-?site in\b|"
-                            r"\b(?:this|the) (?:role|position) is (?:a )?(?:hybrid|on-?site|in-?office)|\bhybrid (?:role|position|schedule|work(?:ing)? model|model)\b", re.I)
+                            r"\b(?:this|the) (?:role|position) is (?:a )?(?:hybrid|on-?site|in-?office)|\bhybrid (?:role|position|schedule|work(?:ing)? model|model)\b|"
+                            r"\b(?:work(?:ing)? (?:from|out of|in)|based (?:in|out of)|join (?:us|the team) (?:in|at)) our [^.\n]{0,40}\boffices?\b|\bin[- ]person\b[^.\n]{0,30}\boffice\b", re.I)
     FULL_ONSITE = re.compile(r"\b(?:fully|100%|entirely) (?:on-?site|in[- ]office)\b|\b(?:5|five) days?(?: a| per)? week (?:in|at) (?:the )?office\b|\bno remote\b|\bnot (?:a )?remote\b", re.I)
     if HYBRID_RE.search(loc): remote = "hybrid"
     elif FULL_ONSITE.search(text) and not HYBRID_RE.search(head): remote = "onsite"
@@ -136,7 +137,10 @@ def eligibility(pref, location, jd="", title="", arrangement=None):
     p = parse(pref or "")
     j = parse(location or "", jd, title)
     rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
-    if p["remote"] == "remote" and not p["cities"] and rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
+    if p["remote"] == "remote" and not p["cities"]:
+        if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
+        if rm == "unknown" and j["cities"] and not REMOTE_RE.search(jd or "") and not HYBRID_RE.search(jd or ""):
+            return False, f"{j['cities'][0]}, no remote mention"
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
     if not want: return None, "no country in preference"
