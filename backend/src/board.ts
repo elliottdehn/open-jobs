@@ -945,6 +945,21 @@ export class Board extends DurableObject<Env> {
 		return jobs;
 	}
 
+	/** One-row lookup for /probe: by provider id, exact URL, or URL suffix (workday ids are URL paths). */
+	async findJob(id: string | null, url: string | null): Promise<StoredJob | null> {
+		const clean = (u: string) => u.toLowerCase().replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/, "");
+		// exact id first; a substring match on the id only when it's long enough to be unambiguous (workday ids are URL paths)
+		let r: JobRow | null = id ? this.ctx.storage.sql.exec<JobRow>(`SELECT * FROM jobs WHERE id = ?1 LIMIT 1`, id).toArray()[0] ?? null : null;
+		if (!r && id && id.length >= 8) r = this.ctx.storage.sql.exec<JobRow>(`SELECT * FROM jobs WHERE instr(json_extract(data, '$.url'), ?1) > 0 LIMIT 1`, id).toArray()[0] ?? null;
+		if (!r && url) {
+			const want = clean(url);
+			const tail = url.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/+$/, "");
+			r = this.ctx.storage.sql.exec<JobRow>(`SELECT * FROM jobs WHERE instr(json_extract(data, '$.url'), ?1) > 0 LIMIT 5`, tail).toArray().find((x) => clean((JSON.parse(x.data) as Job).url) === want) ?? null;
+		}
+		if (!r) return null;
+		const j = rowToJob(r, true); j.raw = undefined; j.content = null; j.detailRaw = null; return j;
+	}
+
 	async getRuns(limit = 30): Promise<RunSummary[]> {
 		return this.ctx.storage.sql
 			.exec<{ [k: string]: SqlStorageValue }>(`SELECT * FROM runs ORDER BY id DESC LIMIT ?`, limit)

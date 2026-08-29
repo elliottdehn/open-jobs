@@ -1,8 +1,9 @@
 import { enabledAts, boardName, slugsFor, fetchers } from "./ats";
+import { resolveJobUrl } from "./probe";
 export { Board } from "./board";
 export { RateLimit } from "./ratelimit";
 export { Budget } from "./budget";
-import type { BoardState, EnrichJobsResult, JobQuery } from "./board";
+import type { BoardState, EnrichJobsResult, JobQuery, StoredJob } from "./board";
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
 import { EMBED_TAG, embedQueryText } from "./openai";
@@ -13,6 +14,8 @@ const EXPORT_CONCURRENCY = 20;
 function unauthorized(): Response {
 	return new Response("unauthorized", { status: 401 });
 }
+
+const norm = (s: string) => (s ?? "").toLowerCase().replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/, "");
 
 function authorized(request: Request, env: Env): boolean {
 	if (!env.ADMIN_TOKEN) return true; // no token configured (local dev)
@@ -65,6 +68,41 @@ export default {
 		if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
 		// ---- public endpoints (no admin token) ----
+
+		// GET /probe?url=<job url>[&board=ats/slug] -> is this posting in the corpus, and how fresh is its board?
+		//   {resolved:{ats,slug,id,hint}, crawled, board:{lastOkAt,lastStatus,jobCount,nextFetchAt,slotMs}|null,
+		//    job:{found,id,title,url,location,status,firstSeenAt,lastSeenAt,removedAt,detailStatus,embedStatus,embedding?}|null}
+		//   Public; 60 per 10 min per IP. The laptop tool (jobs.py probe) adds snapshot date, group and rank.
+		if (parts[0] === "probe" && parts.length === 1 && request.method === "GET") {
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			const rl = await env.RATELIMIT.getByName(`probe:${ip}`).hit(60, 600_000);
+			if (!rl.ok) return Response.json({ error: "rate limited", retryAfterSeconds: Math.ceil(rl.resetMs / 1000) }, { status: 429, headers: cors });
+			const jobUrl = (url.searchParams.get("url") ?? "").trim();
+			if (!jobUrl) return Response.json({ error: "url required" }, { status: 400, headers: cors });
+			try {
+			const r = resolveJobUrl(jobUrl);
+			const forced = url.searchParams.get("board");
+			if (forced && forced.includes("/")) { const [fa, ...rest] = forced.split("/"); r.ats = fa; r.slug = rest.join("/"); r.hint = undefined; }
+			if (!r.ats || !fetchers[r.ats]) return Response.json({ resolved: r, crawled: false, board: null, job: null }, { headers: cors });
+			if (!r.slug) return Response.json({ resolved: r, crawled: false, board: null, job: null }, { headers: cors });
+			const crawled = slugsFor(r.ats).includes(r.slug);
+			const stub = env.BOARD.getByName(boardName(r.ats, r.slug));
+			const meta = await stub.getMeta();
+			if (!meta) return Response.json({ resolved: r, crawled, board: null, job: null }, { headers: cors });
+			const full = (await stub.findJob(r.id, jobUrl)) as unknown as StoredJob | null;
+			let job: Record<string, unknown>;
+			if (full) {
+				job = { found: true, id: full.id, title: full.title, url: full.url, location: full.location ?? null, status: full.removedAt ? "removed" : "open",
+					firstSeenAt: full.firstSeenAt, lastSeenAt: full.lastSeenAt, removedAt: full.removedAt ?? null, publishedAt: full.publishedAt ?? null,
+					detailStatus: full.detailStatus, embedStatus: full.embedStatus, embedding: (full as { embedding?: number[] }).embedding ?? null };
+			} else job = { found: false };
+			const board = { lastOkAt: meta.lastOkAt, lastRunAt: meta.lastRunAt, lastStatus: meta.lastStatus, lastError: meta.lastError, jobCount: meta.jobCount, nextFetchAt: meta.nextFetchAt, slotMs: meta.slotMs };
+			return Response.json({ resolved: r, crawled, board, job }, { headers: cors });
+			} catch (e) {
+				const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+				return Response.json({ error: msg }, { status: 500, headers: cors });
+			}
+		}
 
 		// POST /embed  {"text": "...", "title"?: "...", "location"?: "..."} -> {vector: number[1536], recipe}
 		// IP rate limited: EMBED_RATE_LIMIT requests per EMBED_RATE_WINDOW_MS (defaults 10 / 10 min).

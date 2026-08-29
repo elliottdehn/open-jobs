@@ -135,6 +135,18 @@ Read `work/interactions.jsonl` (or `status`) after they've browsed. Useful signa
   a sector) is a filter worth adding to the JD or a DuckDB `WHERE`.
 - Many **No** in one group → re-run `fetch` after revising the JD; the neighbourhood moves with it.
 
+### "Why isn't this posting in my list?"
+```
+uv run tools/jobs.py probe <job url> [--board ats/slug]
+```
+One call answers it: whether the board is crawled and when it was last fetched, whether the job is
+in the public snapshot (newer than the build vs. ranked too low are different problems), the job's
+group and that group's rank for their JD versus how many groups you fetched, and its similarity rank
+inside the slice plus whether eligibility or a hidden company is what's hiding it. Boards are crawled
+on different days, so "the board is covered" does not mean "this job is present". Workable and
+Paylocity URLs (and Greenhouse boards embedded on company sites, `?gh_jid=`) don't name the board;
+pass `--board` if the posting isn't already in `work/jobs.parquet`.
+
 Loop: revise the JD → `embed` → `fetch` (new groups only; already-downloaded ones are cached in
 `work/groups/`) → `html` → they browse again. Each pass should tighten.
 
