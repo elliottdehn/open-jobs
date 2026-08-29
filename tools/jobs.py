@@ -279,6 +279,10 @@ def cmd_serve(a):
                 with open(log, "ab") as f: f.write(body.rstrip(b"\n") + b"\n")
                 self.send_response(204); self.end_headers()
             else: self.send_response(404); self.end_headers()
+        def do_GET(self):
+            if self.path in ("/", ""):
+                self.send_response(302); self.send_header("Location", "/search.html"); self.end_headers(); return
+            super().do_GET()
         def log_message(self, *args): pass
     with socketserver.ThreadingTCPServer(("127.0.0.1", a.port), H) as srv:
         url = f"http://127.0.0.1:{a.port}/search.html"
