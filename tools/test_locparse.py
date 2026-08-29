@@ -49,6 +49,12 @@ CASES = [  # (location, jd, expected countries, expected regions)
     ("Kathmandu, Nepal", "", {"NP"}, set()),
     ("Accra, Ghana", "", {"GH"}, set()),
     ("Lima, PER", "", {"PE"}, set()),
+    # alpha-3 codes vs US time zones and words
+    ("Remote (US: PST or EST)", "", {"US"}, set()),
+    ("Remote - EST hours", "", set(), set()),
+    ("Remote, CST timezone", "", set(), set()),
+    ("Tallinn, Estonia", "", {"EE"}, set()),  # "EST" alone is a time zone, not Estonia; use the name
+    ("Remote and Hybrid", "", set(), set()),
     ("Remote (Côte d'Ivoire)", "", {"CI"}, set()),
     ("Bolivia", "", {"BO"}, set()),
     ("Viet Nam", "", {"VN"}, set()),
@@ -103,6 +109,7 @@ EL = [
     ("Remote, Panama", "Remote - Panama", "", True),
     ("Remote, Panama", "Philadelphia, PA", "", False),
     ("Remote, US", "Remote - US", "", True),
+    ("Remote, US", "Remote (US: PST or EST)", "", True),
 ]
 for pref, loc, jd, want in EL:
     got, why = eligibility(pref, loc, jd)

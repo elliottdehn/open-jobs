@@ -38,6 +38,7 @@ COUNTRIES.update({"democratic republic of the congo": "CD", "dr congo": "CD", "d
                   "georgia (country)": "GE", "country of georgia": "GE", "republic of georgia": "GE", "sakartvelo": "GE", "georgia country": "GE"})
 CITY_COUNTRY.update({"tbilisi": "GE", "batumi": "GE", "kutaisi": "GE"})
 GEORGIAN_CITIES = {"tbilisi", "batumi", "kutaisi", "rustavi"}
+TZ_CODES = {"EST", "PST", "CST", "MST", "HST", "AKST", "EDT", "PDT", "CDT", "MDT", "GMT", "UTC", "CET", "IST", "BST", "AEST"}
 
 def _split(loc):
     # hyphenated forms: "Mexico-Remote", "US - Remote (…)", "IND-Pune-Smartworks" -> split on hyphens too when a
@@ -51,7 +52,7 @@ def _split(loc):
     loc = loc.replace(">", ";")  # "Hungary > Budapest"
     loc = re.sub(r"[()\[\]]", ";", loc)  # "Remote (United States)" -> two segments
     loc = re.sub(r"\b(remote|hybrid|on-?site|work from home|wfh)\b\s*[-–:]?\s*", lambda m: m.group(1) + ";", loc, flags=re.I)  # "Hybrid - Austin" -> "hybrid; Austin"
-    parts = re.split(r"\s*(?:;|\||/|\bor\b|\band\b|&|•)\s*", loc)
+    parts = re.split(r"\s*(?:;|\||/|:|\bor\b|\band\b|&|•)\s*", loc)  # ":" too: "US: PST or EST"
     return [p.strip(" -–,") for p in parts if p and p.strip(" -–,")]
 
 def _one(seg, out):
@@ -74,9 +75,13 @@ def _one(seg, out):
     explicit = set(); inferred = set()
     lows = [t.lower().strip(". ") for t in toks]
     for t in toks:
-        tl = t.lower().strip(". ")
+        tl = t.lower().strip(" .:")
         if tl == "washington" and any(x in ("dc", "d.c", "district of columbia") for x in lows): out["cities"].add("Washington"); continue
         if tl == "georgia" and any(x in GEORGIAN_CITIES or "country" in x for x in lows): explicit.add("GE"); continue
+        if tl in ISO3_ALL and tl not in ISO3:  # generated alpha-3: only as an upper-case token, never a US time zone (EST = Estonia)
+            tok = t.strip(" .:")
+            if tok == tok.upper() and tok not in TZ_CODES and not re.search(r"time ?zone|hours|\b(pst|est|cst|mst)\b", low): explicit.add(ISO3_ALL[tl])
+            continue
         if tl in COUNTRIES: explicit.add(COUNTRIES[tl]); continue
         if t.upper() in US_STATES and (len(t) == 2): explicit.add("US"); out["regions"].add(t.upper()); continue
         if tl in STATE_BY_NAME: explicit.add("US"); out["regions"].add(STATE_BY_NAME[tl]); continue
