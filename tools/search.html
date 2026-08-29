@@ -286,7 +286,7 @@ async function enrichTop(n=300){
   }
   event({type:'enrich',n:done,usd:spent});btn.textContent=`⚡ Enrich top 300 (${done} added, $${spent.toFixed(2)})`;btn.disabled=false;rebuildFacets();renderFacets();render(false)}
 const PREF_REMOTE_ONLY=/\b(remote|work from home|wfh|anywhere)\b/i.test(PREF||'')&&!/\b(hybrid|on-?site)\b/i.test(PREF||'');
-function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(e.work_arrangement&&e.work_arrangement!=='unspecified'){j.rm=e.work_arrangement;if(PREF_REMOTE_ONLY&&(j.rm==='onsite'||j.rm==='hybrid')&&j.el!==false){j.el=false;j.elr=j.rm+' (you asked for remote)'}}}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
+function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(e.work_arrangement&&e.work_arrangement!=='unspecified'){j.rm=e.work_arrangement;if(PREF_REMOTE_ONLY){if((j.rm==='onsite'||j.rm==='hybrid')&&j.el!==false){j.el=false;j.elr=j.rm+' (you asked for remote)'}else if(j.rm==='remote'&&j.elr==='not labelled remote'){j.el=true;j.elr='remote (enrichment)'}}}}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
 $('#enrichbtn').onclick=()=>enrichTop(300);
 $('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
 $('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');

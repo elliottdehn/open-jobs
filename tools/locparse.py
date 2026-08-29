@@ -139,10 +139,11 @@ def eligibility(pref, location, jd="", title="", arrangement=None):
     p = parse(pref or "")
     j = parse(location or "", jd, title)
     rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
+    # remote-only preference: the job must actually be labelled remote (location, title, or an explicit
+    # "this role is remote" statement). Unknown is not remote.
     if p["remote"] == "remote" and not p["cities"]:
         if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
-        if rm == "unknown" and j["cities"] and not REMOTE_WORDS.search(jd or "") and not HYBRID_RE.search(jd or ""):
-            return False, f"{j['cities'][0]}, no remote mention"
+        if rm != "remote": return False, "not labelled remote"
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
     if not want: return None, "no country in preference"
