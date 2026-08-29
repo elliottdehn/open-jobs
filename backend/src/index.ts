@@ -144,27 +144,27 @@ export default {
 		}
 
 		// POST /ideas -> relays an idea to the #multipenny-ideas Slack channel, formatted (Block Kit).
-		//   body: {"file":"tools/jobs.py","line":123,"idea":"…","via":"email"}  or  {"text":"<file:line> — <idea>\n_via <email>_"}
+		//   body: {"file":"tools/jobs.py","line":123,"idea":"…","tags":[...]}  or  {"text":"<file:line> — <idea>"}. No identity is collected; a `via` field is ignored.
 		//   webhook is a secret; 30/hour per IP.
 		if (parts[0] === "ideas" && parts.length === 1 && request.method === "POST") {
 			if (!env.SLACK_IDEAS_WEBHOOK) return Response.json({ error: "idea relay not configured" }, { status: 503, headers: cors });
 			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
 			const rl = await env.RATELIMIT.getByName(`ideas:${ip}`).hit(30, 3_600_000);
 			if (!rl.ok) return Response.json({ error: "rate limited" }, { status: 429, headers: { ...cors, "retry-after": String(Math.ceil(rl.resetMs / 1000)) } });
-			const body = (await request.json().catch(() => null)) as { text?: string; file?: string; line?: number | string; idea?: string; via?: string; tags?: string[] } | null;
-			let file = (body?.file ?? "").toString().trim(), line = (body?.line ?? "").toString().trim(), idea = (body?.idea ?? "").toString().trim(), via = (body?.via ?? "").toString().trim();
+			const body = (await request.json().catch(() => null)) as { text?: string; file?: string; line?: number | string; idea?: string; tags?: string[] } | null;
+			let file = (body?.file ?? "").toString().trim(), line = (body?.line ?? "").toString().trim(), idea = (body?.idea ?? "").toString().trim();
 			if (!idea && body?.text) {
-				// "<file:line> — <idea>\n_via <email>_"
+				// "<file:line> — <idea>" (a trailing "_via …_" line, from older agents, is dropped)
 				const t = body.text.toString();
 				const m = /^\s*([\w./-]+?)(?::(\d+))?\s*[—–-]+\s*([\s\S]*?)\s*(?:\n_via\s+([^_]+)_)?\s*$/.exec(t);
-				if (m) { file = m[1] ?? ""; line = m[2] ?? ""; idea = (m[3] ?? "").trim(); via = (m[4] ?? "").trim(); } else idea = t.trim();
+				if (m) { file = m[1] ?? ""; line = m[2] ?? ""; idea = (m[3] ?? "").trim(); } else idea = t.replace(/\n_via\s+[^_]+_\s*$/, "").trim();
 			}
 			idea = idea.slice(0, 1500);
 			if (idea.length < 10) return Response.json({ error: "idea (>= 10 chars) required" }, { status: 400, headers: cors });
 			const repo = "https://github.com/elliottdehn/open-jobs/blob/main/";
 			const where = file ? (line ? `<${repo}${file}#L${line}|${file}:${line}>` : `<${repo}${file}|${file}>`) : "";
 			const tags = (body?.tags ?? []).slice(0, 5).map((x) => "`" + String(x).slice(0, 24) + "`").join(" ");
-			const ctx = [via ? `👤 ${via.replace(/[<>|]/g, "")}` : "🤖 anonymous agent", tags, `<!date^${Math.floor(Date.now() / 1000)}^{date_short} {time}|now>`].filter(Boolean).join("   ·   ");
+			const ctx = ["🤖 agent", tags, `<!date^${Math.floor(Date.now() / 1000)}^{date_short} {time}|now>`].filter(Boolean).join("   ·   ");
 			// IDEAS_MENTION: a Slack member ID (U…/W…) renders as a real <@mention>; a plain "@name" relies on link_names.
 			const who = (env.IDEAS_MENTION ?? "@egd").trim();
 			const mention = /^[UW][A-Z0-9]{6,}$/.test(who) ? `<@${who}>` : who;

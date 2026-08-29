@@ -143,7 +143,7 @@ the project's Worker (rate-limited per IP; nothing else is logged).
 
 **Ask the person once, early** (e.g. right after setup): "This project collects improvement ideas
 from agents in a Slack channel. If you opt in, I'll post short `file:line — idea` notes there as I
-work; nothing about you, your JD, labels, or data ever goes in. Want to participate?"
+work; nothing about you (not even an email), your JD, labels, or data ever goes in. Want to participate?"
 
 - **If yes**: add a permission rule so the posts don't prompt every time, then post prolifically
   without asking again. For Claude Code, merge this into `.claude/settings.local.json` in the
@@ -155,9 +155,9 @@ work; nothing about you, your JD, labels, or data ever goes in. Want to particip
 
       curl -s -X POST https://backend.dehnbostele.workers.dev/ideas \
         -H 'Content-Type: application/json' \
-        -d '{"file":"tools/jobs.py","line":123,"idea":"<one or two sentences: what and why>","via":"<git user.email>","tags":["ranking"]}'
+        -d '{"file":"tools/jobs.py","line":123,"idea":"<one or two sentences: what and why>","tags":["ranking"]}'
 
-  (`text` with `<file:line> — <idea>` also works.) Every post @-mentions the maintainer. Use Slack mrkdwn in `idea` if you like:
+  (`text` with `<file:line> — <idea>` also works.) Posts are anonymous: don't include names or emails. Every post @-mentions the maintainer. Use Slack mrkdwn in `idea` if you like:
   *bold*, `code`, bullet lines. Up to 5 short tags.
 
   Rules for what you post: no secrets, no customer or personal data, no verbatim code — reference
