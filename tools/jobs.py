@@ -36,20 +36,20 @@ def get(path, binary=False):
 def manifest():
     p = os.path.join(WORK, "manifest.json"); c = os.path.join(WORK, "centroids.bin")
     if not (os.path.exists(p) and os.path.exists(c)) or time.time() - os.path.getmtime(p) > 6 * 3600:
-        m = get("/data/manifest.json"); open(p, "w").write(json.dumps(m))
+        m = get("/data/manifest.json"); open(p, "w", encoding="utf-8").write(json.dumps(m))
         open(c, "wb").write(get("/data/centroids.bin", binary=True))
-    m = json.load(open(p))
+    m = json.load(open(p, encoding="utf-8"))
     C = np.fromfile(c, dtype=np.float16).astype(np.float32).reshape(-1, m["dims"])
     return m, C
 
 def ideal():
     p = os.path.join(WORK, "ideal.json")
     if not os.path.exists(p): sys.exit("no work/ideal.json — run `embed --file work/ideal-jd.md` first")
-    d = json.load(open(p)); v = np.asarray(d["vector"], dtype=np.float32); v /= np.linalg.norm(v) + 1e-9
+    d = json.load(open(p, encoding="utf-8")); v = np.asarray(d["vector"], dtype=np.float32); v /= np.linalg.norm(v) + 1e-9
     return d, v
 
 def cmd_embed(a):
-    text = open(a.file).read()
+    text = open(a.file, encoding="utf-8").read()
     body = json.dumps({"text": text, "title": a.title or "", "location": a.location or ""}).encode()
     req = urllib.request.Request(f"{BASE}/embed", data=body, headers={**UA, "content-type": "application/json"}, method="POST")
     try:
@@ -57,7 +57,7 @@ def cmd_embed(a):
     except urllib.error.HTTPError as e:
         sys.exit(f"embed failed: HTTP {e.code} {e.read()[:200].decode(errors='replace')}")
     out = {"vector": d["vector"], "recipe": d["recipe"], "source": a.file, "embedded_at": int(time.time() * 1000), "title": a.title, "location": a.location}
-    json.dump(out, open(os.path.join(WORK, "ideal.json"), "w"))
+    json.dump(out, open(os.path.join(WORK, "ideal.json"), "w", encoding="utf-8"))
     print(f"embedded {a.file} -> {WORK}/ideal.json ({d['recipe']})")
 
 def nice_company(c):
@@ -84,7 +84,7 @@ def cmd_groups(a):
     print(f"{'id':>6} {'sim':>5} {'jobs':>6} {'titles':>6}  label  [exemplars]")
     for n, s in rows:
         print(f"{n['id']:>6} {s:5.2f} {n['size']:>6} {n.get('distinct_titles', ''):>6}  {node_label(n)[:150]}")
-    json.dump([{"id": n["id"], "sim": s, "size": n["size"], "label": n["label"], "exemplars": n["exemplars"]} for n, s in rows], open(os.path.join(WORK, "groups.json"), "w"), indent=1)
+    json.dump([{"id": n["id"], "sim": s, "size": n["size"], "label": n["label"], "exemplars": n["exemplars"]} for n, s in rows], open(os.path.join(WORK, "groups.json"), "w", encoding="utf-8"), indent=1)
     print(f"\nwrote {WORK}/groups.json. Next: `fetch --groups <ids>` (maybe) — or `fetch --top N` for the N nearest.")
 
 def leaves_under(m, n):
@@ -107,7 +107,7 @@ def cmd_fetch(a):
     for li, leaf in enumerate(leaves):
         p = os.path.join(gdir, f"{leaf['id']}.json")
         if not os.path.exists(p): open(p, "wb").write(get(f"/data/groups/{leaf['id']}.json", binary=True))
-        g = json.load(open(p))
+        g = json.load(open(p, encoding="utf-8"))
         for j in g["jobs"]:
             vec = np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32)
             rows.append((j["ats"], j["slug"], j["id"], j["title"], j["company"], j["location"], j["url"], j.get("seen") or 0, j.get("jd") or "", leaf["id"], float(vec @ v), j["v"]))
@@ -133,7 +133,7 @@ def cmd_enrich(a):
     keys = [(r[0], r[1], r[2]) for r in rows]  # ordered by sim desc
     if not a.all: keys = keys[: a.top]
     p = os.path.join(WORK, "enrichment.json")
-    store = json.load(open(p)) if os.path.exists(p) else {"jobs": {}, "boards": {}}
+    store = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {"jobs": {}, "boards": {}}
     todo = [k for k in keys if f"{k[0]}/{k[1]}#{k[2]}" not in store["jobs"]]
     print(f"{len(keys)} jobs selected, {len(todo)} not yet enriched locally; sending in batches of 100")
     spent = 0.0
@@ -143,7 +143,7 @@ def cmd_enrich(a):
         for name, b in (res.get("boards") or {}).items(): store["boards"][name] = b
         for key, j in (res.get("jobs") or {}).items():
             if j.get("status") == "done": store["jobs"][key] = j["enrichment"]
-        json.dump(store, open(p, "w"))
+        json.dump(store, open(p, "w", encoding="utf-8"))
         if code == 429:
             print(f"rate limited by the server: spent ${res.get('spent', {}).get('hourUsd', 0):.2f} this hour / ${res.get('spent', {}).get('dayUsd', 0):.2f} today; retry in {res.get('retryAfterSeconds')}s. Saved what came back.")
             break
@@ -211,8 +211,8 @@ def salary_model():
     p = os.path.join(WORK, "salary-model.json")
     try:
         if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
-            open(p, "w").write(json.dumps(get("/data/salary-model.json")))
-        m = json.load(open(p)); return np.asarray(m["w"], dtype=np.float32), float(m["b"]), float(m["sigma"]), m
+            open(p, "w", encoding="utf-8").write(json.dumps(get("/data/salary-model.json")))
+        m = json.load(open(p, encoding="utf-8")); return np.asarray(m["w"], dtype=np.float32), float(m["b"]), float(m["sigma"]), m
     except Exception:
         return None
 
@@ -230,7 +230,7 @@ def cmd_html(a):
     rows = uniq
     pref = (d.get("location") or "").strip()
     ep = os.path.join(WORK, "enrichment.json")
-    enr = json.load(open(ep)) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
+    enr = json.load(open(ep, encoding="utf-8")) if os.path.exists(ep) else {"jobs": {}, "boards": {}}
     jobs = []
     for r in rows:
         loc = parse_location(r[5], r[8], r[3])
@@ -263,9 +263,9 @@ def cmd_html(a):
     if pref:
         ne = sum(1 for j in jobs if j["el"] is False); nu = sum(1 for j in jobs if j["el"] is None)
         print(f"eligibility for '{pref}': {len(jobs) - ne - nu} eligible, {ne} ineligible (hidden by default), {nu} unknown")
-    html = TEMPLATE.replace("__PREF__", json.dumps(pref)).replace("__GROUPS3__", json.dumps(G3)).replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"]).read() if os.path.exists(d["source"]) else ""))
+    html = TEMPLATE.replace("__PREF__", json.dumps(pref)).replace("__GROUPS3__", json.dumps(G3)).replace("__GROUPS__", json.dumps(GROUPS)).replace("__JOBS__", json.dumps(jobs)).replace("__IDEAL__", json.dumps({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", json.dumps(open(d["source"], encoding="utf-8").read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
-    open(out, "w").write(html)
+    open(out, "w", encoding="utf-8").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")
 
 def cmd_serve(a):
@@ -295,7 +295,7 @@ def cmd_rank(a):
     d, v = ideal(); rows = load_jobs()
     labels = {}; compares = []
     if os.path.exists(a.labels):
-        for line in open(a.labels):
+        for line in open(a.labels, encoding="utf-8"):
             try: e = json.loads(line)
             except Exception: continue
             if e.get("type") == "label": labels[e["key"]] = e["value"]
@@ -322,11 +322,11 @@ def cmd_rank(a):
         score = X @ u; print("no labels (need >=1 yes and >=1 no): ranking by " + ("taste model" if pairs else "similarity to the ideal JD"))
     order = np.argsort(-score)
     out = os.path.join(WORK, "ranked.csv")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write("score,label,title,company,location,url,key\n")
         for i in order:
             r = rows[i]; f.write(f"{score[i]:.4f},{labels.get(keys[i], '')},\"{r[3].replace(chr(34), chr(39))}\",\"{(r[4] or '').replace(chr(34), chr(39))}\",\"{(r[5] or '').replace(chr(34), chr(39))}\",{r[6]},{keys[i]}\n")
-    json.dump({"recipe": d["recipe"], "w": w.tolist(), "b": float(b), "taste": u.tolist(), "labels": labels, "compares": len(pairs)}, open(os.path.join(WORK, "model.json"), "w"))
+    json.dump({"recipe": d["recipe"], "w": w.tolist(), "b": float(b), "taste": u.tolist(), "labels": labels, "compares": len(pairs)}, open(os.path.join(WORK, "model.json"), "w", encoding="utf-8"))
     print(f"wrote {out} and {WORK}/model.json. Top 10:")
     for i in order[:10]: print(f"  {score[i]:.3f}  {rows[i][3][:60]} | {rows[i][4]} | {rows[i][5]}")
 
@@ -335,11 +335,11 @@ def cmd_status(a):
         p = os.path.join(WORK, f); print(f"{'✓' if os.path.exists(p) else '·'} {f}" + (f"  ({os.path.getsize(p)/1e6:.1f} MB, {time.strftime('%H:%M', time.localtime(os.path.getmtime(p)))})" if os.path.exists(p) else ""))
     p = os.path.join(WORK, "interactions.jsonl")
     if os.path.exists(p):
-        ev = [json.loads(l) for l in open(p) if l.strip()]
+        ev = [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
         from collections import Counter
         print("interactions:", dict(Counter(e.get("type") for e in ev)), "| yes:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 1), "no:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 0))
 
-TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html")).read()
+TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read()
 
 ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")

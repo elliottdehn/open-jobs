@@ -52,5 +52,5 @@ for lam in (0.3, 1, 3, 10, 30):
 w, b = fit(X, y, best[1]); resid = y - (X @ w + b); sigma = float(resid.std())
 out = os.path.join(root, "web", "salary-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump({"recipe": tag, "dims": D, "w": [round(float(v), 6) for v in w], "b": float(b), "sigma": sigma, "n": int(N), "lambda": best[1],
-           "holdout": {"mae_log": float(best[0]), "within_20pct": float(best[2])}, "target": "log(annual USD midpoint)", "trained_at": int(time.time() * 1000)}, open(out, "w"))
+           "holdout": {"mae_log": float(best[0]), "within_20pct": float(best[2])}, "target": "log(annual USD midpoint)", "trained_at": int(time.time() * 1000)}, open(out, "w", encoding="utf-8"))
 print(f"wrote {out}: n={N:,}, lambda={best[1]}, sigma={sigma:.3f} (±{100*(np.exp(sigma)-1):.0f}%), holdout within ±20%: {best[2]:.0%}")

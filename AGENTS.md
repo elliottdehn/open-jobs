@@ -30,6 +30,8 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
   can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
+**Windows note:** the tools open every file as UTF-8 explicitly, so the system code page doesn't matter. If an older checkout throws `UnicodeDecodeError: 'charmap' codec…`, set `PYTHONUTF8=1` in the environment and it goes away.
+
 ## 1. Shop the ideal JD (the important part)
 Write `work/ideal-jd.md`: a **job description for the job this person wants**, in the same shape
 as real postings (title, location / remote policy, seniority, what they'd do day to day, must-have
