@@ -65,7 +65,10 @@ ideal_text = open(ideal["source"], encoding="utf-8").read() if os.path.exists(id
 mp = os.path.join(WORK, "model.json")
 if os.path.exists(mp):
     m = json.load(open(mp, encoding="utf-8")); w = np.asarray(m.get("taste") or m["w"], dtype=np.float32)
-    X = np.stack([np.frombuffer(base64.b64decode(r[9]), dtype=np.float32) for r in rows]); base = X @ w + float(m.get("b") or 0)
+    X = np.stack([np.frombuffer(base64.b64decode(r[9]), dtype=np.float32) for r in rows])
+    if m.get("space") == "centered" and m.get("mean"):  # the page fits in locally-centered space; reproduce it
+        X = X - np.asarray(m["mean"], dtype=np.float32); X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
+    base = X @ w + float(m.get("b") or 0)
     # kNN term from the page's model: max cosine to any yes minus max cosine to any no, weighted by the leave-one-out λ
     knn = m.get("knn") or {}
     if knn.get("yes") or knn.get("no"):
