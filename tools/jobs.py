@@ -356,6 +356,9 @@ def cmd_serve(a):
     work = os.path.abspath(WORK); log = os.path.join(work, "interactions.jsonl")
     class H(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kw): super().__init__(*args, directory=work, **kw)
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-cache")  # always revalidate; a recompiled page must never be served stale
+            super().end_headers()
         def do_POST(self):
             if self.path == "/event":
                 n = int(self.headers.get("content-length", 0)); body = self.rfile.read(n)

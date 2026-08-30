@@ -452,9 +452,9 @@ function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#sho
   for(;i<N&&i<(secAll?yes.length:(show==='yes'?ranked.length:0));i++)el.appendChild(jobEl(ranked[i],i));
   if(secAll){const simple=sort==='sim';
     const rh=head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(ref?'by similarity to “'+esc(ref.t.slice(0,50))+'”':(simple?'by cosine similarity to your ideal JD':(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD'))+' · only this section re-orders'):'');
-    if(!ref&&(sort==='model'||sort==='sim')){const tb=document.createElement('button');tb.className='btn ghost sm';tb.textContent=simple?'Switch to advanced ranking':'Switch to simple ranking';
-      tb.title=simple?'Back to the learned model (your labels, comparisons and kNN term)':'Plain cosine similarity to your ideal JD; ignores everything the model has learned';
-      tb.onclick=e=>{e.stopPropagation();$('#sort').value=simple?'model':'sim';event({type:'sort',value:$('#sort').value,via:'section-toggle'});render(true,'order')};rh.appendChild(tb)}
+    {const tb=document.createElement('button');tb.className='btn ghost sm';tb.textContent=simple?'Switch to advanced ranking':'Switch to simple ranking';
+      tb.title=simple?'Back to the learned model (your labels, comparisons and kNN term)':'Plain cosine similarity to your ideal JD; ignores everything the model has learned'+(ref?' (also clears the similar-to focus)':'');
+      tb.onclick=e=>{e.stopPropagation();if(st.simTo){st.simTo=null;save()}$('#sort').value=simple?'model':'sim';event({type:'sort',value:$('#sort').value,via:'section-toggle'});renderChips();render(true,'order')};rh.appendChild(tb)}
     el.appendChild(rh);
     for(;i<N&&i<yes.length+un.length;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}
     if(no.length){const h=head('no',(showNo?'▾':'▸')+' ✗ No',no.length,showNo?'click to collapse':'click to show');h.onclick=()=>{st.showNo=!st.showNo;save();render(false)};el.appendChild(h)}
