@@ -65,8 +65,20 @@ ideal_text = open(ideal["source"], encoding="utf-8").read() if os.path.exists(id
 mp = os.path.join(WORK, "model.json")
 if os.path.exists(mp):
     m = json.load(open(mp, encoding="utf-8")); w = np.asarray(m.get("taste") or m["w"], dtype=np.float32)
-    X = np.stack([np.frombuffer(base64.b64decode(r[9]), dtype=np.float32) for r in rows]); base = X @ w
-    print(f"base order: taste model from work/model.json")
+    X = np.stack([np.frombuffer(base64.b64decode(r[9]), dtype=np.float32) for r in rows]); base = X @ w + float(m.get("b") or 0)
+    # kNN term from the page's model: max cosine to any yes minus max cosine to any no, weighted by the leave-one-out λ
+    knn = m.get("knn") or {}
+    if knn.get("yes") or knn.get("no"):
+        kidx = {f"{r[0]}/{r[1]}#{r[2]}": i for i, r in enumerate(rows)}
+        Xn = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-9)
+        def maxcos(keys):
+            ids = [kidx[k] for k in keys if k in kidx]
+            if not ids: return np.zeros(len(rows), dtype=np.float32)
+            S = Xn @ Xn[ids].T
+            for c, i in enumerate(ids): S[i, c] = -1  # a job is not its own neighbour
+            return np.maximum(S.max(axis=1), 0)
+        base = base + float(knn.get("lambda", 1.0)) * (maxcos(knn.get("yes", [])) - maxcos(knn.get("no", [])))
+    print(f"base order: taste model from work/model.json" + (f" (+ kNN term, λ={knn.get('lambda')}, {len(knn.get('yes', []))} yes / {len(knn.get('no', []))} no)" if knn else ""))
 else:
     base = np.asarray([r[8] for r in rows], dtype=np.float32); print("base order: similarity to the ideal JD")
     # raw cosine is a weak base order: widen the region where the judge is consulted unless the user set it

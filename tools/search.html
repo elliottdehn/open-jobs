@@ -271,25 +271,40 @@ let st={labels:{},notes:{},opened:{},enrich:{},companies:{},hideCo:{}};try{st=Ob
 if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
-// ---- label model: logistic regression seeded at the ideal vector
-let w=Float32Array.from(ideal),b=0;
-function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=>st.labels[j.k]===0);
-  if(!pos.length||!neg.length){w=Float32Array.from(ideal);b=0;for(const j of JOBS)j.score=j.sim;return}
-  w=Float32Array.from(ideal);b=0;const items=[...pos,...neg],lr=.5,l2=.01;
-  for(let ep=0;ep<30;ep++)for(const j of items){const y=st.labels[j.k],p=1/(1+Math.exp(-(dot(w,j.vec)+b))),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*j.vec[i]+l2*(w[i]-ideal[i]));b-=lr*g}
-  for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(w,j.vec)+b)))}
-// ---- pairwise taste model (Bradley-Terry on vector differences)
+// ---- one taste model. Evidence: pairwise comparisons (Bradley-Terry: P(a>b)=σ(u·(va−vb))) and yes/no labels
+// (pointwise: P(yes)=σ(u·v+b)), fit jointly from the Rocchio prior (ideal shifted by the yes/no means) with L2 back
+// toward that prior. On top, a local kNN term (max cosine to any yes minus max cosine to any no) captures "more like
+// *that* one" and multi-cluster taste, which a single direction can't. Its weight λ is picked by leave-one-out on labels.
 st.compares=st.compares||[];
 const byKey=Object.fromEntries(JOBS.map(j=>[j.k,j]));
-let u=Float32Array.from(prior),taste=false;
+let u=Float32Array.from(ideal),b=0,w=u,taste=false,KNN_L=1.0,looAcc=null;
 const K_COMMITTEE=5;let committee=[];
-function fitOn(C,iters=60){const w=Float32Array.from(prior);if(!C.length)return w;const lr=.7,l2=.02;
-  for(let ep=0;ep<iters;ep++)for(const [a,b,win] of C){let s=0;for(let i=0;i<w.length;i++)s+=w[i]*(a.vec[i]-b.vec[i]);const y=win==='a'?1:0,p=1/(1+Math.exp(-s)),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*(a.vec[i]-b.vec[i])+l2*(w[i]-prior[i]))}
-  return w}
 function pairsFrom(list){return list.map(c=>[byKey[c.a],byKey[c.b],c.win]).filter(c=>c[0]&&c[1])}
-function fitPairs(){const C=pairsFrom(st.compares);u=fitOn(C);committee=[];for(let k=0;k<K_COMMITTEE;k++){const R=[];for(let i=0;i<C.length;i++)R.push(C[Math.floor(Math.random()*C.length)]);committee.push(fitOn(R,40))}}
-function predictsRecent(k=10){if(st.compares.length<k+3)return 0;const w=fitOn(pairsFrom(st.compares.slice(0,-k)));let ok=0,n=0;
-  for(const c of st.compares.slice(-k)){const a=byKey[c.a],b=byKey[c.b];if(!a||!b)continue;n++;if((dot(w,a.vec)-dot(w,b.vec)>0)===(c.win==='a'))ok++}return n?ok/n:0}
+function labelItems(exclude){const out=[];for(const j of JOBS){const y=st.labels[j.k];if((y===1||y===0)&&j.k!==exclude)out.push([j,y])}return out}
+function fitOn(C,L,iters=60){const w=Float32Array.from(prior);let bb=0;if(!C.length&&!L.length)return [w,0];const lr=.5,l2=.02,n=Math.max(1,C.length+L.length);
+  // centre the pointwise term at the prior's own score so b starts near 0
+  let c0=0;if(L.length){for(const [j] of L)c0+=dot(prior,j.vec);c0/=L.length}
+  for(let ep=0;ep<iters;ep++){
+    for(const [a,bj,win] of C){let s=0;for(let i=0;i<w.length;i++)s+=w[i]*(a.vec[i]-bj.vec[i]);const y=win==='a'?1:0,p=1/(1+Math.exp(-s)),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*(a.vec[i]-bj.vec[i])+l2*(w[i]-prior[i])/n)}
+    for(const [j,y] of L){const s=dot(w,j.vec)-c0+bb,p=1/(1+Math.exp(-s)),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*j.vec[i]+l2*(w[i]-prior[i])/n);bb-=lr*g}}
+  return [w,bb-c0]}
+function knnTerm(j,items){let best=-1,worst=-1;for(const [x,y] of items){if(x===j)continue;const c=dot(j.vec,x.vec);if(y===1){if(c>best)best=c}else if(c>worst)worst=c}
+  return (best<0?0:best)-(worst<0?0:worst)}
+function chooseLambda(){  // leave-one-out over labels: which λ predicts held-out labels best (ties → smaller λ)
+  const L=labelItems();const ys=L.filter(x=>x[1]===1).length,ns=L.length-ys;if(ys<2||ns<2||L.length<6){KNN_L=1.0;looAcc=null;return}
+  const C=pairsFrom(st.compares);const cands=[0,0.5,1,2,3];const hits=cands.map(()=>0);
+  for(const [j,y] of L){const rest=labelItems(j.k);const [wj,bj]=fitOn(C,rest,40);const lin=dot(wj,j.vec)+bj;const kn=knnTerm(j,rest);
+    cands.forEach((lam,i)=>{if(((lin+lam*kn)>0)===(y===1))hits[i]++})}
+  let bi=0;for(let i=1;i<cands.length;i++)if(hits[i]>hits[bi])bi=i;KNN_L=cands[bi];looAcc=hits[bi]/L.length}
+function fitAll(){updatePrior();const C=pairsFrom(st.compares),L=labelItems();[u,b]=fitOn(C,L);w=u;
+  committee=[];for(let k=0;k<K_COMMITTEE;k++){const R=[];for(let i=0;i<C.length;i++)R.push(C[Math.floor(Math.random()*C.length)]);const RL=[];for(let i=0;i<L.length;i++)RL.push(L[Math.floor(Math.random()*L.length)]);committee.push(fitOn(R,RL,40)[0])}
+  taste=C.length>0||L.length>0;chooseLambda();rescore()}
+function rescore(){const L=labelItems();if(!taste){for(const j of JOBS)j.score=j.pre;return}
+  for(const j of JOBS){const lin=dot(u,j.vec)+b;const kn=L.length?knnTerm(j,L):0;j.score=1/(1+Math.exp(-(lin+KNN_L*kn)))}}
+function refit(){fitAll()}
+function fitPairs(){fitAll()}
+function predictsRecent(k=10){if(st.compares.length<k+3)return 0;const [wv]=fitOn(pairsFrom(st.compares.slice(0,-k)),labelItems());let ok=0,n=0;
+  for(const c of st.compares.slice(-k)){const a=byKey[c.a],bb=byKey[c.b];if(!a||!bb)continue;n++;if((dot(wv,a.vec)-dot(wv,bb.vec)>0)===(c.win==='a'))ok++}return n?ok/n:0}
 function topSetStability(N=100){if(committee.length<2)return 0;const tops=committee.map(w=>new Set(JOBS.map(j=>[dot(w,j.vec),j.k]).sort((x,y)=>y[0]-x[0]).slice(0,N).map(x=>x[1])));let s=0,n=0;
   for(let i=0;i<tops.length;i++)for(let j=i+1;j<tops.length;j++){let inter=0;for(const k of tops[i])if(tops[j].has(k))inter++;s+=inter/(2*N-inter);n++}return s/n}
 function tasteScore(j){return dot(u,j.vec)}
@@ -342,9 +357,8 @@ function renderWhat(){const list=inScopeJobs().filter(j=>st.labels[j.k]===undefi
 function whatCount(){const P=JOBS.filter(j=>st.labels[j.k]===1).length,N=JOBS.filter(j=>st.labels[j.k]===0).length;$('#wh-n').textContent=`${P} more · ${N} less · ${inScopeJobs().length.toLocaleString()} in scope`}
 function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});step(2);renderWhat()}
 function beginPairs(){event({type:'seed_done',more:JOBS.filter(j=>st.labels[j.k]===1).map(j=>j.k),less:JOBS.filter(j=>st.labels[j.k]===0).map(j=>j.k),n:JOBS.filter(passes).length});
-  updatePrior();fitPairs();refit();renderFacets();render(true,'seed');step(3);showPair()}
-function stopCmp(){$('#cmp').classList.remove('on');fitPairs();taste=st.compares.length>0;
-  if(taste){for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(u,j.vec)-median())));$('#sort').value='model'}
+  fitAll();renderFacets();render(true,'seed');step(3);showPair()}
+function stopCmp(){$('#cmp').classList.remove('on');fitAll();if(taste)$('#sort').value='model';
   event({type:'sort_done',compares:st.compares.length,accuracy:predictsRecent(),stability:topSetStability()});render(true,'sort')}
 function median(){const v=JOBS.map(j=>dot(u,j.vec)).sort((a,b)=>a-b);return v[Math.floor(v.length/2)]||0}
 $('#intro-go').onclick=()=>{if($('#intro-skip').checked){st.sortIntroSeen=true;save()}step(1)};
@@ -436,7 +450,7 @@ function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#sho
   shown=N;
   if((secAll?yes.length+un.length:ranked.length)>N){const m=document.createElement('button');m.className='btn ghost';m.id='more';m.textContent=`Show more (${((secAll?yes.length+un.length:ranked.length)-N).toLocaleString()} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
   const nc=(st.compares||[]).length;const personalized=taste||nc||yes.length||no.length;
-  $('#stats').innerHTML=`<b>${vis.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes.length} yes · ${no.length} no · ${nc} comparisons`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
+  $('#stats').innerHTML=`<b>${vis.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes.length} yes · ${no.length} no · ${nc} comparisons${looAcc!=null?` · <span title="Leave-one-out: fit without each label, predict it. λ=${KNN_L} for the similar-to-a-yes/no term">predicts your labels ${Math.round(looAcc*100)}% held-out</span>`:''}`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
   if(reason&&['label','compare','seed','sort','enrich','similar'].includes(reason)){const what=movedIn.length?`${movedIn.length} job${movedIn.length>1?'s':''} moved into the top 20`:'order refreshed';$('#reranktxt').textContent=`Re-ranked from ${REASON[reason]} · ${what}`;$('#rerank').classList.add('show');clearTimeout(render._t);render._t=setTimeout(()=>$('#rerank').classList.remove('show'),4000)}
   prevTop=newTop;hi()}
 function badges(j,compact=false){const out=[];
@@ -480,11 +494,11 @@ document.addEventListener('keydown',e=>{
 let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render(true,'search')},250)};
 $('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render(true,'order')};$('#show').onchange=()=>render(true,'filter');
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
-$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});toast('Model, labels and comparisons copied to the clipboard as JSON')};
+$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(u,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),knn:{lambda:KNN_L,yes:Object.keys(st.labels).filter(k=>st.labels[k]===1),no:Object.keys(st.labels).filter(k=>st.labels[k]===0)},loo_accuracy:looAcc,labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});toast('Model, labels and comparisons copied to the clipboard as JSON')};
 $('#reset').onclick=()=>{if(!confirm('Wipe labels, comparisons and notes for this search? Enrichment is kept.'))return;location.search='?reset=1'};
 $('#helpbtn').onclick=()=>$('#help').classList.add('on');$('#helpclose').onclick=$('#helpok').onclick=()=>$('#help').classList.remove('on');
 $('#filtersbtn').onclick=()=>document.body.classList.toggle('filters');$('#closef').onclick=()=>document.body.classList.remove('filters');
 for(const m of ['#cmp','#help'])$(m).addEventListener('click',e=>{if(e.target===$(m)){$(m).classList.remove('on')}});
 $('#brand-title').textContent=IDEAL.title?'· '+IDEAL.title:'';
-st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();updatePrior();fitPairs();taste=st.compares.length>0;refit();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
+st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitAll();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>
