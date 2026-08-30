@@ -1,301 +1,376 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>open-jobs · local search</title>
+<title>open-jobs · search</title>
 <style>
-:root{--bg:#0b0c10;--fg:#e8e8ea;--mut:#9a9aa3;--card:#15161c;--line:#2a2b33;--acc:#7c5cff;--ok:#2ecc71;--no:#e74c3c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:2}
-header h1{margin:0;font-size:16px}header .m{color:var(--mut);font-size:12px}
-input,select{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
-input[type=text]{width:260px}
-main{display:grid;grid-template-columns:260px 1fr;gap:0;min-height:calc(100vh - 50px)}
-aside{border-right:1px solid var(--line);padding:12px;font-size:12px;overflow:auto;max-height:calc(100vh - 50px);position:sticky;top:50px}
-aside h3{margin:10px 0 4px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
-aside label{display:flex;justify-content:space-between;gap:6px;padding:2px 0;cursor:pointer;color:#c9c9d0}aside label span{color:var(--mut)}
-#list{padding:10px 14px}
-.job{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:6px 0;cursor:pointer}
-.job.cur{outline:2px solid var(--acc)}.job.pos{border-color:var(--ok)}.job.neg{border-color:var(--no);opacity:.55}
-.job .h{display:flex;gap:10px;align-items:baseline}.job b{font-size:14px;flex:1}.job .s{font:12px ui-monospace,Menlo,monospace;color:var(--mut)}
-.job .meta{color:var(--mut);font-size:12px;margin-top:2px}.job .meta a{color:var(--acc);text-decoration:none}
-.job .jd{display:none;margin-top:8px;color:#c9c9d0;font-size:13px;white-space:pre-wrap;max-height:420px;overflow:auto;border-top:1px solid var(--line);padding-top:8px}
-.job.open .jd{display:block}
-.job .note{display:none;margin-top:6px;width:100%}.job.open .note{display:block}
-kbd{background:var(--line);border-radius:4px;padding:0 5px;font:11px ui-monospace,Menlo,monospace}
-button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}button.g{background:transparent;border:1px solid var(--line);color:var(--fg)}
-.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
-#chips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin-right:4px}#chips button.on{background:var(--acc);border-color:var(--acc)}
-#sortbtn{margin-left:auto;font-weight:700;font-size:14px;padding:8px 16px;color:#fff;border:0;border-radius:8px;background:linear-gradient(90deg,#ff4d4d,#ffb347,#ffe94d,#4dff88,#4dc3ff,#b84dff,#ff4d9d);background-size:300% 100%;animation:rb 3s linear infinite;box-shadow:0 0 14px rgba(255,255,255,.25);text-shadow:0 1px 2px rgba(0,0,0,.5)}
-@keyframes rb{0%{background-position:0 0}100%{background-position:300% 0}}
-#cmp{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10;align-items:center;justify-content:center}
-#cmp.on{display:flex}
-#cmp .box{width:min(1100px,96vw);max-height:92vh;display:flex;flex-direction:column;gap:10px}
-#cmp .top{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:13px}
-#cmp .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
-#cmp .opt{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
-#cmp .opt:hover{border-color:var(--acc)}
-.gcard .jd{font-size:12px;color:#c9c9d0;max-height:110px;overflow:hidden;margin-top:4px}.gcard .btns .more{background:var(--ok)}.gcard .btns .less{background:var(--no)}.gcard.more{border-color:var(--ok)}.gcard.less{border-color:var(--no);opacity:.6}
-.gcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px}.gcard.none{opacity:.4}.gcard .lbl{font-weight:600}.gcard ul{margin:2px 0 0 16px;padding:0;font-size:12px;color:#c9c9d0}.gcard .btns{display:flex;gap:6px;margin-top:6px}.gcard .btns button{flex:1;padding:5px}.gcard .btns .on{background:var(--acc)}
-.scchips button{background:transparent;border:1px solid var(--line);color:var(--fg);margin:0 6px 6px 0;padding:6px 10px}.scchips button.on{background:var(--acc);border-color:var(--acc)}.scchips button.enc{background:rgba(46,204,113,.18);border-color:var(--ok)}.scchips button.dis{background:rgba(231,76,60,.18);border-color:var(--no);text-decoration:line-through}.scchips button span{color:var(--mut);font-size:11px;margin-left:4px}
-#cmp .guess{font-size:11px;color:var(--mut);letter-spacing:.3px;text-transform:uppercase;min-height:14px}#cmp .guess b{color:#4dff88;font-weight:600}#cmp .opt b{font-size:16px}#cmp .opt .meta{color:var(--mut);font-size:12px}#cmp .opt .jd{font-size:13px;color:#c9c9d0;white-space:pre-wrap}
-#cmp .conf{height:6px;background:var(--line);border-radius:3px;overflow:hidden;flex:1;margin:0 12px}#cmp .conf i{display:block;height:100%;background:linear-gradient(90deg,#4dc3ff,#4dff88)}
-#ideal{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 14px;white-space:pre-wrap;font-size:12px;color:#c9c9d0;max-height:200px;overflow:auto}
+/* ---------- design tokens ---------- */
+:root{
+  --bg:#0f1116;--bg-1:#151821;--bg-2:#1b1f2a;--bg-3:#232837;
+  --line:#2a3040;--line-2:#374056;
+  --fg:#e9ecf3;--fg-1:#c3c9d6;--fg-2:#8b93a7;--fg-3:#5f6779;
+  --acc:#6d7cff;--acc-2:#8b97ff;--acc-bg:rgba(109,124,255,.14);
+  --ok:#34c77b;--ok-bg:rgba(52,199,123,.14);--no:#ef5350;--no-bg:rgba(239,83,80,.14);--warn:#f5b342;--warn-bg:rgba(245,179,66,.14);
+  --est:#b39ddb;--est-bg:rgba(179,157,219,.10);
+  --r-1:6px;--r-2:10px;--r-3:14px;
+  --s-1:4px;--s-2:8px;--s-3:12px;--s-4:16px;--s-5:24px;--s-6:32px;
+  --t-xs:11px;--t-sm:12px;--t-md:13.5px;--t-lg:15px;--t-xl:18px;--t-2xl:22px;
+  --shadow:0 8px 30px rgba(0,0,0,.45);--ease:180ms cubic-bezier(.2,.7,.2,1);
+  --top-h:132px;
+}
+*{box-sizing:border-box}html{scroll-behavior:smooth}html,body{overflow-x:hidden;max-width:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:var(--t-md)/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--acc-2);text-decoration:none}a:hover{text-decoration:underline}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}h2{font-size:var(--t-2xl)}h3{font-size:var(--t-lg)}
+p{margin:0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.muted{color:var(--fg-2)}.small{font-size:var(--t-sm)}
+kbd{display:inline-block;min-width:18px;text-align:center;background:var(--bg-3);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:5px;padding:0 5px;font:var(--t-xs)/18px ui-monospace,Menlo,monospace;color:var(--fg-1)}
+
+/* ---------- controls ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--bg-3);color:var(--fg);border:1px solid var(--line-2);border-radius:var(--r-1);padding:6px 11px;font-size:var(--t-sm);font-weight:500;cursor:pointer;line-height:1.3;white-space:nowrap;transition:background var(--ease),border-color var(--ease),transform var(--ease)}
+.btn:hover{background:var(--line);border-color:var(--fg-3)}.btn:active{transform:translateY(1px)}.btn:disabled{opacity:.55;cursor:default}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}.btn.primary:hover{background:var(--acc-2);border-color:var(--acc-2)}
+.btn.ghost{background:transparent}.btn.sm{padding:3px 8px;font-size:var(--t-xs)}
+.btn.ok{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}.btn.no{background:var(--no-bg);border-color:var(--no);color:var(--no)}
+.btn.sort{background:linear-gradient(135deg,#6d7cff,#b07cff 55%,#ff7cc3);border:0;color:#fff;font-weight:600;font-size:var(--t-md);padding:8px 16px;box-shadow:0 4px 18px rgba(120,100,255,.35)}
+.btn.sort:hover{filter:brightness(1.08)}
+select,input[type=text]{background:var(--bg-2);color:var(--fg);border:1px solid var(--line-2);border-radius:var(--r-1);padding:6px 9px;font-size:var(--t-sm);font-family:inherit}
+select:focus,input:focus{outline:2px solid var(--acc-bg);border-color:var(--acc)}
+.chip{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;background:transparent;border:1px solid var(--line-2);color:var(--fg-1);border-radius:999px;padding:3px 10px;font-size:var(--t-xs);cursor:pointer;transition:all var(--ease)}
+.chip:hover{border-color:var(--fg-3);color:var(--fg)}.chip.on{background:var(--acc-bg);border-color:var(--acc);color:var(--fg)}
+.chip.dis{background:var(--no-bg);border-color:var(--no);color:var(--fg-1);text-decoration:line-through}.chip .n{color:var(--fg-3)}
+.b{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line-2);background:var(--bg-3);color:var(--fg-1);border-radius:5px;padding:1px 7px;font-size:var(--t-xs);line-height:18px;white-space:nowrap}
+.b.ok{border-color:rgba(52,199,123,.5);background:var(--ok-bg);color:var(--ok)}.b.no{border-color:rgba(239,83,80,.5);background:var(--no-bg);color:var(--no)}.b.warn{border-color:rgba(245,179,66,.5);background:var(--warn-bg);color:var(--warn)}
+.b.est{border-style:dashed;border-color:rgba(179,157,219,.6);background:var(--est-bg);color:var(--est)}.b.est::before{content:"≈";opacity:.8}
+.b.acc{border-color:rgba(109,124,255,.5);background:var(--acc-bg);color:var(--acc-2)}
+
+/* ---------- header ---------- */
+header.top{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:var(--s-3);padding:0 var(--s-5)}
+.row-search{height:52px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:baseline;gap:8px;white-space:nowrap}.brand b{font-size:var(--t-lg)}.brand .sub{color:var(--fg-2);font-size:var(--t-sm);max-width:34vw;overflow:hidden;text-overflow:ellipsis}
+.search{flex:1;display:flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-2);padding:0 10px;height:34px;max-width:720px;margin:0 auto}
+.search:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}.search svg{flex:none;opacity:.6}
+.search input{flex:1;background:transparent;border:0;padding:0;font-size:var(--t-md);outline:none!important}
+.row-controls{height:46px;gap:var(--s-2)}
+.row-controls .grp{display:flex;align-items:center;gap:var(--s-2);min-width:0}.row-controls .grow{flex:1;overflow:hidden}
+.row-controls .right{margin-left:auto}
+.chips{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chips::-webkit-scrollbar{display:none}
+.row-status{height:34px;background:var(--bg-1);font-size:var(--t-sm);color:var(--fg-2);gap:var(--s-4)}
+.row-status .legend{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--fg-3)}
+#stats b{color:var(--fg);font-weight:600}
+.rerank{display:inline-flex;align-items:center;gap:6px;color:var(--acc-2);opacity:0;transition:opacity 300ms}.rerank.show{opacity:1}
+.rerank i{width:8px;height:8px;border-radius:50%;background:var(--acc);display:inline-block;animation:pulse 1.2s ease-in-out 3}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.8);opacity:.5}}
+.popwrap{position:relative}.pop{display:none;position:absolute;right:0;top:calc(100% + 8px);width:340px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-2);padding:var(--s-4);box-shadow:var(--shadow);font-size:var(--t-sm);color:var(--fg-1);z-index:30;line-height:1.5}
+.popwrap:hover .pop,.popwrap:focus-within .pop{display:block}.pop b{color:var(--fg)}.pop .kv{display:flex;justify-content:space-between;gap:12px;margin-top:6px;color:var(--fg-2)}
+
+/* ---------- layout ---------- */
+main{display:grid;grid-template-columns:272px minmax(0,1fr)}
+aside{border-right:1px solid var(--line);padding:var(--s-3) var(--s-3) var(--s-6);font-size:var(--t-sm);overflow:auto;height:calc(100vh - var(--top-h));position:sticky;top:var(--top-h);background:var(--bg)}
+aside .sec{border-bottom:1px solid var(--line);padding:6px 0}
+aside summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:var(--t-xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-2);user-select:none}
+aside summary::-webkit-details-marker{display:none}aside summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--fg-3);border-bottom:1.5px solid var(--fg-3);transform:rotate(-45deg);transition:transform var(--ease)}
+aside details[open]>summary::before{transform:rotate(45deg)}aside summary .cnt{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--fg-3)}
+aside .sub{padding:2px 4px 8px}aside .sub h4{margin:8px 0 3px;font-size:var(--t-xs);font-weight:600;color:var(--fg-1)}
+.facet{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:5px;cursor:pointer;color:var(--fg-1)}.facet:hover{background:var(--bg-2)}
+.facet input{margin:0;accent-color:var(--acc);width:14px;height:14px;flex:none}.facet .fl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.facet .fn{color:var(--fg-3);font-variant-numeric:tabular-nums}
+.facet .fl.est{color:var(--est)}.facet .fl.est::before{content:"≈ ";opacity:.8}
+.facet .fl.no{color:var(--no)}.facet .fl.ok{color:var(--ok)}
+.facet-more{color:var(--fg-3);font-size:var(--t-xs);padding:2px 4px;cursor:pointer}.facet-more:hover{color:var(--fg-1)}
+aside .clear{width:100%;margin-top:10px}
+#list{padding:var(--s-3) var(--s-5) var(--s-6);max-width:1100px}
+#ideal{display:none;margin:var(--s-3) var(--s-5) 0;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);white-space:pre-wrap;font-size:var(--t-sm);color:var(--fg-1);max-height:240px;overflow:auto}
+
+/* ---------- job cards ---------- */
+.job{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-2);padding:10px 14px;margin:8px 0;cursor:pointer;transition:border-color var(--ease),background var(--ease),box-shadow var(--ease)}
+.job:hover{border-color:var(--line-2)}.job.cur{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}
+.job.pos{border-left:3px solid var(--ok)}.job.neg{border-left:3px solid var(--no);opacity:.6}
+.job.moved{animation:moved 1.6s ease-out}@keyframes moved{0%{background:var(--acc-bg)}100%{background:var(--bg-1)}}
+.jh{display:flex;gap:12px;align-items:flex-start}.jt{flex:1;min-width:0}.jt b{font-size:var(--t-lg);font-weight:600;display:block;line-height:1.3}
+.jc{color:var(--fg-2);font-size:var(--t-sm);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jr{display:flex;align-items:center;gap:6px;flex:none}
+.score{font:var(--t-xs)/18px ui-monospace,Menlo,monospace;color:var(--fg-3);padding:0 6px;border:1px solid var(--line);border-radius:5px}
+.lbl{display:inline-flex;gap:2px}.lbl .btn{padding:2px 7px;font-size:var(--t-xs)}
+.badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;align-items:center}
+.jdetail{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}.job.open .jdetail{display:block}
+.jdetail .meta{color:var(--fg-2);font-size:var(--t-sm);margin:2px 0}.jdetail .meta.sum{color:var(--fg-1)}
+.jd{margin-top:8px;color:var(--fg-1);font-size:var(--t-md);white-space:pre-wrap;max-height:440px;overflow:auto;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-1)}
+.jactions{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.jactions .note{flex:1;min-width:200px}
+.empty{color:var(--fg-2);padding:40px 0;text-align:center}
+#more{margin:12px auto;display:block}
+
+/* ---------- modals ---------- */
+.modal{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(6,8,12,.72);backdrop-filter:blur(4px);opacity:0;pointer-events:none;transition:opacity 200ms}
+.modal.on{opacity:1;pointer-events:auto}.modal .box{width:min(1120px,94vw);max-height:92vh;display:flex;flex-direction:column;gap:var(--s-3);background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--r-3);padding:var(--s-5);box-shadow:var(--shadow);transform:translateY(10px) scale(.985);transition:transform 220ms cubic-bezier(.2,.7,.2,1)}
+.modal.on .box{transform:none}.modal .box.narrow{width:min(620px,94vw)}
+.mhead{display:flex;align-items:center;gap:var(--s-4)}.mhead .x{margin-left:auto}
+.steps{display:flex;gap:6px;align-items:center;color:var(--fg-3);font-size:var(--t-sm)}.steps span{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;border:1px solid var(--line)}
+.steps span.on{border-color:var(--acc);color:var(--fg);background:var(--acc-bg)}.steps span.done{color:var(--ok);border-color:rgba(52,199,123,.4)}.steps i{font-style:normal;width:16px;height:16px;border-radius:50%;background:var(--bg-3);font-size:10px;display:inline-flex;align-items:center;justify-content:center}
+.steps span.on i{background:var(--acc);color:#fff}.steps span.done i{background:var(--ok);color:#fff}
+.mfoot{display:flex;align-items:center;gap:var(--s-2);margin-top:auto;padding-top:var(--s-2)}.mfoot .right{margin-left:auto;display:flex;gap:var(--s-2)}
+.hint{color:var(--fg-2);font-size:var(--t-md);max-width:70ch}
+.scroll{overflow:auto;min-height:0}
+.sc h4{margin:14px 0 6px;font-size:var(--t-xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-2)}.sc h4:first-child{margin-top:4px}
+.scchips{display:flex;flex-wrap:wrap;gap:6px}.scchips .chip{padding:5px 12px;font-size:var(--t-sm)}
+#wh-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-height:58vh;overflow:auto;padding-right:4px}
+.gcard{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-2);padding:12px;display:flex;flex-direction:column;gap:4px}
+.gcard.more{border-color:var(--ok);background:rgba(52,199,123,.06)}.gcard.less{border-color:var(--no);opacity:.55}
+.gcard .t{font-weight:600}.gcard .m{color:var(--fg-2);font-size:var(--t-sm)}.gcard .jdx{font-size:var(--t-sm);color:var(--fg-1);max-height:96px;overflow:hidden;margin-top:4px}
+.gcard .btns{display:flex;gap:6px;margin-top:8px}.gcard .btns .btn{flex:1;justify-content:center}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);min-height:0}
+.opt{background:var(--bg-2);border:2px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);cursor:pointer;display:flex;flex-direction:column;gap:6px;max-height:62vh;overflow:auto;transition:border-color var(--ease),transform var(--ease)}
+.opt:hover{border-color:var(--acc);transform:translateY(-1px)}.opt .t{font-size:var(--t-xl);font-weight:600}.opt .m{color:var(--fg-2);font-size:var(--t-sm)}.opt .sum{color:var(--fg-1)}.opt .jdx{font-size:var(--t-md);color:var(--fg-1);white-space:pre-wrap}
+.guess{font-size:var(--t-xs);color:var(--fg-3);letter-spacing:.04em;text-transform:uppercase;min-height:16px}.guess b{color:var(--ok);font-weight:600}
+.prog{display:flex;align-items:center;gap:var(--s-3);color:var(--fg-2);font-size:var(--t-sm)}.prog .bar{flex:1;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden}.prog .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--ok));transition:width 300ms}
+.intro ol{margin:10px 0 0 18px;padding:0;color:var(--fg-1);line-height:1.6}.intro li b{color:var(--fg)}.intro .why{margin-top:14px;padding:12px 14px;background:var(--bg-2);border-radius:var(--r-1);color:var(--fg-2);font-size:var(--t-sm)}
+.help dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:8px 0 0;align-items:center}.help dt{text-align:right}.help dd{margin:0;color:var(--fg-1)}.help h4{margin:14px 0 4px;font-size:var(--t-xs);letter-spacing:.06em;text-transform:uppercase;color:var(--fg-2)}
+#toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--bg-3);color:var(--fg);border:1px solid var(--line-2);border-radius:var(--r-2);padding:10px 16px;font-size:var(--t-sm);box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:all 220ms;z-index:50;display:flex;gap:10px;align-items:center;max-width:90vw}
+#toast.show{opacity:1;transform:translate(-50%,0)}#toast i{width:8px;height:8px;border-radius:50%;background:var(--acc);flex:none}
+#filtersbtn{display:none;position:fixed;right:16px;bottom:16px;z-index:30;box-shadow:var(--shadow)}
+
+/* ---------- responsive ---------- */
+@media (max-width:1000px){.brand .sub{display:none}.btn .lbl-long{display:none}}
+@media (max-width:820px){
+  :root{--top-h:auto}
+  .row{padding:0 var(--s-3)}.row-search{height:auto;padding-top:8px;padding-bottom:8px;flex-wrap:wrap}.search{order:3;flex-basis:100%;max-width:none;margin:0}
+  .row-controls{height:auto;flex-wrap:wrap;padding-top:6px;padding-bottom:6px;gap:6px}.row-controls>.grp{flex-basis:100%;min-width:0}.row-controls .grp.grow{order:2}.row-controls .right{order:3;margin-left:0;justify-content:flex-start;flex-wrap:wrap}.row-controls .right .sort{flex-basis:100%;justify-content:center}.row-controls select{flex:1}
+  .row-status{height:auto;padding-top:6px;padding-bottom:6px;flex-wrap:wrap}.row-status .legend{margin-left:0}
+  main{display:block}aside{display:none;position:fixed;inset:0;top:0;height:100vh;z-index:35;padding-top:56px;width:100%}
+  body.filters aside{display:block}#filtersbtn{display:inline-flex}
+  aside .closef{position:absolute;top:12px;right:12px}
+  #list{padding:var(--s-3)}.job{padding:10px 12px}.pair{grid-template-columns:1fr}.opt{max-height:36vh}.modal .box{padding:var(--s-4)}
+  .jc{white-space:normal}.jh{flex-wrap:wrap}.jr{margin-left:auto}
+}
+@media (min-width:821px){aside .closef{display:none}}
 </style></head>
 <body>
-<header>
-  <h1>open-jobs</h1>
-  <input id="q" type="text" placeholder="search title / company / description…">
-  <select id="sort"><option value="model">sort: model score</option><option value="sim">sort: similarity to ideal JD</option><option value="date">sort: newest</option><option value="company">sort: company</option></select>
-  <select id="show"><option value="all">show: all</option><option value="unlabeled">show: unlabeled</option><option value="yes">show: yes</option><option value="no">show: no</option></select>
-  <button class="g" id="toggleIdeal">ideal JD</button>
-  <button class="g" id="export">export model + labels</button>
-  <button class="g" id="reset" title="Wipe labels, comparisons and notes for this search (keeps enrichment)">reset</button>
-  <span id="chips"></span>
-  <button class="g" id="enrichbtn" title="Structured extraction (seniority, salary, remote policy, skills…) + company info for the visible ranking. Metered per IP: $5/h, $50/day; cached results are free.">⚡ Enrich top 300</button>
-  <button id="sortbtn" title="Compare pairs until the model knows your taste, then sort">✨ Sort</button>
-  <span class="m" id="stats"></span>
-  <span class="m"><kbd>J</kbd> yes <kbd>K</kbd> no <kbd>Space</kbd> open/close <kbd>↑↓</kbd> move <kbd>O</kbd> open link</span>
+<header class="top">
+  <div class="row row-search">
+    <div class="brand"><b>open-jobs</b><span class="sub" id="brand-title"></span></div>
+    <label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" type="text" placeholder="Search titles, companies, descriptions…" autocomplete="off"></label>
+    <button class="btn ghost" id="helpbtn" title="How this page works, keyboard shortcuts (?)"><kbd>?</kbd> Help</button>
+  </div>
+  <div class="row row-controls">
+    <div class="grp">
+      <select id="sort" title="Order of the list"><option value="model">Sort: best fit</option><option value="sim">Sort: similarity to ideal JD</option><option value="date">Sort: newest</option><option value="company">Sort: company</option></select>
+      <select id="show" title="Which jobs to list"><option value="all">Show: all</option><option value="unlabeled">Show: unlabeled</option><option value="yes">Show: yes</option><option value="no">Show: no</option></select>
+    </div>
+    <div class="grp grow"><div id="chips" class="chips"></div></div>
+    <div class="grp right">
+      <button class="btn ghost" id="toggleIdeal" title="Show the ideal job description this search is built around">Ideal JD</button>
+      <div class="popwrap"><button class="btn ghost" id="enrichbtn">⚡ Enrich <span class="lbl-long">top 300</span></button>
+        <div class="pop" id="enrichpop"><b>What Enrich adds</b><br>Structured fields for the top 300 jobs in view: seniority, role family, work arrangement, stated salary, skills, a one-line summary; plus a company profile (industry, size, HQ, staffing-agency flag). They become facets and badges.
+          <div class="kv"><span>Cost</span><span>~$0.001 / job, ~$0.015 / new company</span></div>
+          <div class="kv"><span>Already enriched</span><span>free (cached forever)</span></div>
+          <div class="kv"><span>Limit per IP</span><span>$5 / hour · $50 / day</span></div>
+          <div class="kv" id="budgetline"><span>Your budget left</span><span>…</span></div></div></div>
+      <button class="btn ghost" id="export" title="Copy the learned model + your labels to the clipboard (JSON)">Export</button>
+      <button class="btn ghost" id="reset" title="Wipe labels, comparisons and notes for this search (keeps enrichment)">Reset</button>
+      <button class="btn sort" id="sortbtn" title="Teach the page your taste in a few minutes, then it re-orders everything">✨ Sort by my taste</button>
+    </div>
+  </div>
+  <div class="row row-status">
+    <span id="stats"></span>
+    <span class="rerank" id="rerank"><i></i><span id="reranktxt"></span></span>
+    <span class="legend"><span class="b est">dashed</span> = estimated, not stated · <kbd>?</kbd> shortcuts</span>
+  </div>
 </header>
 <div id="ideal"></div>
-<div id="cmp"><div class="box">
-  <div id="scope" style="display:none">
-    <h2 style="margin:0 0 6px">Where?</h2>
-    <p class="hint" style="margin:0 0 10px">Pick what applies before sorting. Multiple is fine; nothing selected means anywhere.</p>
-    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">Work arrangement</h3><div id="sc-rm" class="scchips"></div>
-    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">Country</h3><div id="sc-co" class="scchips"></div>
-    <h3 style="font-size:11px;color:var(--mut);text-transform:uppercase;margin:10px 0 4px">State / region</h3><div id="sc-rg" class="scchips"></div>
-    <div class="top" style="margin-top:14px"><span id="sc-n"></span><span><button class="g" id="sc-any">anywhere</button> <button id="sc-go">continue →</button></span></div>
-  </div>
-  <div id="what" style="display:none">
-    <h2 style="margin:0 0 6px">What?</h2>
-    <p class="hint" style="margin:0 0 10px">A spread of jobs from your scope. Mark <b style="color:var(--ok)">More</b> like this or <b style="color:var(--no)">Less</b> like this; skip the rest. This seeds the model before it starts asking you to compare.</p>
-    <div id="wh-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;max-height:62vh;overflow:auto"></div>
-    <div class="top" style="margin-top:14px"><span id="wh-n"></span><span><button class="g" id="wh-back">← where</button> <button class="g" id="wh-more">show another spread</button> <button id="wh-go">continue →</button></span></div>
-  </div>
-  <div id="cmpmain">
-  <div class="top"><span id="cmpn">comparison 1</span><div class="conf"><i id="cmpbar"></i></div><span id="cmpc">confidence 0%</span><span><kbd>←</kbd> left <kbd>→</kbd> right <kbd>S</kbd> skip <kbd>Esc</kbd> stop</span></div>
-  <div class="pair"><div class="opt" id="optA"></div><div class="opt" id="optB"></div></div>
-  <div class="top"><span id="cmpmsg">Which job would you rather have? Keep going until the bar fills, or stop any time and sort with what it has.</span><button class="g" id="cmpstop">stop &amp; sort now</button></div>
-  </div>
-</div></div>
 <main>
-  <aside>
-    <h3>eligibility</h3><div id="f-el"></div>
-    <h3>work arrangement</h3><div id="f-rm"></div>
-    <h3>seniority</h3><div id="f-sn"></div>
-    <h3>role family</h3><div id="f-rf"></div>
-    <h3>employment</h3><div id="f-et"></div>
-    <h3>salary</h3><div id="f-sa"></div>
-    <h3>industry</h3><div id="f-in"></div>
-    <h3>company size</h3><div id="f-cs"></div>
-    <h3>countries</h3><div id="f-co"></div>
-    <h3>regions / states</h3><div id="f-rg"></div>
-    <h3>cities</h3><div id="f-ci"></div>
-    <h3>groups</h3><div id="f-g"></div>
-    <h3>companies</h3><div id="f-c"></div>
-    <h3>sources</h3><div id="f-a"></div>
+  <aside id="side">
+    <button class="btn closef" id="closef">Close</button>
+    <details class="sec" open><summary>Fit for you<span class="cnt" id="cnt-fit"></span></summary><div class="sub">
+      <div id="f-el"></div></div></details>
+    <details class="sec" open><summary>Role<span class="cnt" id="cnt-role"></span></summary><div class="sub">
+      <h4>Seniority</h4><div id="f-sn"></div>
+      <h4>Work arrangement</h4><div id="f-rm"></div>
+      <h4>Salary (annual)</h4><div id="f-sa"></div>
+      <h4>Employment</h4><div id="f-et"></div>
+      <h4>Role family</h4><div id="f-rf"></div></div></details>
+    <details class="sec" open><summary>Location<span class="cnt" id="cnt-loc"></span></summary><div class="sub">
+      <h4>Country</h4><div id="f-co"></div>
+      <h4>Region / state</h4><div id="f-rg"></div>
+      <h4>City</h4><div id="f-ci"></div></div></details>
+    <details class="sec"><summary>Company<span class="cnt" id="cnt-co"></span></summary><div class="sub">
+      <h4>Company</h4><div id="f-c"></div>
+      <h4>Industry</h4><div id="f-in"></div>
+      <h4>Size</h4><div id="f-cs"></div>
+      <h4>Source (ATS)</h4><div id="f-a"></div></div></details>
+    <details class="sec"><summary>Semantic group<span class="cnt" id="cnt-g"></span></summary><div class="sub"><div id="f-g"></div></div></details>
+    <button class="btn ghost clear" id="clearf">Clear all filters</button>
   </aside>
   <div id="list"></div>
 </main>
+<button class="btn primary" id="filtersbtn">Filters</button>
+
+<!-- Sort flow -->
+<div id="cmp" class="modal" role="dialog" aria-modal="true"><div class="box">
+  <div class="mhead"><h2 id="cmp-title">Sort by my taste</h2><div class="steps" id="steps"><span data-s="1"><i>1</i>Where</span><span data-s="2"><i>2</i>What</span><span data-s="3"><i>3</i>Compare</span></div><button class="btn ghost x" id="cmpclose" title="Close (Esc)">✕</button></div>
+  <div id="intro" class="intro" style="display:none">
+    <p class="hint">In about three minutes the page learns what you actually want and re-orders every job by it. No account, no upload; it runs in this tab.</p>
+    <ol>
+      <li><b>Where</b> — tick the arrangements and places that apply. Everything else is filtered out of the ranking.</li>
+      <li><b>What</b> — you'll see ~24 deliberately different jobs from that scope. Mark a few <b>More like this</b> / <b>Less</b>; skip the rest. This seeds the model.</li>
+      <li><b>Compare</b> — answer “which would you rather have?” about a dozen times. Each pair is chosen where the model is unsure, so every answer counts. It stops by itself once your ranking has settled.</li>
+    </ol>
+    <div class="why">Why pairs? People (and models) are bad at scoring jobs 1–10 but good at picking between two. Your answers become a taste vector that sorts the list; it's saved in this browser and exported with your labels.</div>
+    <div class="mfoot"><label class="small muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="intro-skip"> Don't show this again</label><div class="right"><button class="btn primary" id="intro-go">Start → Where</button></div></div>
+  </div>
+  <div id="scope" class="sc" style="display:none">
+    <p class="hint">Pick what applies. Several is fine; nothing selected means anywhere.</p>
+    <div class="scroll"><h4>Work arrangement</h4><div id="sc-rm" class="scchips"></div><h4>Country</h4><div id="sc-co" class="scchips"></div><h4>Region / state</h4><div id="sc-rg" class="scchips"></div></div>
+    <div class="mfoot"><span class="muted" id="sc-n"></span><div class="right"><button class="btn ghost" id="sc-help">How does this work?</button><button class="btn ghost" id="sc-any">Anywhere</button><button class="btn primary" id="sc-go">Next: What →</button></div></div>
+  </div>
+  <div id="what" style="display:none">
+    <p class="hint">A deliberately varied spread from your scope. Mark <b style="color:var(--ok)">More like this</b> or <b style="color:var(--no)">Less</b> on a few; skip the rest.</p>
+    <div id="wh-cards"></div>
+    <div class="mfoot"><button class="btn ghost" id="wh-back">← Back to Where</button><span class="muted" id="wh-n"></span><div class="right"><button class="btn ghost" id="wh-more">Show a different spread</button><button class="btn primary" id="wh-go">Next: Compare →</button></div></div>
+  </div>
+  <div id="cmpmain" style="display:none">
+    <div class="prog"><span id="cmpn" class="mono"></span><div class="bar"><i id="cmpbar"></i></div><span id="cmpc"></span></div>
+    <div class="pair"><div class="opt" id="optA" tabindex="0"></div><div class="opt" id="optB" tabindex="0"></div></div>
+    <div class="mfoot"><span class="hint small" id="cmpmsg">Which job would you rather have? Click one, or <kbd>←</kbd> / <kbd>→</kbd>. <kbd>S</kbd> skips a pair.</span><div class="right"><button class="btn ghost" id="cmpback">← Back to What</button><button class="btn primary" id="cmpstop">Stop &amp; sort now</button></div></div>
+  </div>
+</div></div>
+
+<!-- Help -->
+<div id="help" class="modal help" role="dialog"><div class="box narrow">
+  <div class="mhead"><h2>How this page works</h2><button class="btn ghost x" id="helpclose">✕</button></div>
+  <p class="hint">Jobs start ordered by how close they read to your ideal job description. Every label you give and every comparison you answer re-orders the list, and the status bar tells you when that happens. Nothing leaves this browser except the enrichment calls you trigger.</p>
+  <h4>Keyboard</h4>
+  <dl><dt><kbd>J</kbd></dt><dd>Yes, more like this (moves to the next job)</dd><dt><kbd>K</kbd></dt><dd>No, less like this</dd><dt><kbd>Space</kbd></dt><dd>Open / close the description</dd><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move between jobs</dd><dt><kbd>O</kbd></dt><dd>Open the posting in a new tab</dd><dt><kbd>/</kbd></dt><dd>Focus search</dd><dt><kbd>?</kbd></dt><dd>This help</dd></dl>
+  <h4>Badges</h4>
+  <p class="hint small">Solid badges are stated in the posting or extracted from it mechanically. <span class="b est">dashed badges</span> are estimates from small models trained on the corpus, shown only where the posting doesn't say; they're separate filter values so they never masquerade as facts.</p>
+  <h4>Sort by my taste</h4>
+  <p class="hint small">Where → What → Compare. About three minutes; stops on its own once your ranking has settled. Your answers are saved in this browser and included in Export.</p>
+  <div class="mfoot"><div class="right"><button class="btn primary" id="helpok">Got it</button></div></div>
+</div></div>
+<div id="toast"><i></i><span id="toasttxt"></span></div>
+
 <script>
 const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__, GROUPS3=__GROUPS3__, PREF=__PREF__;
 const $=s=>document.querySelector(s);
 function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
 function dot(a,b){let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+const _ENT={amp:'&',nbsp:' ',lt:'<',gt:'>',quot:'"',apos:"'",rsquo:'’',lsquo:'‘',rdquo:'”',ldquo:'“',ndash:'–',mdash:'—',hellip:'…',bull:'•',middot:'·',trade:'™',reg:'®',copy:'©',eacute:'é',egrave:'è',uuml:'ü',ouml:'ö',auml:'ä',ccedil:'ç',ntilde:'ñ'};
+function jdText(t){return String(t||'').replace(/&(#x?[0-9a-f]+|[a-z]+);/gi,(m,e)=>{if(e[0]==='#'){const n=e[1]==='x'||e[1]==='X'?parseInt(e.slice(2),16):parseInt(e.slice(1),10);return isNaN(n)?m:String.fromCodePoint(n)}return _ENT[e.toLowerCase()]??m}).replace(/[ \t]+\n/g,'\n')}
 const ideal=norm(IDEAL.vector);
 const TITLE_TERMS=(IDEAL.title||'').toLowerCase().split(/[^a-z0-9+#]+/).filter(t=>t.length>2&&!['and','the','engineer','senior','software'].includes(t));
 function titleFit(j){if(!TITLE_TERMS.length)return 0;const t=(j.t||'').toLowerCase();let n=0;for(const w of TITLE_TERMS)if(t.includes(w))n++;return 0.03*n}
 for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.pre=j.sim+titleFit(j);j.score=j.pre}
-let prior=Float32Array.from(ideal);  // anchor for the models: ideal JD, shifted by the More/Less seed sets
+let prior=Float32Array.from(ideal);
 function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(ideal);return}
   const v=Float32Array.from(ideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.vec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.vec[i]/N.length;prior=norm(v)}
-// ---- state: labels/notes persist in localStorage; every interaction is also POSTed to /event when served
+// ---- state
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{},hideCo:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
 if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
-// ---- model: logistic regression seeded at the ideal vector, refit on every label
+// ---- label model: logistic regression seeded at the ideal vector
 let w=Float32Array.from(ideal),b=0;
 function refit(){const pos=JOBS.filter(j=>st.labels[j.k]===1),neg=JOBS.filter(j=>st.labels[j.k]===0);
   if(!pos.length||!neg.length){w=Float32Array.from(ideal);b=0;for(const j of JOBS)j.score=j.sim;return}
   w=Float32Array.from(ideal);b=0;const items=[...pos,...neg],lr=.5,l2=.01;
   for(let ep=0;ep<30;ep++)for(const j of items){const y=st.labels[j.k],p=1/(1+Math.exp(-(dot(w,j.vec)+b))),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*j.vec[i]+l2*(w[i]-ideal[i]));b-=lr*g}
   for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(w,j.vec)+b)))}
-// ---- pairwise taste model (Bradley-Terry on vector differences): P(a beats b) = sigmoid(u·(va−vb))
-st.compares = st.compares || [];  // [{a,b,win}] keys
-const byKey = Object.fromEntries(JOBS.map(j => [j.k, j]));
-let u = Float32Array.from(prior), taste = false;  // taste=true once a confident model exists
-const K_COMMITTEE = 5; let committee = [];
-function fitOn(C, iters = 60){
-  const w = Float32Array.from(prior); if (!C.length) return w;
-  const lr = .7, l2 = .02;
-  for (let ep = 0; ep < iters; ep++) for (const [a, b, win] of C) {
-    let s = 0; for (let i = 0; i < w.length; i++) s += w[i] * (a.vec[i] - b.vec[i]);
-    const y = win === 'a' ? 1 : 0, p = 1 / (1 + Math.exp(-s)), g = p - y;
-    for (let i = 0; i < w.length; i++) w[i] -= lr * (g * (a.vec[i] - b.vec[i]) + l2 * (w[i] - prior[i]));
-  }
-  return w;
-}
-function pairsFrom(list){ return list.map(c => [byKey[c.a], byKey[c.b], c.win]).filter(c => c[0] && c[1]); }
-function fitPairs(){
-  const C = pairsFrom(st.compares);
-  u = fitOn(C);
-  // committee: bootstrap resamples of the comparisons (query-by-committee); with few comparisons they disagree a lot
-  committee = [];
-  for (let k = 0; k < K_COMMITTEE; k++) {
-    const R = []; for (let i = 0; i < C.length; i++) R.push(C[Math.floor(Math.random() * C.length)]);
-    committee.push(fitOn(R, 40));
-  }
-}
-function predictsRecent(k = 10){  // how often a model fit on all-but-the-last-k predicts the last k picks
-  if (st.compares.length < k + 3) return 0;
-  const w = fitOn(pairsFrom(st.compares.slice(0, -k)));
-  let ok = 0, n = 0;
-  for (const c of st.compares.slice(-k)) { const a = byKey[c.a], b = byKey[c.b]; if (!a || !b) continue; n++; if ((dot(w, a.vec) - dot(w, b.vec) > 0) === (c.win === 'a')) ok++; }
-  return n ? ok / n : 0;
-}
-function topSetStability(N = 100){  // how much the committee agrees on the top-N set (mean pairwise Jaccard)
-  if (committee.length < 2) return 0;
-  const tops = committee.map(w => new Set(JOBS.map(j => [dot(w, j.vec), j.k]).sort((x, y) => y[0] - x[0]).slice(0, N).map(x => x[1])));
-  let s = 0, n = 0;
-  for (let i = 0; i < tops.length; i++) for (let j = i + 1; j < tops.length; j++) { let inter = 0; for (const k of tops[i]) if (tops[j].has(k)) inter++; s += inter / (2 * N - inter); n++; }
-  return s / n;
-}
-function tasteScore(j){ return dot(u, j.vec); }
-let cmpPair = null, cmpAcc = 0, cmpStab = 0;
-const PAIR_MODE = 'committee';  // 'v1' = near-tie uncertainty sampling on the single model (default); 'committee' = disagreement × leverage
-function nextPair(){
-  const pool = JOBS.filter(j => st.labels[j.k] !== 0 && passes(j)).sort((x, y) => (taste || st.compares.length ? tasteScore(y) - tasteScore(x) : y.sim - x.sim)).slice(0, 300);
-  if (pool.length < 2) return null;
-  const seen = new Set(st.compares.map(c => c.a + '|' + c.b));
-  let best = null, bestS = PAIR_MODE === 'v1' ? Infinity : -Infinity;
-  for (let t = 0; t < 400; t++) {
-    const a = pool[Math.floor(Math.random() * pool.length)], b = pool[Math.floor(Math.random() * pool.length)];
-    if (a === b || (a.c === b.c && a.t === b.t) || seen.has(a.k + '|' + b.k) || seen.has(b.k + '|' + a.k)) continue;
-    const cos = dot(a.vec, b.vec);
-    if (PAIR_MODE === 'v1') {
-      // closest to a tie under the current model, nudged away from near-identical postings
-      const sc = Math.abs(dot(u, a.vec) - dot(u, b.vec)) + 0.15 * cos;
-      if (sc < bestS) { bestS = sc; best = [a, b]; }
-    } else {
-      if (cos > 0.95) continue;
-      let mean = 0, m2 = 0; const ds = [];
-      for (const w of committee) { const d = dot(w, a.vec) - dot(w, b.vec); ds.push(d); mean += d; }
-      mean /= committee.length; for (const d of ds) m2 += (d - mean) * (d - mean); m2 /= committee.length;
-      const sc = (Math.sqrt(m2) + 0.05) * Math.sqrt(Math.max(0, 2 - 2 * cos)) * (0.5 + Math.exp(-Math.abs(mean) * 8));
-      if (sc > bestS) { bestS = sc; best = [a, b]; }
-    }
-  }
-  return best;
-}
-function showPair(){
-  cmpPair = nextPair(); if (!cmpPair) { stopCmp(); return; }
-  const n = st.compares.length; $('#cmpn').textContent = `comparison ${n + 1}`;
-  cmpAcc = predictsRecent(); cmpStab = topSetStability();
-  // progress toward the stop rule: MIN comparisons, then stop once stable or predictive; hard stop at MAX
-  const MIN = 12, MAX = 25;
-  const conf = Math.min(1, Math.max(n / MAX, n >= MIN ? Math.max(cmpStab / 0.75, cmpAcc / 0.8) : n / MIN * 0.6));
-  $('#cmpbar').style.width = `${conf * 100}%`;
-  const left = n < MIN ? `${MIN - n} more, then it stops when the ranking settles (${MAX} max)` : `stops at ${MAX} at the latest (${MAX - n} left)`;
-  $('#cmpc').textContent = `${left} · top-100 stable ${Math.round(cmpStab * 100)}%` + (n >= 13 ? ` · predicted ${Math.round(cmpAcc * 100)}% of your last 10` : '');
-  // the committee's guess: mean model's P(A beats B), with committee agreement as the confidence
-  const [A, B] = cmpPair; const dm = dot(u, A.vec) - dot(u, B.vec); const pA = 1 / (1 + Math.exp(-dm * 4));
-  const votesA = committee.filter(w => dot(w, A.vec) - dot(w, B.vec) > 0).length, agree = Math.max(votesA, committee.length - votesA) / (committee.length || 1);
-  const guess = st.compares.length < 3 ? null : (pA >= 0.5 ? 'a' : 'b');
-  const gp = Math.round(100 * Math.max(pA, 1 - pA));
-  for (const [el, j, side] of [[$('#optA'), A, 'a'], [$('#optB'), B, 'b']])
-    el.innerHTML = `<div class="guess">${guess === side ? `<b>▲ model's guess</b> · ${gp}% · committee ${Math.round(agree * 100)}% agreed` : (guess ? '&nbsp;' : 'no guess yet')}</div><b>${esc(j.t)}</b><div class="meta">${esc(j.c)}${j.l ? ' · ' + esc(j.l) : ''}${j.e && j.e.summary ? '<div style="margin-top:4px;color:#c9c9d0">' + esc(j.e.summary) + '</div>' : ''}</div><div class="jd">${esc((j.jd || '').slice(0, 1400))}</div>`;
-  $('#cmpmsg').textContent = PAIR_MODE === 'committee' ? 'Which job would you rather have? Pairs are chosen where the model is genuinely unsure and the answer moves the ranking most.' : 'Which job would you rather have? Pairs are the ones the model currently rates as a toss-up.';
-}
-function pick(win){
-  if (!cmpPair) return; const [a, b] = cmpPair;
-  st.compares.push({ a: a.k, b: b.k, win }); save();
-  const guessed = st.compares.length >= 4 ? ((dot(u, a.vec) - dot(u, b.vec) >= 0) ? 'a' : 'b') : null;
-  event({ type: 'compare', a: a.k, b: b.k, win, aTitle: a.t, aCompany: a.c, bTitle: b.t, bCompany: b.c, n: st.compares.length, guess: guessed, surprised: guessed !== null && guessed !== win });
-  fitPairs();
-  const n = st.compares.length;
-  if (n >= 25 || (n >= 12 && (topSetStability() >= 0.75 || predictsRecent() >= 0.8))) { stopCmp(); return; }
-  showPair();
-}
-function renderScope(){
-  for (const [f, el, max] of [['rm', $('#sc-rm'), 6], ['co', $('#sc-co'), 12], ['rg', $('#sc-rg'), 14]]) {
-    el.innerHTML = '';
-    const counts = {}; for (const j of JOBS) for (const k of keysOf[f](j)) counts[k] = (counts[k] || 0) + 1;
-    Object.entries(counts).filter(([k]) => k !== 'unknown' && k !== '(unknown)').sort((a, b) => b[1] - a[1]).slice(0, max).forEach(([k, n]) => {
-      const b = document.createElement('button'); b.innerHTML = `${esc(k)}<span>${n}</span>`; b.className = sel[f].has(k) ? 'on' : '';
-      b.onclick = () => { sel[f].has(k) ? sel[f].delete(k) : sel[f].add(k); b.className = sel[f].has(k) ? 'on' : ''; scopeCount(); };
-      el.appendChild(b);
-    });
-  }
-  scopeCount();
-}
-function scopeCount(){ const n = JOBS.filter(passes).length; $('#sc-n').textContent = `${n.toLocaleString()} jobs in scope`; }
-function startCmp(){
-  fitPairs(); $('#cmp').classList.add('on');
-  $('#scope').style.display = 'block'; $('#what').style.display = 'none'; $('#cmpmain').style.display = 'none'; renderScope();
-  event({ type: 'sort_start', compares: st.compares.length });
-}
+// ---- pairwise taste model (Bradley-Terry on vector differences)
+st.compares=st.compares||[];
+const byKey=Object.fromEntries(JOBS.map(j=>[j.k,j]));
+let u=Float32Array.from(prior),taste=false;
+const K_COMMITTEE=5;let committee=[];
+function fitOn(C,iters=60){const w=Float32Array.from(prior);if(!C.length)return w;const lr=.7,l2=.02;
+  for(let ep=0;ep<iters;ep++)for(const [a,b,win] of C){let s=0;for(let i=0;i<w.length;i++)s+=w[i]*(a.vec[i]-b.vec[i]);const y=win==='a'?1:0,p=1/(1+Math.exp(-s)),g=p-y;for(let i=0;i<w.length;i++)w[i]-=lr*(g*(a.vec[i]-b.vec[i])+l2*(w[i]-prior[i]))}
+  return w}
+function pairsFrom(list){return list.map(c=>[byKey[c.a],byKey[c.b],c.win]).filter(c=>c[0]&&c[1])}
+function fitPairs(){const C=pairsFrom(st.compares);u=fitOn(C);committee=[];for(let k=0;k<K_COMMITTEE;k++){const R=[];for(let i=0;i<C.length;i++)R.push(C[Math.floor(Math.random()*C.length)]);committee.push(fitOn(R,40))}}
+function predictsRecent(k=10){if(st.compares.length<k+3)return 0;const w=fitOn(pairsFrom(st.compares.slice(0,-k)));let ok=0,n=0;
+  for(const c of st.compares.slice(-k)){const a=byKey[c.a],b=byKey[c.b];if(!a||!b)continue;n++;if((dot(w,a.vec)-dot(w,b.vec)>0)===(c.win==='a'))ok++}return n?ok/n:0}
+function topSetStability(N=100){if(committee.length<2)return 0;const tops=committee.map(w=>new Set(JOBS.map(j=>[dot(w,j.vec),j.k]).sort((x,y)=>y[0]-x[0]).slice(0,N).map(x=>x[1])));let s=0,n=0;
+  for(let i=0;i<tops.length;i++)for(let j=i+1;j<tops.length;j++){let inter=0;for(const k of tops[i])if(tops[j].has(k))inter++;s+=inter/(2*N-inter);n++}return s/n}
+function tasteScore(j){return dot(u,j.vec)}
+let cmpPair=null,cmpAcc=0,cmpStab=0;
+const PAIR_MODE='committee';
+function nextPair(){const pool=JOBS.filter(j=>st.labels[j.k]!==0&&passes(j)).sort((x,y)=>(taste||st.compares.length?tasteScore(y)-tasteScore(x):y.sim-x.sim)).slice(0,300);
+  if(pool.length<2)return null;const seen=new Set(st.compares.map(c=>c.a+'|'+c.b));let best=null,bestS=PAIR_MODE==='v1'?Infinity:-Infinity;
+  for(let t=0;t<400;t++){const a=pool[Math.floor(Math.random()*pool.length)],b=pool[Math.floor(Math.random()*pool.length)];
+    if(a===b||(a.c===b.c&&a.t===b.t)||seen.has(a.k+'|'+b.k)||seen.has(b.k+'|'+a.k))continue;const cos=dot(a.vec,b.vec);
+    if(PAIR_MODE==='v1'){const sc=Math.abs(dot(u,a.vec)-dot(u,b.vec))+0.15*cos;if(sc<bestS){bestS=sc;best=[a,b]}}
+    else{if(cos>0.95)continue;let mean=0,m2=0;const ds=[];for(const w of committee){const d=dot(w,a.vec)-dot(w,b.vec);ds.push(d);mean+=d}mean/=committee.length;for(const d of ds)m2+=(d-mean)*(d-mean);m2/=committee.length;
+      const sc=(Math.sqrt(m2)+0.05)*Math.sqrt(Math.max(0,2-2*cos))*(0.5+Math.exp(-Math.abs(mean)*8));if(sc>bestS){bestS=sc;best=[a,b]}}}
+  return best}
+const MIN=12,MAX=25;
+function showPair(){cmpPair=nextPair();if(!cmpPair){stopCmp();return}
+  const n=st.compares.length;$('#cmpn').textContent=`${n+1} / ${MAX}`;cmpAcc=predictsRecent();cmpStab=topSetStability();
+  const conf=Math.min(1,Math.max(n/MAX,n>=MIN?Math.max(cmpStab/0.75,cmpAcc/0.8):n/MIN*0.6));$('#cmpbar').style.width=`${conf*100}%`;
+  let txt;if(n<MIN)txt=`Getting a feel for your taste · ${MIN-n} more before it can stop`;else{txt=`Your ranking is ${Math.round(cmpStab*100)}% settled`;if(n>=13)txt+=` · guessed ${Math.round(cmpAcc*10)} of your last 10`;txt+=` · stops by ${MAX}`}
+  $('#cmpc').textContent=txt;
+  const [A,B]=cmpPair;const dm=dot(u,A.vec)-dot(u,B.vec);const pA=1/(1+Math.exp(-dm*4));
+  const votesA=committee.filter(w=>dot(w,A.vec)-dot(w,B.vec)>0).length,agree=Math.max(votesA,committee.length-votesA)/(committee.length||1);
+  const guess=st.compares.length<3?null:(pA>=0.5?'a':'b');const gp=Math.round(100*Math.max(pA,1-pA));
+  for(const [el,j,side] of [[$('#optA'),A,'a'],[$('#optB'),B,'b']])
+    el.innerHTML=`<div class="guess">${guess===side?`<b>▲ its guess</b> · ${gp}% · ${Math.round(agree*100)}% of the committee agree`:(guess?'&nbsp;':'no guess yet')}</div><div class="t">${esc(j.t)}</div><div class="m">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div><div class="badges">${badges(j,true)}</div>${j.e&&j.e.summary?'<div class="sum">'+esc(j.e.summary)+'</div>':''}<div class="jdx">${esc(jdText(j.jd).slice(0,1400))}</div>`}
+function pick(win){if(!cmpPair)return;const [a,b]=cmpPair;st.compares.push({a:a.k,b:b.k,win});save();
+  const guessed=st.compares.length>=4?((dot(u,a.vec)-dot(u,b.vec)>=0)?'a':'b'):null;
+  event({type:'compare',a:a.k,b:b.k,win,aTitle:a.t,aCompany:a.c,bTitle:b.t,bCompany:b.c,n:st.compares.length,guess:guessed,surprised:guessed!==null&&guessed!==win});
+  fitPairs();const n=st.compares.length;if(n>=25||(n>=12&&(topSetStability()>=0.75||predictsRecent()>=0.8))){stopCmp();return}showPair()}
+// ---- Sort flow UI
+function step(n){for(const s of document.querySelectorAll('#steps span')){const k=+s.dataset.s;s.className=k===n?'on':k<n?'done':''}
+  for(const [id,on] of [['#intro',n===0],['#scope',n===1],['#what',n===2],['#cmpmain',n===3]])$(id).style.display=on?'flex':'none';
+  $('#steps').style.visibility=n===0?'hidden':'visible';$('#cmp-title').textContent=n===0?'Sort by my taste':n===1?'Where would you work?':n===2?'What kind of job?':'Which would you rather have?'}
+for(const id of ['#intro','#scope','#what','#cmpmain'])$(id).style.flexDirection='column';
+function renderScope(){for(const [f,el,max] of [['rm',$('#sc-rm'),6],['co',$('#sc-co'),12],['rg',$('#sc-rg'),14]]){el.innerHTML='';const counts={};for(const j of JOBS)for(const k of keysOf[f](j))counts[k]=(counts[k]||0)+1;
+    Object.entries(counts).filter(([k])=>k!=='unknown'&&k!=='(unknown)').sort((a,b)=>b[1]-a[1]).slice(0,max).forEach(([k,n])=>{const b=document.createElement('button');b.innerHTML=`${esc(k)}<span class="n">${n}</span>`;b.className='chip'+(sel[f].has(k)?' on':'');
+      b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);b.className='chip'+(sel[f].has(k)?' on':'');scopeCount()};el.appendChild(b)})}scopeCount()}
+function scopeCount(){$('#sc-n').textContent=`${JOBS.filter(passes).length.toLocaleString()} jobs in scope`}
+function startCmp(){fitPairs();$('#cmp').classList.add('on');renderScope();step(st.sortIntroSeen?1:0);event({type:'sort_start',compares:st.compares.length})}
 let spreadSeed=0;
-function inScopeJobs(){return JOBS.filter(j=>{if(kwHidden(j))return false;for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})}
-function spread(list,k){  // farthest-point sampling over vectors, seeded at the job nearest the ideal JD (offset by spreadSeed)
-  if(list.length<=k)return list.slice();const byS=[...list].sort((a,b)=>b.sim-a.sim);const out=[byS[Math.min(spreadSeed*3,byS.length-1)]];const d=new Float32Array(list.length).fill(Infinity);
-  for(let r=0;r<k-1;r++){const last=out[out.length-1];let bi=-1,bd=-Infinity;for(let i=0;i<list.length;i++){const j=list[i];if(out.includes(j))continue;const dist=1-dot(j.vec,last.vec);if(dist<d[i])d[i]=dist;const sc=d[i]+0.12*j.sim;if(sc>bd){bd=sc;bi=i}}if(bi<0)break;out.push(list[bi])}
-  return out}
-function renderWhat(){
-  const list=inScopeJobs().filter(j=>st.labels[j.k]===undefined);const el=$('#wh-cards');el.innerHTML='';
+function inScopeJobs(){return JOBS.filter(j=>{if(kwHidden(j))return false;if(st.eligOnly&&j.el===false)return false;for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true})}
+function spread(list,k){if(list.length<=k)return list.slice();const byS=[...list].sort((a,b)=>b.sim-a.sim);const out=[byS[Math.min(spreadSeed*3,byS.length-1)]];const d=new Float32Array(list.length).fill(Infinity);
+  for(let r=0;r<k-1;r++){const last=out[out.length-1];let bi=-1,bd=-Infinity;for(let i=0;i<list.length;i++){const j=list[i];if(out.includes(j))continue;const dist=1-dot(j.vec,last.vec);if(dist<d[i])d[i]=dist;const sc=d[i]+0.12*j.sim;if(sc>bd){bd=sc;bi=i}}if(bi<0)break;out.push(list[bi])}return out}
+function renderWhat(){const list=inScopeJobs().filter(j=>st.labels[j.k]===undefined);const el=$('#wh-cards');el.innerHTML='';
   for(const j of spread(list,24)){const d=document.createElement('div');d.className='gcard';
-    d.innerHTML=`<div class="lbl">${esc(j.t)}</div><div class="meta" style="color:var(--mut);font-size:12px">${esc(j.c)}${j.l?' · '+esc(j.l.slice(0,40)):''}${j.rm&&j.rm!=='unknown'?' · '+j.rm:''}${salaryOf(j)?' · 💰':''}</div><div class="jd">${esc((j.e&&j.e.summary)||(j.jd||'').slice(0,360))}</div><div class="btns"><button class="g more">More like this</button><button class="g less">Less</button></div>`;
+    d.innerHTML=`<div class="t">${esc(j.t)}</div><div class="m">${esc(j.c)}${j.l?' · '+esc(j.l.slice(0,40)):''}</div><div class="badges">${badges(j,true)}</div><div class="jdx">${esc((j.e&&j.e.summary)||jdText(j.jd).slice(0,360))}</div><div class="btns"><button class="btn ok">More like this</button><button class="btn no">Less</button></div>`;
     const [bm,bl]=d.querySelectorAll('button');
     bm.onclick=()=>{st.labels[j.k]=st.labels[j.k]===1?undefined:1;if(st.labels[j.k]===undefined)delete st.labels[j.k];d.className='gcard'+(st.labels[j.k]===1?' more':'');save();event({type:'seed',key:j.k,value:st.labels[j.k]??null,title:j.t,company:j.c});whatCount()};
     bl.onclick=()=>{st.labels[j.k]=st.labels[j.k]===0?undefined:0;if(st.labels[j.k]===undefined)delete st.labels[j.k];d.className='gcard'+(st.labels[j.k]===0?' less':'');save();event({type:'seed',key:j.k,value:st.labels[j.k]??null,title:j.t,company:j.c});whatCount()};
-    el.appendChild(d)}
-  whatCount()}
-function whatCount(){const P=JOBS.filter(j=>st.labels[j.k]===1).length,N=JOBS.filter(j=>st.labels[j.k]===0).length;$('#wh-n').textContent=`${P} more · ${N} less · ${inScopeJobs().length.toLocaleString()} jobs in scope`}
-$('#wh-more').onclick=()=>{spreadSeed++;renderWhat()};
-function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});$('#scope').style.display='none';$('#what').style.display='block';renderWhat()}
-$('#wh-back').onclick=()=>{$('#what').style.display='none';$('#scope').style.display='block'};
-$('#wh-go').onclick=()=>beginPairs();
-function beginPairs(){
-  event({ type: 'seed_done', more: JOBS.filter(j => st.labels[j.k] === 1).map(j => j.k), less: JOBS.filter(j => st.labels[j.k] === 0).map(j => j.k), n: JOBS.filter(passes).length });
-  updatePrior(); fitPairs(); refit(); renderFacets(); render();
-  $('#what').style.display = 'none'; $('#cmpmain').style.display = 'block'; showPair();
-}
-$('#sc-go').onclick = toWhat;
-$('#sc-any').onclick = () => { sel.rm.clear(); sel.co.clear(); sel.rg.clear(); toWhat(); };
-function stopCmp(){
-  $('#cmp').classList.remove('on'); fitPairs(); taste = st.compares.length > 0;
-  if (taste) { for (const j of JOBS) j.score = 1 / (1 + Math.exp(-(dot(u, j.vec) - median()))); $('#sort').value = 'model'; }
-  event({ type: 'sort_done', compares: st.compares.length, accuracy: predictsRecent(), stability: topSetStability() });
-  render(); $('#stats').textContent += ` · sorted by taste (${st.compares.length} comparisons)`;
-}
-function median(){ const v = JOBS.map(j => dot(u, j.vec)).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] || 0; }
-async function enrichTop(n=300){
-  const btn=$('#enrichbtn');btn.disabled=true;
-  const list=JOBS.filter(passes).sort((a,b)=>fscore(b)-fscore(a)).slice(0,n).filter(j=>!j.e);
-  let spent=0,done=0;
-  for(let i=0;i<list.length;i+=100){
-    const batch=list.slice(i,i+100);btn.textContent=`⚡ enriching ${Math.min(i+100,list.length)}/${list.length}…`;
+    el.appendChild(d)}whatCount()}
+function whatCount(){const P=JOBS.filter(j=>st.labels[j.k]===1).length,N=JOBS.filter(j=>st.labels[j.k]===0).length;$('#wh-n').textContent=`${P} more · ${N} less · ${inScopeJobs().length.toLocaleString()} in scope`}
+function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});step(2);renderWhat()}
+function beginPairs(){event({type:'seed_done',more:JOBS.filter(j=>st.labels[j.k]===1).map(j=>j.k),less:JOBS.filter(j=>st.labels[j.k]===0).map(j=>j.k),n:JOBS.filter(passes).length});
+  updatePrior();fitPairs();refit();renderFacets();render(true,'seed');step(3);showPair()}
+function stopCmp(){$('#cmp').classList.remove('on');fitPairs();taste=st.compares.length>0;
+  if(taste){for(const j of JOBS)j.score=1/(1+Math.exp(-(dot(u,j.vec)-median())));$('#sort').value='model'}
+  event({type:'sort_done',compares:st.compares.length,accuracy:predictsRecent(),stability:topSetStability()});render(true,'sort')}
+function median(){const v=JOBS.map(j=>dot(u,j.vec)).sort((a,b)=>a-b);return v[Math.floor(v.length/2)]||0}
+$('#intro-go').onclick=()=>{if($('#intro-skip').checked){st.sortIntroSeen=true;save()}step(1)};
+$('#sc-help').onclick=()=>step(0);$('#sc-go').onclick=toWhat;$('#sc-any').onclick=()=>{sel.rm.clear();sel.co.clear();sel.rg.clear();toWhat()};
+$('#wh-back').onclick=()=>step(1);$('#wh-more').onclick=()=>{spreadSeed++;renderWhat()};$('#wh-go').onclick=beginPairs;
+$('#cmpback').onclick=()=>{step(2);renderWhat()};$('#cmpstop').onclick=stopCmp;$('#cmpclose').onclick=()=>{$('#cmp').classList.remove('on')};
+$('#sortbtn').onclick=startCmp;$('#optA').onclick=()=>pick('a');$('#optB').onclick=()=>pick('b');
+// ---- enrichment
+async function enrichTop(n=300){const btn=$('#enrichbtn');btn.disabled=true;const list=JOBS.filter(passes).sort((a,b)=>fscore(b)-fscore(a)).slice(0,n).filter(j=>!j.e);let spent=0,done=0;
+  if(!list.length){toast('Everything in view is already enriched');btn.disabled=false;return}
+  for(let i=0;i<list.length;i+=100){const batch=list.slice(i,i+100);btn.textContent=`⚡ Enriching ${Math.min(i+100,list.length)}/${list.length}…`;
     let r;try{r=await fetch((window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev')+'/enrich',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jobs:batch.map(j=>{const [ats,rest]=j.k.split(/\/(.+)/);const [slug,id]=rest.split(/#(.+)/);return{ats,slug,id}})})})}catch(e){btn.textContent='⚡ Enrich (network error)';btn.disabled=false;return}
     const res=await r.json().catch(()=>({}));
     for(const [name,b] of Object.entries(res.boards||{}))if(b.company)st.companies[name]={name:b.company.name,website:b.company.website,industry:b.company.industry,size:b.company.size_bucket,hq:(b.company.hq_location||{}).country_code,staffing:b.company.is_staffing_agency,desc:b.company.description};
     for(const [k,x] of Object.entries(res.jobs||{}))if(x.status==='done'&&x.enrichment){st.enrich[k]=x.enrichment.data;done++}
     applyEnrich();save();
-    if(r.status===429){btn.textContent=`⚡ rate limited (retry in ${res.retryAfterSeconds}s)`;event({type:'enrich',n:done,rateLimited:true});btn.disabled=false;rebuildFacets();renderFacets();render(false);return}
-    spent+=(res.cost||{}).thisCallUsd||0;
-  }
-  event({type:'enrich',n:done,usd:spent});btn.textContent=`⚡ Enrich top 300 (${done} added, $${spent.toFixed(2)})`;btn.disabled=false;rebuildFacets();renderFacets();render(false)}
+    if(r.status===429){btn.textContent=`⚡ Rate limited (retry in ${res.retryAfterSeconds}s)`;event({type:'enrich',n:done,rateLimited:true});btn.disabled=false;rebuildFacets();renderFacets();render(false,'enrich');return}
+    spent+=(res.cost||{}).thisCallUsd||0}
+  event({type:'enrich',n:done,usd:spent});btn.innerHTML=`⚡ Enrich <span class="lbl-long">top 300</span>`;btn.disabled=false;rebuildFacets();renderFacets();render(false,'enrich');toast(`Enriched ${done} jobs for $${spent.toFixed(2)} · new facets and badges`);loadBudget()}
+async function loadBudget(){try{const r=await fetch((window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev')+'/enrich/budget');const d=await r.json();const h=d.hour||d.hourly||{},dd=d.day||d.daily||{};const left=v=>v==null?'?':'$'+Number(v).toFixed(2);
+  $('#budgetline').innerHTML=`<span>Your budget left</span><span>${left(h.remainingUsd??h.remaining)} this hour · ${left(dd.remainingUsd??dd.remaining)} today</span>`}catch{}}
 const PREF_REMOTE_ONLY=/\b(remote|work from home|wfh|anywhere)\b/i.test(PREF||'')&&!/\b(hybrid|on-?site)\b/i.test(PREF||'');
 function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(!j.sn&&e.seniority&&e.seniority!=='unspecified'){j.sn=({intern:'intern',entry:'junior',junior:'junior',mid:'mid',senior:'senior',staff:'staff',principal:'staff',lead:'lead',manager:'manager',senior_manager:'manager',director:'director',vp:'executive',c_level:'executive'})[e.seniority]||e.seniority;j.sne=null}if(e.work_arrangement&&e.work_arrangement!=='unspecified'){j.rm=e.work_arrangement;if(PREF_REMOTE_ONLY){if((j.rm==='onsite'||j.rm==='hybrid')&&j.el!==false){j.el=false;j.elr=j.rm+' (you asked for remote)'}else if(j.rm==='remote'&&j.elr==='not labelled remote'){j.el=true;j.elr='remote (enrichment)'}}}}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
-$('#enrichbtn').onclick=()=>enrichTop(300);
-$('#sortbtn').onclick = startCmp; $('#cmpstop').onclick = stopCmp;
-$('#optA').onclick = () => pick('a'); $('#optB').onclick = () => pick('b');
+$('#enrichbtn').onclick=()=>enrichTop(300);$('#enrichbtn').addEventListener('mouseenter',loadBudget,{once:true});
 // ---- facets
 const FACETS=['el','rm','sn','rf','et','sa','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
-st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);  // (legacy) groups excluded
-st.kw=st.kw||{t:{},b:{}};
-if(st.eligOnly===undefined)st.eligOnly=!!PREF;  // default on when a location preference exists  // keyword preferences: {t|b: {term: +1 encourage | -1 discourage}}
-const TECH=['go','golang','rust','python','java','kotlin','scala','c++','c#','.net','typescript','javascript','node','react','vue','angular','swift','ios','android','ruby','rails','php','elixir','erlang','haskell','sql','postgres','postgresql','mysql','mongodb','redis','kafka','rabbitmq','grpc','graphql','rest','kubernetes','k8s','docker','terraform','ansible','aws','gcp','azure','linux','serverless','lambda','spark','flink','airflow','snowflake','databricks','hadoop','elasticsearch','opensearch','prometheus','grafana','datadog','observability','ci/cd','jenkins','github actions','microservices','distributed systems','event-driven','oncall','on-call','on call','pagerduty','sre','devops','platform','infrastructure','security','compliance','soc2','fintech','payments','ledger','blockchain','crypto','web3','solidity','ml','machine learning','llm','ai','pytorch','tensorflow','embedded','firmware','fpga','gpu','cuda','games','unity','unreal','mobile','frontend','front-end','backend','back-end','full stack','fullstack','full-stack','startup','series a','series b','series c','remote','hybrid','on-site','onsite','relocation','visa','sponsorship','clearance','equity','bonus','contract','contractor','c2c','w2','1099','intern','internship','manager','director','staff','principal','lead','senior','junior','mid-level','entry level'];
+st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);st.kw=st.kw||{t:{},b:{}};
+if(st.eligOnly===undefined)st.eligOnly=!!PREF;
 function termRe(t){return new RegExp('(^|[^a-z0-9+#.])'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![a-z0-9+#])','i')}
 const kwCache=new Map();function hasTerm(text,t){let r=kwCache.get(t);if(!r){r=termRe(t);kwCache.set(t,r)}return r.test(text)}
 const boardOf=j=>j.k.split('#')[0];
@@ -303,53 +378,92 @@ function coHidden(j){return !!(st.hideCo&&st.hideCo[boardOf(j)])}
 function kwHidden(j){if(coHidden(j))return true;for(const [t,v] of Object.entries(st.kw.t))if(v<0&&hasTerm(j.t,t))return true;for(const [t,v] of Object.entries(st.kw.b))if(v<0&&hasTerm(j.jd||'',t))return true;return false}
 function kwBoost(j){let b=0;for(const [t,v] of Object.entries(st.kw.t))if(v>0&&hasTerm(j.t,t))b+=0.08;for(const [t,v] of Object.entries(st.kw.b))if(v>0&&hasTerm(j.jd||'',t))b+=0.04;return Math.min(b,0.25)}
 const NAMES={US:'United States',GB:'United Kingdom',CA:'Canada',DE:'Germany',FR:'France',IN:'India',NL:'Netherlands',ES:'Spain',IT:'Italy',PL:'Poland',PT:'Portugal',IE:'Ireland',SE:'Sweden',CH:'Switzerland',AU:'Australia',SG:'Singapore',JP:'Japan',BR:'Brazil',MX:'Mexico',IL:'Israel',AE:'UAE',AT:'Austria',BE:'Belgium',DK:'Denmark',NO:'Norway',FI:'Finland',CZ:'Czechia',GR:'Greece',KR:'South Korea',HK:'Hong Kong',TW:'Taiwan',NZ:'New Zealand',AR:'Argentina',CO:'Colombia',CL:'Chile',ZA:'South Africa',NG:'Nigeria',KE:'Kenya',PH:'Philippines',UA:'Ukraine',TR:'Türkiye',RO:'Romania',HU:'Hungary'};
-function fmtSal(e){if(!e)return'';const lo=e.salary_min,hi=e.salary_max;if(lo==null&&hi==null)return e.salary_raw?'💰 '+String(e.salary_raw).replace(/^.*?(?=[$€£]|\d)/,'').slice(0,40):'';const cur=e.salary_currency||'',sym=cur==='USD'?'$':cur==='EUR'?'€':cur==='GBP'?'£':cur?cur+' ':'';const f=v=>v>=1000?sym+Math.round(v/1000)+'k':sym+Math.round(v);const per=e.salary_period&&e.salary_period!=='year'?' /'+e.salary_period:'';return '💰 '+(lo!=null&&hi!=null&&lo!==hi?f(lo)+'–'+f(hi):f(lo!=null?lo:hi))+per}
+function fmtSal(e){if(!e)return'';const lo=e.salary_min,hi=e.salary_max;if(lo==null&&hi==null)return e.salary_raw?String(e.salary_raw).replace(/^.*?(?=[$€£]|\d)/,'').slice(0,40):'';const cur=e.salary_currency||'',sym=cur==='USD'?'$':cur==='EUR'?'€':cur==='GBP'?'£':cur?cur+' ':'';const f=v=>v>=1000?sym+Math.round(v/1000)+'k':sym+Math.round(v);const per=e.salary_period&&e.salary_period!=='year'?' /'+e.salary_period:'';return (lo!=null&&hi!=null&&lo!==hi?f(lo)+'–'+f(hi):f(lo!=null?lo:hi))+per}
 function salaryOf(j){const e=j.e;if(e&&(e.salary_min!=null||e.salary_max!=null)){const m=e.salary_period==='hour'?2080:e.salary_period==='month'?12:e.salary_period==='week'?52:e.salary_period==='day'?260:1;return{lo:(e.salary_min||e.salary_max)*m,hi:(e.salary_max||e.salary_min)*m,cur:e.salary_currency||'',raw:e.salary_raw||'',src:'llm'}}if(j.sal)return{lo:j.sal.annual_min,hi:j.sal.annual_max,cur:j.sal.currency,raw:j.sal.raw,src:'text'};if(j.est)return{lo:j.est.lo,hi:j.est.hi,mid:j.est.mid,cur:'USD',raw:'',src:'est'};return null}
 const band=v=>v>=250000?'250k+':v>=200000?'200–250k':v>=150000?'150–200k':v>=100000?'100–150k':v>=60000?'60–100k':'<60k';
 const salaryBucket=j=>{const s=salaryOf(j);if(!s)return['(unknown)'];if(s.src==='est')return['≈ '+band(s.mid)+' (est.)'];return[(s.cur&&s.cur!=='USD'?s.cur+' ':'')+band(s.hi)]};
 const fmtk=v=>'$'+Math.round(v/1000)+'k';
 const keysOf={el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
-for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1;
 function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
-function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]).slice(0,f==='g'?40:f==='rm'?6:25).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type=checkbox ${sel[f].has(k)?'checked':''}> ${esc(k).slice(0,26)} <span>${n}</span>`;l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderChips();render()};el.appendChild(l)})}renderChips()}
-// quick chips: remote, and the top 3 countries
+const facetShow={};
+function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
+    entries.slice(0,cap).forEach(([k,n])=>{const l=document.createElement('label');l.className='facet';const est=/\(est\.\)$/.test(k);const cls=est?'est':f==='el'&&k==='ineligible'?'no':f==='el'&&k==='eligible'?'ok':'';
+      l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
+      l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
+    if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}}
+  const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
+  renderChips()}
 function renderChips(){const el=$('#chips');el.innerHTML='';
-  if(PREF){const b=document.createElement('button');const hidden=JOBS.filter(j=>j.el===false).length;b.className=st.eligOnly?'on':'';b.textContent=`✓ eligible for ${PREF}`+(st.eligOnly?` (hiding ${hidden})`:'');b.title='Jobs restricted to other countries/regions (from the location field or "must be located in…" phrases) are hidden while this is on';b.onclick=()=>{st.eligOnly=!st.eligOnly;save();event({type:'filter',facet:'eligible',value:PREF,on:st.eligOnly});renderFacets();render()};el.appendChild(b)}
+  if(PREF){const b=document.createElement('button');const hidden=JOBS.filter(j=>j.el===false).length;b.className='chip'+(st.eligOnly?' on':'');b.innerHTML=`✓ eligible for ${esc(PREF)}${st.eligOnly?` <span class="n">hiding ${hidden}</span>`:''}`;b.title='Jobs restricted to other countries/regions, or not labelled remote when you asked for remote, are hidden while this is on';b.onclick=()=>{st.eligOnly=!st.eligOnly;save();event({type:'filter',facet:'eligible',value:PREF,on:st.eligOnly});renderFacets();render(true,'filter')};el.appendChild(b)}
   const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
-  for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className=sel[f].has(k)?'on':'';b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render()};el.appendChild(b)}
-  for(const [b,name] of Object.entries(st.hideCo||{})){const x=document.createElement('button');x.className='dis';x.style.borderColor='var(--no)';x.textContent='✖ '+name;x.title='hidden company · click to show again';x.onclick=()=>{delete st.hideCo[b];save();event({type:'hide_company',board:b,company:name,on:false});renderFacets();render()};el.appendChild(x)}
-  for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){if(v>=0)continue;const b=document.createElement('button');b.className='dis';b.style.borderColor='var(--no)';b.textContent='✖ '+t+(kind==='b'?' (body)':'');b.title='click to un-ban';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'ban',where:kind,term:t,on:false});renderFacets();render()};el.appendChild(b)}}
+  for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className='chip'+(sel[f].has(k)?' on':'');b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render(true,'filter')};el.appendChild(b)}
+  for(const [b,name] of Object.entries(st.hideCo||{})){const x=document.createElement('button');x.className='chip dis';x.textContent='✖ '+name;x.title='Hidden company · click to show again';x.onclick=()=>{delete st.hideCo[b];save();event({type:'hide_company',board:b,company:name,on:false});renderFacets();render(true,'filter')};el.appendChild(x)}
+  for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){if(v>=0)continue;const b=document.createElement('button');b.className='chip dis';b.textContent='✖ '+t+(kind==='b'?' (body)':'');b.title='Click to un-ban';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'ban',where:kind,term:t,on:false});renderFacets();render(true,'filter')};el.appendChild(b)}}
+$('#clearf').onclick=()=>{for(const f of FACETS)sel[f].clear();renderFacets();render(true,'filter')};
 // ---- list
-let ranked=[],cur=0,shown=0;
+let ranked=[],cur=0,shown=0,prevTop=null;
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
   if(exclG.has(j.g3)||kwHidden(j))return false;
-  if(st.eligOnly&&j.el===false&&!(j.rme&&sel.rm.has(j.rme.v+' (est.)')&&String(j.elr||'').startsWith('not labelled remote'))&&!(j.coe&&sel.co.has((NAMES[j.coe.country]||j.coe.country)+' (est.)')))return false;  // picking an (est.) arrangement on purpose overrides the missing-label hide
+  if(st.eligOnly&&j.el===false&&!(j.rme&&sel.rm.has(j.rme.v+' (est.)')&&String(j.elr||'').startsWith('not labelled remote'))&&!(j.coe&&sel.co.has((NAMES[j.coe.country]||j.coe.country)+' (est.)')))return false;
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
-function render(reset=true){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a));
-  if(reset){shown=0;cur=0}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));for(let i=0;i<N;i++)el.appendChild(jobEl(ranked[i],i));shown=N;
-  if(ranked.length>N){const m=document.createElement('button');m.className='g';m.textContent=`show more (${ranked.length-N} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
-  const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length;
-  const personalized=taste||(st.compares||[]).length||yes||no;
-  $('#stats').textContent=`${ranked.length.toLocaleString()} of ${JOBS.length.toLocaleString()} · `+(personalized?`${yes} yes / ${no} no · ${(st.compares||[]).length} comparisons`:`pre-ranked by fit to your ideal JD${IDEAL.title?' ("'+IDEAL.title+'")':''} — press Sort to personalize`);hi()}
+const REASON={label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
+function render(reset=true,reason=null){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a));
+  const newTop=ranked.slice(0,20).map(j=>j.k);let movedIn=[];
+  if(prevTop&&reason&&['label','compare','seed','sort','enrich'].includes(reason)){const was=new Set(prevTop);movedIn=newTop.filter(k=>!was.has(k))}
+  if(reset){shown=0;cur=Math.min(cur,Math.max(0,ranked.length-1))}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));
+  if(!ranked.length){const d=document.createElement('div');d.className='empty';d.innerHTML='No jobs match. <a href="#" id="emptyclear">Clear filters</a>';el.appendChild(d);d.querySelector('a').onclick=e=>{e.preventDefault();$('#clearf').click()}}
+  for(let i=0;i<N;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}shown=N;
+  if(ranked.length>N){const m=document.createElement('button');m.className='btn ghost';m.id='more';m.textContent=`Show more (${(ranked.length-N).toLocaleString()} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
+  const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length,nc=(st.compares||[]).length;const personalized=taste||nc||yes||no;
+  $('#stats').innerHTML=`<b>${ranked.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes} yes · ${no} no · ${nc} comparisons`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
+  if(reason&&['label','compare','seed','sort','enrich'].includes(reason)){const what=movedIn.length?`${movedIn.length} job${movedIn.length>1?'s':''} moved into the top 20`:'order refreshed';$('#reranktxt').textContent=`Re-ranked from ${REASON[reason]} · ${what}`;$('#rerank').classList.add('show');clearTimeout(render._t);render._t=setTimeout(()=>$('#rerank').classList.remove('show'),4000)}
+  prevTop=newTop;hi()}
+function badges(j,compact=false){const out=[];
+  if(j.el===false)out.push(`<span class="b no" title="${esc(j.elr)}">⛔ ${esc(j.elr.length>34?j.elr.slice(0,34)+'…':j.elr)}</span>`);
+  if(j.rm&&j.rm!=='unknown')out.push(`<span class="b">${esc(j.rm)}</span>`);else if(j.rme)out.push(`<span class="b est" title="${j.rme.p?'Estimated from the posting\'s embedding; the posting itself doesn\'t say':'Default: the posting names a place and nothing in it says remote or hybrid'}">${esc(j.rme.v)}${j.rme.p?' '+Math.round(j.rme.p*100)+'%':''}</span>`);
+  if(j.sn)out.push(`<span class="b">${esc(j.sn)}</span>`);else if(j.sne)out.push(`<span class="b est" title="${j.sne.p?'Seniority estimated from the posting\'s embedding; the title doesn\'t say':'Default: the title states no level and the model has no strong signal'}">${esc(j.sne.v)}${j.sne.p?' '+Math.round(j.sne.p*100)+'%':''}</span>`);
+  const s=salaryOf(j);if(s){if(s.src==='est')out.push(`<span class="b est" title="Estimated from similar postings with stated pay; not from this posting">${fmtk(s.lo)}–${fmtk(s.hi)}</span>`);else out.push(`<span class="b ok" title="${esc(s.raw)}">💰 ${s.src==='llm'?esc(fmtSal(j.e)):esc(j.sal.raw.length>26?fmtk(s.lo)+'–'+fmtk(s.hi):j.sal.raw)+(j.sal&&j.sal.currency!=='USD'?' '+esc(j.sal.currency):'')}</span>`)}
+  if(j.coe&&!(j.co&&j.co.length))out.push(`<span class="b est" title="Country estimated from similar location strings; the posting doesn't state one">${esc(NAMES[j.coe.country]||j.coe.country)}</span>`);
+  if(!compact&&j.e&&j.e.visa_sponsorship==='yes')out.push('<span class="b acc">visa ✓</span>');
+  if(!compact&&j.co_&&j.co_.staffing)out.push('<span class="b warn">staffing agency</span>');
+  return out.join('')}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="h"><b>${esc(j.t)}</b><span class="s">${fscore(j).toFixed(2)}${kwBoost(j)?' ✚':''} · sim ${j.sim.toFixed(2)}</span></div><div class="meta">${esc(j.c)}${j.l?' · '+esc(j.l):''}${j.coe&&!(j.co&&j.co.length)?' <span title="Country estimated from similar location strings; the posting doesn\'t state one">≈ '+esc(j.coe.country)+' <span style="color:var(--mut)">est.</span></span>':''}${j.sn?' · '+esc(j.sn):j.sne?' · <span title="'+(j.sne.p?'Seniority estimated from the posting\'s embedding; the title doesn\'t say':'Default: the title states no level and the model has no strong signal')+'">≈ '+j.sne.v+' <span style="color:var(--mut)">est.'+(j.sne.p?' '+Math.round(j.sne.p*100)+'%':'')+'</span></span>':''}${j.rm&&j.rm!=='unknown'?' · <b style="color:var(--fg)">'+j.rm+'</b>':j.rme?' · <span title="'+(j.rme.p?'Estimated from the posting\'s embedding; the posting itself doesn\'t say':'Default: the posting names a place and nothing in it says remote or hybrid')+'">≈ '+j.rme.v+' <span style="color:var(--mut)">est.'+(j.rme.p?' '+Math.round(j.rme.p*100)+'%':'')+'</span></span>':''}${j.el===false?' · <span style="color:var(--no)">⛔ '+esc(j.elr)+'</span>':''}${j.s?' · '+new Date(j.s).toISOString().slice(0,10):''} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open ↗</a></div>${j.e?`<div class="meta" style="color:#c9c9d0;margin-top:3px">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.work_arrangement!=='unspecified'?j.e.work_arrangement:'',fmtSal(j.e),j.e.visa_sponsorship==='yes'?'visa ✓':'',(j.e.skills_required||[]).slice(0,6).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}${!j.e&&j.sal?`<div class="meta">💰 ${esc(j.sal.raw)}${j.sal.period!=='year'?' /'+esc(j.sal.period):''}${j.sal.currency!=='USD'?' '+esc(j.sal.currency):''}</div>`:(j.est&&!(j.e&&(j.e.salary_raw||j.e.salary_min!=null||j.e.salary_max!=null))&&!(j.e&&j.sal)?`<div class="meta" title="Estimated from similar postings with stated pay; not from this posting">≈ ${fmtk(j.est.lo)}–${fmtk(j.est.hi)} <span style="color:var(--mut)">est.</span></div>`:(j.e&&j.sal&&!j.e.salary_raw?`<div class="meta">💰 ${esc(j.sal.raw)}</div>`:''))}${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.staffing?' · staffing agency':''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}<div class="jd">${esc(j.jd||'(no description)')}</div><div style="display:flex;gap:6px;align-items:center"><input class="note" type="text" placeholder="note…" value="${esc(st.notes[j.k]||'')}" style="flex:1"><button class="g hideco" title="Hide every posting from this company (kept across re-compiles via the interaction log)" style="white-space:nowrap">✖ never show ${esc((j.c||'').slice(0,24))} again</button></div>`;
-  d.onclick=e=>{if(e.target.tagName==='A'){event({type:'open',key:j.k});return}if(e.target.tagName==='INPUT')return;cur=i;toggle(j,d)};
-  d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};
-  d.querySelector('.note').onkeydown=e=>e.stopPropagation();
-  d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render()};return d}
+  d.innerHTML=`<div class="jh"><div class="jt"><b>${esc(j.t)}</b><div class="jc">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div></div><div class="jr"><span class="lbl"><button class="btn ghost sm y" title="Yes, more like this (J)">${l===1?'✓ yes':'✓'}</button><button class="btn ghost sm n" title="No, less like this (K)">${l===0?'✗ no':'✗'}</button></span><span class="score" title="Model score ${fscore(j).toFixed(2)} · similarity to ideal JD ${j.sim.toFixed(2)}${kwBoost(j)?' · keyword boost':''}">${fscore(j).toFixed(2)}</span></div></div>
+  <div class="badges">${badges(j)}</div>
+  <div class="jdetail"><div class="meta">${j.s?new Date(j.s).toISOString().slice(0,10)+' · ':''}${esc(j.k.split('/')[0])} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open posting ↗</a></div>
+  ${j.e?`<div class="meta sum">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.employment_type,(j.e.skills_required||[]).slice(0,8).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+  ${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}
+  <div class="jd">${esc(jdText(j.jd)||'(no description)')}</div>
+  <div class="jactions"><input class="note" type="text" placeholder="Note to self…" value="${esc(st.notes[j.k]||'')}"><button class="btn ghost sm hideco" title="Hide every posting from this company; kept across re-compiles">✖ Never show ${esc((j.c||'').slice(0,22))} again</button></div></div>`;
+  d.onclick=e=>{if(e.target.closest('a')){event({type:'open',key:j.k});return}if(e.target.closest('input,button'))return;cur=i;toggle(j,d)};
+  d.querySelector('.y').onclick=e=>{e.stopPropagation();cur=i;label(l===1?undefined:1)};d.querySelector('.n').onclick=e=>{e.stopPropagation();cur=i;label(l===0?undefined:0)};
+  d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};d.querySelector('.note').onkeydown=e=>e.stopPropagation();
+  d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render(true,'filter');toast(`Hidden ${j.c}. Undo from the ✖ chip in the toolbar.`)};return d}
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
-function label(v){const j=ranked[cur];if(!j)return;st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false);cur=Math.min(cur+1,ranked.length-1);hi()}
+function label(v){const j=ranked[cur];if(!j)return;if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');if(v!==undefined)cur=Math.min(cur+1,ranked.length-1);hi()}
 function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
-document.addEventListener('keydown',e=>{if($('#cmp').classList.contains('on')){if($('#scope').style.display==='block'){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')toWhat();return}if($('#what').style.display==='block'){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')beginPairs();return}if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
-  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;const j=ranked[cur];
+function toast(msg){$('#toasttxt').textContent=msg;$('#toast').classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>$('#toast').classList.remove('show'),3200)}
+document.addEventListener('keydown',e=>{
+  if($('#help').classList.contains('on')){if(e.key==='Escape'||e.key==='?')$('#help').classList.remove('on');return}
+  if($('#cmp').classList.contains('on')){const vis=id=>$(id).style.display!=='none';
+    if(vis('#intro')){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')$('#intro-go').click();return}
+    if(vis('#scope')){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')toWhat();return}
+    if(vis('#what')){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')beginPairs();return}
+    if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'){if(e.key==='Escape')e.target.blur();return}const j=ranked[cur];
   if(e.key==='j'||e.key==='J')label(1);else if(e.key==='k'||e.key==='K')label(0);else if(e.key===' '){e.preventDefault();if(j)toggle(j,document.querySelector(`.job[data-i="${cur}"]`))}
-  else if(e.key==='ArrowDown'){cur=Math.min(cur+1,ranked.length-1);hi()}else if(e.key==='ArrowUp'){cur=Math.max(0,cur-1);hi()}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}});
-let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render()},250)};
-$('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render()};$('#show').onchange=()=>render();
+  else if(e.key==='ArrowDown'){e.preventDefault();cur=Math.min(cur+1,ranked.length-1);hi()}else if(e.key==='ArrowUp'){e.preventDefault();cur=Math.max(0,cur-1);hi()}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}
+  else if(e.key==='/'){e.preventDefault();$('#q').focus()}else if(e.key==='?'){$('#help').classList.add('on')}});
+let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render(true,'search')},250)};
+$('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render(true,'order')};$('#show').onchange=()=>render(true,'filter');
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
-$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});$('#stats').textContent+=' · model copied to clipboard'};
-function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,w:Array.from(w,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});toast('Model, labels and comparisons copied to the clipboard as JSON')};
+$('#reset').onclick=()=>{if(!confirm('Wipe labels, comparisons and notes for this search? Enrichment is kept.'))return;location.search='?reset=1'};
+$('#helpbtn').onclick=()=>$('#help').classList.add('on');$('#helpclose').onclick=$('#helpok').onclick=()=>$('#help').classList.remove('on');
+$('#filtersbtn').onclick=()=>document.body.classList.toggle('filters');$('#closef').onclick=()=>document.body.classList.remove('filters');
+for(const m of ['#cmp','#help'])$(m).addEventListener('click',e=>{if(e.target===$(m)){$(m).classList.remove('on')}});
+$('#brand-title').textContent=IDEAL.title?'· '+IDEAL.title:'';
 st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();updatePrior();fitPairs();taste=st.compares.length>0;refit();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>
