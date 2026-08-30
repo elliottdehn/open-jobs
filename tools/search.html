@@ -96,6 +96,7 @@ aside .clear{width:100%;margin-top:10px}
 .jdetail .meta{color:var(--fg-2);font-size:var(--t-sm);margin:2px 0}.jdetail .meta.sum{color:var(--fg-1)}
 .jd{margin-top:8px;color:var(--fg-1);font-size:var(--t-md);white-space:pre-wrap;max-height:440px;overflow:auto;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-1)}
 .jactions{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.jactions .note{flex:1;min-width:200px}
+.sec-h{display:flex;align-items:center;gap:10px;margin:18px 0 6px;color:var(--fg-2);font-size:var(--t-xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase}.sec-h::after{content:'';flex:1;height:1px;background:var(--line)}.sec-h .n{color:var(--fg-3);font-weight:400;letter-spacing:0;text-transform:none}.sec-h.yes{color:var(--ok)}.sec-h.no{color:var(--no);cursor:pointer;user-select:none}.sec-h.no:hover{color:var(--fg)}.sec-h .hint2{font-weight:400;letter-spacing:0;text-transform:none;color:var(--fg-3)}
 .empty{color:var(--fg-2);padding:40px 0;text-align:center}
 #more{margin:12px auto;display:block}
 
@@ -236,7 +237,7 @@ aside .clear{width:100%;margin-top:10px}
 <!-- Help -->
 <div id="help" class="modal help" role="dialog"><div class="box narrow">
   <div class="mhead"><h2>How this page works</h2><button class="btn ghost x" id="helpclose">✕</button></div>
-  <p class="hint">Jobs start ordered by how close they read to your ideal job description. Every label you give and every comparison you answer re-orders the list, and the status bar tells you when that happens. Nothing leaves this browser except the enrichment calls you trigger.</p>
+  <p class="hint">Jobs start ordered by how close they read to your ideal job description. Every label you give and every comparison you answer re-orders the <b>unlabelled</b> jobs, and the status bar tells you when that happens. Jobs you say <b>Yes</b> to move to a section at the top and stay in the order you picked them; <b>No</b> goes to a collapsed section at the bottom. Nothing leaves this browser except the enrichment calls you trigger.</p>
   <h4>Keyboard</h4>
   <dl><dt><kbd>J</kbd></dt><dd>Yes, more like this (moves to the next job)</dd><dt><kbd>K</kbd></dt><dd>No, less like this</dd><dt><kbd>Space</kbd></dt><dd>Open / close the description</dd><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move between jobs</dd><dt><kbd>O</kbd></dt><dd>Open the posting in a new tab</dd><dt><kbd>/</kbd></dt><dd>Focus search</dd><dt><kbd>?</kbd></dt><dd>This help</dd></dl>
   <h4>Badges</h4>
@@ -409,15 +410,30 @@ function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
 const REASON={label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
-function render(reset=true,reason=null){const sort=$('#sort').value;ranked=JOBS.filter(passes).sort((a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a));
-  const newTop=ranked.slice(0,20).map(j=>j.k);let movedIn=[];
+function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const cmp=(a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
+  const vis=JOBS.filter(passes);
+  // Yes: in the order you said yes, never re-ordered. Unlabelled: ranked. No: collapsed, in the order you said no.
+  const order=Object.keys(st.labels);const at=k=>{const i=order.indexOf(k);return i<0?1e9:i};
+  const yes=vis.filter(j=>st.labels[j.k]===1).sort((a,b)=>at(a.k)-at(b.k)),no=vis.filter(j=>st.labels[j.k]===0).sort((a,b)=>at(a.k)-at(b.k)),un=vis.filter(j=>st.labels[j.k]===undefined).sort(cmp);
+  const showNo=!!st.showNo||show==='no';
+  ranked=show==='yes'?yes:show==='no'?no:show==='unlabeled'?un:[...yes,...un,...(showNo?no:[])];
+  const newTop=un.slice(0,20).map(j=>j.k);let movedIn=[];
   if(prevTop&&reason&&['label','compare','seed','sort','enrich'].includes(reason)){const was=new Set(prevTop);movedIn=newTop.filter(k=>!was.has(k))}
-  if(reset){shown=0;cur=Math.min(cur,Math.max(0,ranked.length-1))}const el=$('#list');el.innerHTML='';const N=Math.min(ranked.length,Math.max(shown,60));
-  if(!ranked.length){const d=document.createElement('div');d.className='empty';d.innerHTML='No jobs match. <a href="#" id="emptyclear">Clear filters</a>';el.appendChild(d);d.querySelector('a').onclick=e=>{e.preventDefault();$('#clearf').click()}}
-  for(let i=0;i<N;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}shown=N;
-  if(ranked.length>N){const m=document.createElement('button');m.className='btn ghost';m.id='more';m.textContent=`Show more (${(ranked.length-N).toLocaleString()} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
-  const yes=Object.values(st.labels).filter(v=>v===1).length,no=Object.values(st.labels).filter(v=>v===0).length,nc=(st.compares||[]).length;const personalized=taste||nc||yes||no;
-  $('#stats').innerHTML=`<b>${ranked.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes} yes · ${no} no · ${nc} comparisons`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
+  if(reset){shown=0;cur=Math.min(cur,Math.max(0,ranked.length-1))}const el=$('#list');el.innerHTML='';
+  if(!ranked.length){const d=document.createElement('div');d.className='empty';d.innerHTML='No jobs match. <a href="#">Clear filters</a>';el.appendChild(d);d.querySelector('a').onclick=e=>{e.preventDefault();$('#clearf').click()}}
+  const head=(cls,txt,n,extra)=>{const h=document.createElement('div');h.className='sec-h '+cls;h.innerHTML=`${txt} <span class="n">${n.toLocaleString()}</span>${extra?' <span class="hint2">'+extra+'</span>':''}`;return h};
+  const secAll=show==='all';const N=Math.min(secAll?yes.length+un.length:ranked.length,Math.max(shown,60));let i=0;
+  if(secAll&&yes.length){el.appendChild(head('yes','✓ Yes',yes.length,'kept in the order you picked them'));}
+  for(;i<N&&i<(secAll?yes.length:(show==='yes'?ranked.length:0));i++)el.appendChild(jobEl(ranked[i],i));
+  if(secAll){el.appendChild(head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD')+' · only this section re-orders':''));
+    for(;i<N&&i<yes.length+un.length;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}
+    if(no.length){const h=head('no',(showNo?'▾':'▸')+' ✗ No',no.length,showNo?'click to collapse':'click to show');h.onclick=()=>{st.showNo=!st.showNo;save();render(false)};el.appendChild(h)}
+    if(showNo)for(let k=yes.length+un.length;k<ranked.length;k++)el.appendChild(jobEl(ranked[k],k))}
+  else for(;i<N;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}
+  shown=N;
+  if((secAll?yes.length+un.length:ranked.length)>N){const m=document.createElement('button');m.className='btn ghost';m.id='more';m.textContent=`Show more (${((secAll?yes.length+un.length:ranked.length)-N).toLocaleString()} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
+  const nc=(st.compares||[]).length;const personalized=taste||nc||yes.length||no.length;
+  $('#stats').innerHTML=`<b>${vis.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes.length} yes · ${no.length} no · ${nc} comparisons`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
   if(reason&&['label','compare','seed','sort','enrich'].includes(reason)){const what=movedIn.length?`${movedIn.length} job${movedIn.length>1?'s':''} moved into the top 20`:'order refreshed';$('#reranktxt').textContent=`Re-ranked from ${REASON[reason]} · ${what}`;$('#rerank').classList.add('show');clearTimeout(render._t);render._t=setTimeout(()=>$('#rerank').classList.remove('show'),4000)}
   prevTop=newTop;hi()}
 function badges(j,compact=false){const out=[];
@@ -442,7 +458,8 @@ function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k]
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};d.querySelector('.note').onkeydown=e=>e.stopPropagation();
   d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render(true,'filter');toast(`Hidden ${j.c}. Undo from the ✖ chip in the toolbar.`)};return d}
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
-function label(v){const j=ranked[cur];if(!j)return;if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');if(v!==undefined)cur=Math.min(cur+1,ranked.length-1);hi()}
+function label(v){const j=ranked[cur];if(!j)return;const nxt=ranked.slice(cur+1).find(x=>st.labels[x.k]===undefined&&x!==j);if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');
+  const tgt=v===undefined?j:(nxt||j);const ni=ranked.indexOf(tgt);cur=ni>=0?ni:Math.min(cur,ranked.length-1);hi()}
 function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
 function toast(msg){$('#toasttxt').textContent=msg;$('#toast').classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>$('#toast').classList.remove('show'),3200)}
 document.addEventListener('keydown',e=>{
