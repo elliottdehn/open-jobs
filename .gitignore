@@ -16,3 +16,6 @@ other/
 
 # per-user Claude Code permissions (the /ideas opt-in rule lives here, never in the repo)
 .claude/settings.local.json
+
+# Worker admin token (also set as a wrangler secret)
+backend/admin_token.txt

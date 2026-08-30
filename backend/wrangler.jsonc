@@ -30,8 +30,7 @@
 		"crons": ["0 0 * * *"]
 	},
 	"vars": {
-		// Set to a real value with `wrangler secret put ADMIN_TOKEN` to protect the HTTP endpoints.
-		"ADMIN_TOKEN": "",
+		// ADMIN_TOKEN is a *secret* (`wrangler secret put ADMIN_TOKEN`), deliberately not a var: a var here would shadow the secret and the admin endpoints fail closed without it.
 		// "on" = resolve the company behind every board automatically after its first successful fetch
 		// (one OpenAI Responses call with web_search per board, ~40k live boards). "off" = only via
 		// POST /boards/:ats/:slug/enrich-board.

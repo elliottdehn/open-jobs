@@ -18,8 +18,14 @@ function unauthorized(): Response {
 const norm = (s: string) => (s ?? "").toLowerCase().replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/, "");
 
 function authorized(request: Request, env: Env): boolean {
-	if (!env.ADMIN_TOKEN) return true; // no token configured (local dev)
-	return request.headers.get("authorization") === `Bearer ${env.ADMIN_TOKEN}`;
+	// Fail closed: with no ADMIN_TOKEN secret configured, the admin endpoints are unreachable (not open).
+	// Set it with `wrangler secret put ADMIN_TOKEN`; never as a plain var (a var shadows the secret).
+	if (!env.ADMIN_TOKEN) return false;
+	const got = request.headers.get("authorization") ?? "";
+	const want = `Bearer ${env.ADMIN_TOKEN}`;
+	if (got.length !== want.length) return false;
+	let diff = 0; for (let i = 0; i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);  // constant-time compare
+	return diff === 0;
 }
 
 /** Parse job filters from the query string: status=open|removed|all, enrich=pending|done|error, since=<ms>, slim=1 */

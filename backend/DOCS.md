@@ -156,8 +156,9 @@ Experiment / evaluation of the tree: `scripts/experiments/tree.py`.
 
 ## HTTP API
 
-All endpoints are optionally protected by `Authorization: Bearer <ADMIN_TOKEN>`; with the
-`ADMIN_TOKEN` var empty (current state) they are open. Cloudflare's bot rules 403 the default
+Admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>` (a Worker secret). With no secret set they
+fail closed (401 for everyone); public endpoints (`/embed`, `/enrich`, `/probe`, `/ideas`, `/data/*`) never need it.
+Locally the token lives in `backend/admin_token.txt` (git-ignored); `consolidate.sh` exports it as `ADMIN_TOKEN`. Cloudflare's bot rules 403 the default
 Python `urllib` user agent — send any custom UA (curl is fine).
 
 | Method | Path | Purpose |
@@ -382,7 +383,7 @@ curl -X POST $B/boards/greenhouse/stripe/enrich-board          # or per board, a
 
 ### Lock down the endpoints
 ```sh
-npx wrangler secret put ADMIN_TOKEN     # then remove the empty "vars" entry from wrangler.jsonc
+npx wrangler secret put ADMIN_TOKEN     # required; there must be no ADMIN_TOKEN var in wrangler.jsonc (it would shadow the secret)
 ```
 
 ## Operational notes

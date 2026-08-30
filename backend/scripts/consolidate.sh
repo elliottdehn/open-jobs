@@ -7,6 +7,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BASE="${1:-${WORKER_URL:-https://backend.dehnbostele.workers.dev}}"; [ $# -gt 0 ] && shift || true
+# admin token for the Worker (export/ingest endpoints): env ADMIN_TOKEN, else admin_token.txt (git-ignored)
+[ -z "${ADMIN_TOKEN:-}" ] && [ -f admin_token.txt ] && export ADMIN_TOKEN="$(tr -d '[:space:]' < admin_token.txt)"
+[ -z "${ADMIN_TOKEN:-}" ] && echo "WARNING: no ADMIN_TOKEN (env or backend/admin_token.txt); the pull will get 401s"
 DATE=$(date +%Y-%m-%d)
 OUT="export/$DATE"
 mkdir -p logs "$OUT"
