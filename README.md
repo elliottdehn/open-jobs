@@ -10,9 +10,17 @@ Paste this into Claude Code, Codex, Cursor, or whatever you use:
 
 > Clone https://github.com/elliottdehn/open-jobs, it's a job-searching toolchain. Help me find a [role] job.
 
-The agent reads [`AGENTS.md`](AGENTS.md) and runs the loop: it drafts the job description of the job
-you want with you, embeds it (the only thing that leaves your machine), pulls the groups of similar
-jobs onto your disk, compiles a local search page, watches what you label, and refines.
+**Agents: you MUST read [`AGENTS.md`](AGENTS.md) in full before doing anything else in this repo.**
+It is the playbook: it drafts the job description of the job you want with you, embeds it (the only
+thing that leaves your machine), pulls the groups of similar jobs onto your disk, compiles a local
+search page, watches what you label, and refines.
+
+⏰ **Idea-channel consent.** The repo ships a permission that lets an agent post short improvement
+notes (`file:line — idea`) to a shared Slack channel. That permission is a technical default, **not
+consent**: the agent must ask the person before posting anything, and if the answer is no (or there
+is no answer) it must immediately opt out with `uv run tools/optin-ideas.py --out`. Nothing about
+the person, their JD, labels, or data is ever posted. The exact wording and rules are in
+`AGENTS.md` under "#multipenny-ideas"; an agent that posts without asking is misbehaving.
 
 You need [`uv`](https://docs.astral.sh/uv/). Everything is `uv run tools/jobs.py <cmd>`; see `AGENTS.md`.
 
