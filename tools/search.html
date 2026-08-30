@@ -97,7 +97,7 @@ aside .clear{width:100%;margin-top:10px}
 .jdetail .meta{color:var(--fg-2);font-size:var(--t-sm);margin:2px 0}.jdetail .meta.sum{color:var(--fg-1)}
 .jd{margin-top:8px;color:var(--fg-1);font-size:var(--t-md);white-space:pre-wrap;max-height:440px;overflow:auto;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-1)}
 .jactions{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.jactions .note{flex:1;min-width:200px}
-.sec-h{display:flex;align-items:center;gap:10px;margin:18px 0 6px;color:var(--fg-2);font-size:var(--t-xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase}.sec-h::after{content:'';flex:1;height:1px;background:var(--line)}.sec-h .n{color:var(--fg-3);font-weight:400;letter-spacing:0;text-transform:none}.sec-h.yes{color:var(--ok)}.sec-h.no{color:var(--no);cursor:pointer;user-select:none}.sec-h.no:hover{color:var(--fg)}.sec-h .hint2{font-weight:400;letter-spacing:0;text-transform:none;color:var(--fg-3)}
+.sec-h{display:flex;align-items:center;gap:10px;margin:18px 0 6px;color:var(--fg-2);font-size:var(--t-xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase}.sec-h::after{content:'';flex:1;height:1px;background:var(--line)}.sec-h .n{color:var(--fg-3);font-weight:400;letter-spacing:0;text-transform:none}.sec-h.yes{color:var(--ok)}.sec-h.no{color:var(--no);cursor:pointer;user-select:none}.sec-h.no:hover{color:var(--fg)}.sec-h .hint2{font-weight:400;letter-spacing:0;text-transform:none;color:var(--fg-3)}.sec-h .btn{margin-left:8px;letter-spacing:0;text-transform:none;font-weight:500}
 .empty{color:var(--fg-2);padding:40px 0;text-align:center}
 #more{margin:12px auto;display:block}
 
@@ -432,6 +432,7 @@ function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
+function nc0(){return (st.compares||[]).length}
 const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
 function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;  // Show similar is pure raw cosine to that job: no taste model, no boosts, no centering
   const cmp=(a,b)=>simv?simv[b.k]-simv[a.k]:sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
@@ -449,7 +450,12 @@ function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#sho
   const secAll=show==='all';const N=Math.min(secAll?yes.length+un.length:ranked.length,Math.max(shown,60));let i=0;
   if(secAll&&yes.length){el.appendChild(head('yes','✓ Yes',yes.length,'kept in the order you picked them'));}
   for(;i<N&&i<(secAll?yes.length:(show==='yes'?ranked.length:0));i++)el.appendChild(jobEl(ranked[i],i));
-  if(secAll){el.appendChild(head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(ref?'by similarity to “'+esc(ref.t.slice(0,50))+'”':(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD')+' · only this section re-orders'):''));
+  if(secAll){const simple=sort==='sim';
+    const rh=head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(ref?'by similarity to “'+esc(ref.t.slice(0,50))+'”':(simple?'by cosine similarity to your ideal JD':(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD'))+' · only this section re-orders'):'');
+    if(!ref&&(taste||nc0()||yes.length||no.length)&&(sort==='model'||sort==='sim')){const tb=document.createElement('button');tb.className='btn ghost sm';tb.textContent=simple?'Switch to advanced ranking':'Switch to simple ranking';
+      tb.title=simple?'Back to the learned model (your labels, comparisons and kNN term)':'Plain cosine similarity to your ideal JD; ignores everything the model has learned';
+      tb.onclick=e=>{e.stopPropagation();$('#sort').value=simple?'model':'sim';event({type:'sort',value:$('#sort').value,via:'section-toggle'});render(true,'order')};rh.appendChild(tb)}
+    el.appendChild(rh);
     for(;i<N&&i<yes.length+un.length;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}
     if(no.length){const h=head('no',(showNo?'▾':'▸')+' ✗ No',no.length,showNo?'click to collapse':'click to show');h.onclick=()=>{st.showNo=!st.showNo;save();render(false)};el.appendChild(h)}
     if(showNo)for(let k=yes.length+un.length;k<ranked.length;k++)el.appendChild(jobEl(ranked[k],k))}
