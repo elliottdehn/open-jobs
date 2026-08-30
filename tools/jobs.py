@@ -367,6 +367,7 @@ def cmd_serve(a):
                 self.send_response(302); self.send_header("Location", "/search.html"); self.end_headers(); return
             super().do_GET()
         def log_message(self, *args): pass
+    socketserver.ThreadingTCPServer.allow_reuse_address = True  # restarts shouldn't fail on a lingering socket
     with socketserver.ThreadingTCPServer(("127.0.0.1", a.port), H) as srv:
         url = f"http://127.0.0.1:{a.port}/search.html"
         print(f"serving {work} at {url}\ninteractions -> {log}\nCtrl-C to stop")

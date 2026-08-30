@@ -90,8 +90,9 @@ aside .clear{width:100%;margin-top:10px}
 .jc{color:var(--fg-2);font-size:var(--t-sm);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .jr{display:flex;align-items:center;gap:6px;flex:none}
 .score{font:var(--t-xs)/18px ui-monospace,Menlo,monospace;color:var(--fg-3);padding:0 6px;border:1px solid var(--line);border-radius:5px}
-.lbl{display:inline-flex;gap:2px}.lbl .btn{padding:2px 7px;font-size:var(--t-xs)}
+.lbl{display:inline-flex;gap:2px}.lbl .btn{padding:2px 7px;font-size:var(--t-xs)}.lbl .simbtn.on{background:var(--acc-bg);border-color:var(--acc);color:var(--acc-2)}
 .badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;align-items:center}
+.jsum{margin-top:8px;color:var(--fg-1);font-size:var(--t-md);line-height:1.45}
 .jdetail{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}.job.open .jdetail{display:block}
 .jdetail .meta{color:var(--fg-2);font-size:var(--t-sm);margin:2px 0}.jdetail .meta.sum{color:var(--fg-1)}
 .jd{margin-top:8px;color:var(--fg-1);font-size:var(--t-md);white-space:pre-wrap;max-height:440px;overflow:auto;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-1)}
@@ -398,6 +399,7 @@ function renderChips(){const el=$('#chips');el.innerHTML='';
   if(PREF){const b=document.createElement('button');const hidden=JOBS.filter(j=>j.el===false).length;b.className='chip'+(st.eligOnly?' on':'');b.innerHTML=`✓ eligible for ${esc(PREF)}${st.eligOnly?` <span class="n">hiding ${hidden}</span>`:''}`;b.title='Jobs restricted to other countries/regions, or not labelled remote when you asked for remote, are hidden while this is on';b.onclick=()=>{st.eligOnly=!st.eligOnly;save();event({type:'filter',facet:'eligible',value:PREF,on:st.eligOnly});renderFacets();render(true,'filter')};el.appendChild(b)}
   const chips=[['rm','remote','Remote']];for(const [k] of Object.entries(facets.co).sort((a,b)=>b[1]-a[1]).slice(0,3))chips.push(['co',k,k]);
   for(const [f,k,label] of chips){const b=document.createElement('button');b.textContent=label;b.className='chip'+(sel[f].has(k)?' on':'');b.onclick=()=>{sel[f].has(k)?sel[f].delete(k):sel[f].add(k);event({type:'filter',facet:f,value:k,on:sel[f].has(k)});renderFacets();render(true,'filter')};el.appendChild(b)}
+  if(st.simTo&&byKey[st.simTo]){const x=document.createElement('button');x.className='chip on';x.textContent='◉ similar to: '+byKey[st.simTo].t.slice(0,28)+' ✕';x.title='Click to go back to the normal ranking';x.onclick=()=>{st.simTo=null;save();event({type:'similar',on:false});renderChips();render(true,'similar')};el.appendChild(x)}
   for(const [b,name] of Object.entries(st.hideCo||{})){const x=document.createElement('button');x.className='chip dis';x.textContent='✖ '+name;x.title='Hidden company · click to show again';x.onclick=()=>{delete st.hideCo[b];save();event({type:'hide_company',board:b,company:name,on:false});renderFacets();render(true,'filter')};el.appendChild(x)}
   for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){if(v>=0)continue;const b=document.createElement('button');b.className='chip dis';b.textContent='✖ '+t+(kind==='b'?' (body)':'');b.title='Click to un-ban';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'ban',where:kind,term:t,on:false});renderFacets();render(true,'filter')};el.appendChild(b)}}
 $('#clearf').onclick=()=>{for(const f of FACETS)sel[f].clear();renderFacets();render(true,'filter')};
@@ -409,8 +411,9 @@ function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.
   for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
-const REASON={label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
-function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const cmp=(a,b)=>sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
+const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
+function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;
+  const cmp=(a,b)=>simv?simv[b.k]-simv[a.k]:sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
   const vis=JOBS.filter(passes);
   // Yes: in the order you said yes, never re-ordered. Unlabelled: ranked. No: collapsed, in the order you said no.
   const order=Object.keys(st.labels);const at=k=>{const i=order.indexOf(k);return i<0?1e9:i};
@@ -418,14 +421,14 @@ function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#sho
   const showNo=!!st.showNo||show==='no';
   ranked=show==='yes'?yes:show==='no'?no:show==='unlabeled'?un:[...yes,...un,...(showNo?no:[])];
   const newTop=un.slice(0,20).map(j=>j.k);let movedIn=[];
-  if(prevTop&&reason&&['label','compare','seed','sort','enrich'].includes(reason)){const was=new Set(prevTop);movedIn=newTop.filter(k=>!was.has(k))}
+  if(prevTop&&reason&&['label','compare','seed','sort','enrich','similar'].includes(reason)){const was=new Set(prevTop);movedIn=newTop.filter(k=>!was.has(k))}
   if(reset){shown=0;cur=Math.min(cur,Math.max(0,ranked.length-1))}const el=$('#list');el.innerHTML='';
   if(!ranked.length){const d=document.createElement('div');d.className='empty';d.innerHTML='No jobs match. <a href="#">Clear filters</a>';el.appendChild(d);d.querySelector('a').onclick=e=>{e.preventDefault();$('#clearf').click()}}
   const head=(cls,txt,n,extra)=>{const h=document.createElement('div');h.className='sec-h '+cls;h.innerHTML=`${txt} <span class="n">${n.toLocaleString()}</span>${extra?' <span class="hint2">'+extra+'</span>':''}`;return h};
   const secAll=show==='all';const N=Math.min(secAll?yes.length+un.length:ranked.length,Math.max(shown,60));let i=0;
   if(secAll&&yes.length){el.appendChild(head('yes','✓ Yes',yes.length,'kept in the order you picked them'));}
   for(;i<N&&i<(secAll?yes.length:(show==='yes'?ranked.length:0));i++)el.appendChild(jobEl(ranked[i],i));
-  if(secAll){el.appendChild(head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD')+' · only this section re-orders':''));
+  if(secAll){el.appendChild(head('',un.length?'Ranked':'Nothing left to rank',un.length,un.length?(ref?'by similarity to “'+esc(ref.t.slice(0,50))+'”':(taste||st.compares.length?'by your taste':(yes.length&&no.length)?'by your yes/no labels':'by fit to your ideal JD')+' · only this section re-orders'):''));
     for(;i<N&&i<yes.length+un.length;i++){const d=jobEl(ranked[i],i);if(movedIn.includes(ranked[i].k))d.classList.add('moved');el.appendChild(d)}
     if(no.length){const h=head('no',(showNo?'▾':'▸')+' ✗ No',no.length,showNo?'click to collapse':'click to show');h.onclick=()=>{st.showNo=!st.showNo;save();render(false)};el.appendChild(h)}
     if(showNo)for(let k=yes.length+un.length;k<ranked.length;k++)el.appendChild(jobEl(ranked[k],k))}
@@ -434,7 +437,7 @@ function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#sho
   if((secAll?yes.length+un.length:ranked.length)>N){const m=document.createElement('button');m.className='btn ghost';m.id='more';m.textContent=`Show more (${((secAll?yes.length+un.length:ranked.length)-N).toLocaleString()} left)`;m.onclick=()=>{shown+=60;render(false)};el.appendChild(m)}
   const nc=(st.compares||[]).length;const personalized=taste||nc||yes.length||no.length;
   $('#stats').innerHTML=`<b>${vis.length.toLocaleString()}</b> of ${JOBS.length.toLocaleString()} jobs · `+(personalized?`ranked by <b>your taste</b> · ${yes.length} yes · ${no.length} no · ${nc} comparisons`:`ranked by <b>fit to your ideal JD</b>${IDEAL.title?' (“'+esc(IDEAL.title)+'”)':''} · label a few or press ✨ Sort to personalize`);
-  if(reason&&['label','compare','seed','sort','enrich'].includes(reason)){const what=movedIn.length?`${movedIn.length} job${movedIn.length>1?'s':''} moved into the top 20`:'order refreshed';$('#reranktxt').textContent=`Re-ranked from ${REASON[reason]} · ${what}`;$('#rerank').classList.add('show');clearTimeout(render._t);render._t=setTimeout(()=>$('#rerank').classList.remove('show'),4000)}
+  if(reason&&['label','compare','seed','sort','enrich','similar'].includes(reason)){const what=movedIn.length?`${movedIn.length} job${movedIn.length>1?'s':''} moved into the top 20`:'order refreshed';$('#reranktxt').textContent=`Re-ranked from ${REASON[reason]} · ${what}`;$('#rerank').classList.add('show');clearTimeout(render._t);render._t=setTimeout(()=>$('#rerank').classList.remove('show'),4000)}
   prevTop=newTop;hi()}
 function badges(j,compact=false){const out=[];
   if(j.el===false)out.push(`<span class="b no" title="${esc(j.elr)}">⛔ ${esc(j.elr.length>34?j.elr.slice(0,34)+'…':j.elr)}</span>`);
@@ -446,19 +449,20 @@ function badges(j,compact=false){const out=[];
   if(!compact&&j.co_&&j.co_.staffing)out.push('<span class="b warn">staffing agency</span>');
   return out.join('')}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="jh"><div class="jt"><b>${esc(j.t)}</b><div class="jc">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div></div><div class="jr"><span class="lbl"><button class="btn ghost sm y" title="Yes, more like this (J)">${l===1?'✓ yes':'✓'}</button><button class="btn ghost sm n" title="No, less like this (K)">${l===0?'✗ no':'✗'}</button></span><span class="score" title="Model score ${fscore(j).toFixed(2)} · similarity to ideal JD ${j.sim.toFixed(2)}${kwBoost(j)?' · keyword boost':''}">${fscore(j).toFixed(2)}</span></div></div>
-  <div class="badges">${badges(j)}</div>
+  d.innerHTML=`<div class="jh"><div class="jt"><b>${esc(j.t)}</b><div class="jc">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div></div><div class="jr"><span class="lbl">${l===1?`<button class="btn ghost sm simbtn${st.simTo===j.k?' on':''}" title="Re-rank the unlabelled jobs by similarity to this one">${st.simTo===j.k?'◉ similar':'Show similar'}</button>`:''}<button class="btn ghost sm y" title="Yes, more like this (J)">${l===1?'✓ yes':'✓'}</button><button class="btn ghost sm n" title="No, less like this (K)">${l===0?'✗ no':'✗'}</button></span><span class="score" title="Model score ${fscore(j).toFixed(2)} · similarity to ideal JD ${j.sim.toFixed(2)}${kwBoost(j)?' · keyword boost':''}">${fscore(j).toFixed(2)}</span></div></div>
+  <div class="badges">${badges(j)}</div>${j.e&&j.e.summary?`<div class="jsum">${esc(j.e.summary)}</div>`:''}
   <div class="jdetail"><div class="meta">${j.s?new Date(j.s).toISOString().slice(0,10)+' · ':''}${esc(j.k.split('/')[0])} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open posting ↗</a></div>
-  ${j.e?`<div class="meta sum">${esc(j.e.summary||'')}</div><div class="meta">${[j.e.seniority,j.e.role_family,j.e.employment_type,(j.e.skills_required||[]).slice(0,8).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}
+  ${j.e?`<div class="meta">${[j.e.seniority,j.e.role_family,j.e.employment_type,(j.e.skills_required||[]).slice(0,8).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}
   ${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}
   <div class="jd">${esc(jdText(j.jd)||'(no description)')}</div>
   <div class="jactions"><input class="note" type="text" placeholder="Note to self…" value="${esc(st.notes[j.k]||'')}"><button class="btn ghost sm hideco" title="Hide every posting from this company; kept across re-compiles">✖ Never show ${esc((j.c||'').slice(0,22))} again</button></div></div>`;
   d.onclick=e=>{if(e.target.closest('a')){event({type:'open',key:j.k});return}if(e.target.closest('input,button'))return;cur=i;toggle(j,d)};
+  const sb=d.querySelector('.simbtn');if(sb)sb.onclick=e=>{e.stopPropagation();st.simTo=st.simTo===j.k?null:j.k;save();event({type:'similar',key:j.k,title:j.t,on:!!st.simTo});renderChips();render(true,'similar');if(st.simTo)toast(`Ranked section now ordered by similarity to “${j.t.slice(0,40)}”`)};
   d.querySelector('.y').onclick=e=>{e.stopPropagation();cur=i;label(l===1?undefined:1)};d.querySelector('.n').onclick=e=>{e.stopPropagation();cur=i;label(l===0?undefined:0)};
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};d.querySelector('.note').onkeydown=e=>e.stopPropagation();
   d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render(true,'filter');toast(`Hidden ${j.c}. Undo from the ✖ chip in the toolbar.`)};return d}
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi()}
-function label(v){const j=ranked[cur];if(!j)return;const nxt=ranked.slice(cur+1).find(x=>st.labels[x.k]===undefined&&x!==j);if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');
+function label(v){const j=ranked[cur];if(!j)return;const nxt=ranked.slice(cur+1).find(x=>st.labels[x.k]===undefined&&x!==j);if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;if(st.simTo===j.k&&v!==1)st.simTo=null;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');
   const tgt=v===undefined?j:(nxt||j);const ni=ranked.indexOf(tgt);cur=ni>=0?ni:Math.min(cur,ranked.length-1);hi()}
 function hi(){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',i===cur));const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
 function toast(msg){$('#toasttxt').textContent=msg;$('#toast').classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>$('#toast').classList.remove('show'),3200)}
