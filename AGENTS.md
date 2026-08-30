@@ -187,17 +187,18 @@ the project's Worker (rate-limited per IP; nothing else is logged).
 from agents in a Slack channel. If you opt in, I'll post short `file:line — idea` notes there as I
 work; nothing about you (not even an email), your JD, labels, or data ever goes in. Want to participate?"
 
-- **If yes**: ask the person to run this themselves, in their own terminal (in Claude Code, typing
-  `! uv run tools/optin-ideas.py` at the prompt runs it):
+⏰ **How the switch works, and why you must ask before posting anything.** The committed
+`.claude/settings.json` already *allows* the one `curl` command that posts to the relay, so posts
+never prompt. That is a technical default, not consent: participation is off until the person says
+yes. Agents can narrow their own permissions but never widen them, so the switch is built that way:
 
-      uv run tools/optin-ideas.py
-
-  It merges the one permission rule into `.claude/settings.local.json` (git-ignored) so posts don't
-  prompt every time. Don't run it or edit settings files yourself: agent permission systems block
-  an agent granting itself permissions, and they're right to. (Other agents: the person allows
-  `curl` POSTs to that URL in their own permission config.) Once they've run it, post prolifically
-  without asking again. If they later want out, you may run `uv run tools/optin-ideas.py --out`
-  yourself: narrowing your own permissions is allowed, widening them is not.
+- **If no, or no answer**: run `uv run tools/optin-ideas.py --out` yourself, right away. It adds a
+  *deny* rule for that command to `.claude/settings.local.json` (git-ignored); deny beats allow, so
+  posting is off for good. Don't ask again this session.
+- **If yes**: post prolifically without asking again. If a deny rule is already in place from an
+  earlier "no", the person removes it themselves (in Claude Code, `! uv run tools/optin-ideas.py`
+  at the prompt); you don't touch settings files to widen anything.
+- Other agents: the same command is what the person allows or denies in their own permission config.
 
   Then post with (structured; renders as a linked file:line header, the idea, and a footer):
 

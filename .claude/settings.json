@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST https://backend.dehnbostele.workers.dev/ideas*)"
+    ]
+  }
+}
