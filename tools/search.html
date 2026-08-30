@@ -425,7 +425,7 @@ function renderChips(){const el=$('#chips');el.innerHTML='';
   for(const kind of ['t','b'])for(const [t,v] of Object.entries(st.kw[kind])){if(v>=0)continue;const b=document.createElement('button');b.className='chip dis';b.textContent='✖ '+t+(kind==='b'?' (body)':'');b.title='Click to un-ban';b.onclick=()=>{delete st.kw[kind][t];save();event({type:'ban',where:kind,term:t,on:false});renderFacets();render(true,'filter')};el.appendChild(b)}}
 $('#clearf').onclick=()=>{for(const f of FACETS)sel[f].clear();renderFacets();render(true,'filter')};
 // ---- list
-let ranked=[],cur=0,shown=0,prevTop=null;
+let ranked=[],cur=0,shown=0,prevTop=null,CHIP=j=>[fscore(j),'Model score'];
 function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase().includes(q))return false;
   if(exclG.has(j.g3)||kwHidden(j))return false;
   if(st.eligOnly&&j.el===false&&!(j.rme&&sel.rm.has(j.rme.v+' (est.)')&&String(j.elr||'').startsWith('not labelled remote'))&&!(j.coe&&sel.co.has((NAMES[j.coe.country]||j.coe.country)+' (est.)')))return false;
@@ -436,6 +436,7 @@ function nc0(){return (st.compares||[]).length}
 const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
 function render(reset=true,reason=null){const _y=window.scrollY;const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;  // Show similar is pure raw cosine to that job: no taste model, no boosts, no centering
   const cmp=(a,b)=>simv?simv[b.k]-simv[a.k]:sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
+  CHIP=simv?j=>[simv[j.k],'Cosine similarity to “'+byKey[st.simTo].t.slice(0,40)+'”']:sort==='sim'?j=>[j.sim,'Cosine similarity to your ideal JD']:j=>[fscore(j),'Model score'];
   const vis=JOBS.filter(passes);
   // Yes: in the order you said yes, never re-ordered. Unlabelled: ranked. No: collapsed, in the order you said no.
   const order=Object.keys(st.labels);const at=k=>{const i=order.indexOf(k);return i<0?1e9:i};
@@ -476,7 +477,7 @@ function badges(j,compact=false){const out=[];
   if(!compact&&j.co_&&j.co_.staffing)out.push('<span class="b warn">staffing agency</span>');
   return out.join('')}
 function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k];d.className='job'+(l===1?' pos':l===0?' neg':'')+(st.opened[j.k]?' open':'');d.dataset.i=i;
-  d.innerHTML=`<div class="jh"><div class="jt"><b>${esc(j.t)}</b><div class="jc">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div></div><div class="jr"><span class="lbl">${l===1?`<button class="btn ghost sm simbtn${st.simTo===j.k?' on':''}" title="Re-rank the unlabelled jobs by similarity to this one">${st.simTo===j.k?'◉ similar':'Show similar'}</button>`:''}<button class="btn ghost sm y" title="Yes, more like this (J)">${l===1?'✓ yes':'✓'}</button><button class="btn ghost sm n" title="No, less like this (K)">${l===0?'✗ no':'✗'}</button></span><span class="score" title="Model score ${fscore(j).toFixed(2)} · similarity to ideal JD ${j.sim.toFixed(2)}${kwBoost(j)?' · keyword boost':''}">${fscore(j).toFixed(2)}</span></div></div>
+  d.innerHTML=`<div class="jh"><div class="jt"><b>${esc(j.t)}</b><div class="jc">${esc(j.c)}${j.l?' · '+esc(j.l):''}</div></div><div class="jr"><span class="lbl">${l===1?`<button class="btn ghost sm simbtn${st.simTo===j.k?' on':''}" title="Re-rank the unlabelled jobs by similarity to this one">${st.simTo===j.k?'◉ similar':'Show similar'}</button>`:''}<button class="btn ghost sm y" title="Yes, more like this (J)">${l===1?'✓ yes':'✓'}</button><button class="btn ghost sm n" title="No, less like this (K)">${l===0?'✗ no':'✗'}</button></span><span class="score" title="${esc(CHIP(j)[1])} ${CHIP(j)[0].toFixed(2)} · model ${fscore(j).toFixed(2)} · similarity to ideal JD ${j.sim.toFixed(2)}${kwBoost(j)?' · keyword boost':''}">${CHIP(j)[0].toFixed(2)}</span></div></div>
   <div class="badges">${badges(j)}</div>${j.e&&j.e.summary?`<div class="jsum">${esc(j.e.summary)}</div>`:''}
   <div class="jdetail"><div class="meta">${j.s?new Date(j.s).toISOString().slice(0,10)+' · ':''}${esc(j.k.split('/')[0])} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open posting ↗</a></div>
   ${j.e?`<div class="meta">${[j.e.seniority,j.e.role_family,j.e.employment_type,(j.e.skills_required||[]).slice(0,8).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}
