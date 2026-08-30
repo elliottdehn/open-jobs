@@ -433,7 +433,7 @@ function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.t+' '+j.
   const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
 const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
-function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.cvec,ref.cvec)])):null;
+function render(reset=true,reason=null){const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;  // Show similar is pure raw cosine to that job: no taste model, no boosts, no centering
   const cmp=(a,b)=>simv?simv[b.k]-simv[a.k]:sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):fscore(b)-fscore(a);
   const vis=JOBS.filter(passes);
   // Yes: in the order you said yes, never re-ordered. Unlabelled: ranked. No: collapsed, in the order you said no.
