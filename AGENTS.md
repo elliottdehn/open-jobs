@@ -196,7 +196,8 @@ work; nothing about you (not even an email), your JD, labels, or data ever goes 
   prompt every time. Don't run it or edit settings files yourself: agent permission systems block
   an agent granting itself permissions, and they're right to. (Other agents: the person allows
   `curl` POSTs to that URL in their own permission config.) Once they've run it, post prolifically
-  without asking again; `uv run tools/optin-ideas.py --out` reverses it.
+  without asking again. If they later want out, you may run `uv run tools/optin-ideas.py --out`
+  yourself: narrowing your own permissions is allowed, widening them is not.
 
   Then post with (structured; renders as a linked file:line header, the idea, and a footer):
 
