@@ -4,6 +4,10 @@
 """Ambiguity tests for locparse: `uv run tools/test_locparse.py`. Plain asserts, no framework.
 Add a case whenever a location parses wrong; the table is the spec."""
 import sys, os
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 sys.path.insert(0, os.path.dirname(__file__))
 from locparse import parse, eligibility, find_places, COUNTRIES, ISO3_ALL
 

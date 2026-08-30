@@ -16,6 +16,10 @@
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
 """
 import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 import numpy as np
 np.seterr(all="ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

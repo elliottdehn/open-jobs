@@ -2,6 +2,11 @@
 Deterministic, no network. "mid" is never stated in titles, so it is the client's default when neither the
 title nor the published estimator says otherwise (the same trick as onsite for work arrangement)."""
 import re
+import sys
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 
 LEVELS = ["intern", "junior", "senior", "staff", "lead", "manager", "director", "executive"]
 # highest-ranking match wins ("Senior Manager" is a manager, "Director of Engineering" is a director)

@@ -2,6 +2,11 @@
 extract(text) -> {"min": float, "max": float, "currency": "USD", "period": "year|month|week|day|hour", "raw": str} | None
 Picks the most plausible stated range (pay-transparency style), annualized in `annual_min/annual_max`."""
 import re
+import sys
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 
 CUR = {"$": "USD", "us$": "USD", "usd": "USD", "€": "EUR", "eur": "EUR", "£": "GBP", "gbp": "GBP", "cad": "CAD", "c$": "CAD", "ca$": "CAD", "aud": "AUD", "a$": "AUD", "inr": "INR", "₹": "INR", "rs.": "INR", "rs": "INR", "chf": "CHF", "sgd": "SGD", "s$": "SGD", "nzd": "NZD", "mxn": "MXN", "brl": "BRL", "r$": "BRL", "pln": "PLN", "zł": "PLN", "sek": "SEK", "dkk": "DKK", "nok": "NOK", "jpy": "JPY", "¥": "JPY", "hkd": "HKD", "aed": "AED"}
 # thousands groups (incl. Indian 2-2-3 grouping), optional cents; must not start mid-number

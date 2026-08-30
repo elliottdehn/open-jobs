@@ -30,6 +30,10 @@ work/rank-answers.json as {"<pair id>": {"winner": "A"|"B", "confidence": 0-1, "
 re-runs the same command. Answers land in the same cache; the sort resumes and emits the next batch,
 until it prints "done". A 200-job sort is usually 3-6 batches. Exit status 3 means "pairs pending"."""
 import argparse, base64, json, os, random, re, sys, threading, time, urllib.request, urllib.error
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 np.seterr(all="ignore")

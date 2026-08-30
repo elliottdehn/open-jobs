@@ -42,7 +42,7 @@ is the city. Two-letter codes after a city are US states ("Denver, CO" is Colora
 If someone's preference names an ambiguous place, ask which they mean before embedding.
 `uv run tools/test_locparse.py` is the spec; add a case whenever a location parses wrong.
 
-**Windows note:** the tools open every file as UTF-8 explicitly, so the system code page doesn't matter. If an older checkout throws `UnicodeDecodeError: 'charmap' codec…`, set `PYTHONUTF8=1` in the environment and it goes away.
+**Windows note:** the tools open every file as UTF-8 and reconfigure stdout/stderr to UTF-8 at start, so the system code page doesn't matter for reading or printing. If an older checkout throws `UnicodeDecodeError`/`UnicodeEncodeError: 'charmap' codec…`, set `PYTHONUTF8=1` in the environment and it goes away.
 
 ## 1. Shop the ideal JD (the important part)
 Write `work/ideal-jd.md`: a **job description for the job this person wants**, in the same shape

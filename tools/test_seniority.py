@@ -3,6 +3,10 @@
 # ///
 """`uv run tools/test_seniority.py` — the title→seniority spec. Add a case whenever a title parses wrong."""
 import sys, os; sys.path.insert(0, os.path.dirname(__file__))
+# Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 from seniority import extract
 CASES = [
     ("Senior Software Engineer", "senior"), ("Sr. Backend Engineer", "senior"), ("Software Engineer III", "senior"), ("Software Engineer II", None),
