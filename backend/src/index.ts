@@ -325,6 +325,8 @@ export default {
 			}
 			if (action === "embed" && request.method === "POST") return Response.json(await stub.embedNow());
 			if (action === "runs") return Response.json(await stub.getRuns());
+			// POST /boards/:ats/:slug/wipe -> drop all rows (recovery for pathological boards); refetch after
+			if (action === "wipe" && request.method === "POST") return Response.json(await stub.wipe());
 			if (!action) {
 				try { return Response.json(await stub.getState(jobQuery(url))); }
 				catch (e) { return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 }); }

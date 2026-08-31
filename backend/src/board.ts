@@ -1003,6 +1003,17 @@ export class Board extends DurableObject<Env> {
 		const j = rowToJob(r, true); j.raw = undefined; j.content = null; j.detailRaw = null; return j;
 	}
 
+	/** Drop every job row and reset counters; the next fetch repopulates from scratch. Recovery for
+	 * boards whose stored rows grew pathological (e.g. fat detail raw written by an older fetcher). */
+	async wipe(): Promise<{ wiped: number }> {
+		const n = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs`).one().n;
+		this.ctx.storage.sql.exec(`DELETE FROM jobs`);
+		this.ctx.storage.sql.exec(`DELETE FROM runs`);
+		const meta = await this.meta();
+		if (meta) { meta.jobCount = 0; await this.ctx.storage.put("meta", meta); }
+		return { wiped: n };
+	}
+
 	async getRuns(limit = 30): Promise<RunSummary[]> {
 		return this.ctx.storage.sql
 			.exec<{ [k: string]: SqlStorageValue }>(`SELECT * FROM runs ORDER BY id DESC LIMIT ?`, limit)
