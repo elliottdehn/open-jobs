@@ -183,33 +183,55 @@ def find_places(text):
         if f" {k.lower()} " in t: rs.add(k)
     return cs, rs
 
-def eligibility(pref, location, jd="", title="", arrangement=None):
-    """Is a job eligible for someone with location preference `pref` (e.g. "Remote, US", "Berlin",
-    "US or Canada")? Returns (eligible: bool|None, reason). None = can't tell (no location info).
-    Rules: the job's countries must intersect the user's; a remote job with no country and no
-    restricting phrase is eligible; region-restricted remotes (Remote - LATAM, India-only) are not;
-    JD phrases like "must be located in the US" / "authorized to work in the UK" restrict too.
-    A remote-only preference (no city, e.g. "Remote, US") makes onsite and hybrid jobs ineligible;
-    `arrangement` overrides the parsed one (pass the enrichment's work_arrangement when known)."""
-    p = parse(pref or "")
-    j = parse(location or "", jd, title)
-    rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
-    # remote-only preference: the job must actually be labelled remote (location, title, or an explicit
-    # "this role is remote" statement). Unknown is not remote.
-    if p["remote"] == "remote" and not p["cities"]:
-        if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
-        if rm != "remote": return False, "not labelled remote"
+def _clause_elig(p, j, rm, jd):
+    """One preference clause against one job. p = parse(clause), j = parse(job), rm = effective arrangement."""
+    remote_only = p["remote"] == "remote" and not p["cities"]
     want = set(p["countries"])
     for r in p["regions"]: want |= MACRO.get(r, set())
-    if not want: return None, "no country in preference"
     have = set(j["countries"])
     for r in j["regions"]: have |= MACRO.get(r, set())
-    # restricting phrases in the JD text add countries/regions to `have`
     for m in RESTRICT_RE.finditer((jd or "")[:6000]):
         cs, rs = find_places(m.group(0))
         have |= cs
         for r in rs: have |= MACRO.get(r, set())
+    if remote_only:
+        # the job must actually be labelled remote (location, title, or an explicit statement). Unknown is not remote.
+        if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
+        if rm != "remote": return False, "not labelled remote"
+        if not want: return None, "no country in preference"
+        if have & want: return True, "remote, location matches"
+        if have: return False, f"restricted to {', '.join(sorted(have))[:40]}"
+        return True, "remote, no stated region"
+    if not want: return None, "no country in preference"
+    if have and not (have & want): return False, f"restricted to {', '.join(sorted(have))[:40]}"
+    if p["cities"] or (p["regions"] and not all(r in MACRO for r in p["regions"])):
+        # a local clause ("Austin, TX", "Berlin"): the job must be in that city/state, or be remote (workable from there)
+        pc = {c.lower() for c in p["cities"]}; pr = {r for r in p["regions"] if r not in MACRO}
+        jc = {c.lower() for c in j["cities"]}
+        if pc & jc: return True, f"in {sorted(pc & jc)[0].title()}"
+        if pr & set(j["regions"]): return True, f"in {sorted(pr & set(j['regions']))[0]}"
+        if rm == "remote" and (have & want or not have): return True, "remote, works from there"
+        if not have and not j["cities"] and not j["regions"]: return None, "no location info"
+        if jc or j["regions"]: return False, f"not near {(sorted(p['cities']) + sorted(pr) + ['?'])[0]}"
+        return None, "no city info"
     if have & want: return True, "location matches"
     if have: return False, f"restricted to {', '.join(sorted(have))[:40]}"
     if j["remote"] == "remote": return True, "remote, no stated region"
     return None, "no location info"
+
+def eligibility(pref, location, jd="", title="", arrangement=None):
+    """Is a job eligible for someone with location preference `pref`? Returns (eligible: bool|None, reason).
+    `pref` may be a compound OR of clauses — "Austin, TX or Remote, US", "Berlin; Remote, DE" — and the job is
+    eligible if ANY clause accepts it. Clause types: a remote clause ("Remote, US") requires the job to be
+    labelled remote in a matching country; a local clause ("Austin, TX", "Berlin") requires the job to be in
+    that city/state, or remote in the country; a bare country ("US or Canada") matches country-wide.
+    None = can't tell. `arrangement` overrides the parsed one (pass the enrichment's when known)."""
+    clauses = [c.strip() for c in re.split(r"\bor\b|;|\||/", pref or "", flags=re.I) if c.strip()]
+    if not clauses: return None, "no preference"
+    j = parse(location or "", jd, title)
+    rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
+    outs = [_clause_elig(parse(c), j, rm, jd) for c in clauses]
+    for ok, why in outs:
+        if ok is True: return True, why
+    if any(ok is None for ok, _ in outs): return None, next(why for ok, why in outs if ok is None)
+    return False, " · ".join(dict.fromkeys(why for _, why in outs))[:80]

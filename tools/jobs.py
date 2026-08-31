@@ -346,7 +346,10 @@ def cmd_html(a):
         ne = sum(1 for j in jobs if j["el"] is False); nu = sum(1 for j in jobs if j["el"] is None)
         print(f"eligibility for '{pref}': {len(jobs) - ne - nu} eligible, {ne} ineligible (hidden by default), {nu} unknown")
     J = lambda x: json.dumps(x).replace("</", "<\\/")  # "</script>" inside crawled text must not end the script block
-    html = TEMPLATE.replace("__PREF__", J(pref)).replace("__GROUPS3__", J(G3)).replace("__GROUPS__", J(GROUPS)).replace("__JOBS__", J(jobs)).replace("__IDEAL__", J({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", J(open(d["source"], encoding="utf-8").read() if os.path.exists(d["source"]) else ""))
+    from locparse import parse as _pp
+    _clauses = [c.strip() for c in re.split(r"\bor\b|;|\||/", pref or "", flags=re.I) if c.strip()]
+    pref_remote_only = bool(_clauses) and all(_pp(c)["remote"] == "remote" and not _pp(c)["cities"] for c in _clauses)
+    html = TEMPLATE.replace("__PREF_REMOTE_ONLY__", "true" if pref_remote_only else "false").replace("__PREF__", J(pref)).replace("__GROUPS3__", J(G3)).replace("__GROUPS__", J(GROUPS)).replace("__JOBS__", J(jobs)).replace("__IDEAL__", J({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", J(open(d["source"], encoding="utf-8").read() if os.path.exists(d["source"]) else ""))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w", encoding="utf-8").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")

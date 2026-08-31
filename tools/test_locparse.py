@@ -128,6 +128,20 @@ EL = [
     ("Remote, Panama", "Philadelphia, PA", "", False),
     ("Remote, US", "Remote - US", "", True),
     ("Remote, US", "Remote (US: PST or EST)", "", True),
+    # compound OR preferences: local on-site area OR countrywide remote
+    ("Austin, TX or Remote, US", "Austin, TX", "", True),
+    ("Austin, TX or Remote, US", "Dallas, TX", "", True),          # same state counts as the local area (v1)
+    ("Austin, TX or Remote, US", "Remote - United States", "", True),
+    ("Austin, TX or Remote, US", "New York, NY", "", False),        # onsite elsewhere, not labelled remote
+    ("Austin, TX or Remote, US", "Remote - LATAM", "", False),
+    ("Berlin or Remote, DE", "Berlin, Germany", "", True),
+    ("Berlin or Remote, DE", "München, Germany", "", False),
+    ("Berlin or Remote, DE", "Remote - Germany", "", True),
+    ("Berlin or Remote, DE", "Remote - France", "", False),
+    # a standalone city preference is city-strict now (remote in-country still qualifies)
+    ("Berlin", "Munich, Germany", "", False),
+    ("Berlin", "Berlin, Germany", "", True),
+    ("Berlin", "Remote - Germany", "", True),
 ]
 for pref, loc, jd, want in EL:
     got, why = eligibility(pref, loc, jd)
