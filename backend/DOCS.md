@@ -72,6 +72,8 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 | dayforce | `ns` or `ns/site` | yes | bare slug ⇒ `ns/CANDIDATEPORTAL`; ~35% of bare slugs are unmappable site codes → gone |
 | eightfold | subdomain | via `fetchDetail` (untested: WAF-blocked during dev) | 10/page, rate-limit sensitive |
 | gohire | `name-<hash>` or `name-<id>` | via `fetchDetail` (`getJobId`) | numeric ids need a cached 1.6 MB sitemap lookup |
+| jibe | site hostname | full JD in listing (`/api/jobs`) | iCIMS Attract sites (careers.costco.com) |
+| phenom | site hostname | teaser; full via `fetchDetail` (job page `phApp.ddo`) | Phenom People sites (jobs.cvshealth.com, careers.cencora.com) |
 | greenhouse | board token | yes | |
 | icims | subdomain | snippet; full via `fetchDetail` (job page) | HTML scrape; login/SSO boards throw |
 | jobscore | careers slug | yes | **local-only**: blocks Cloudflare IPs (403 from Workers); fetched from the laptop by `scripts/fetch-local.mjs` |

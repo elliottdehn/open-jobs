@@ -23,6 +23,9 @@ import { smartrecruiters } from "./smartrecruiters";
 import { taleo } from "./taleo";
 import { workable } from "./workable";
 import { workday } from "./workday";
+import { phenom } from "./phenom";
+import { jibe } from "./jibe";
+import { snowflake } from "../snowflake";
 
 /**
  * Providers with a working fetcher. Boards for other ATSes are ignored (no DOs are created).
@@ -39,6 +42,7 @@ export const fetchers: Record<string, AtsFetcher> = {
 	eightfold,
 	gohire,
 	greenhouse,
+	jibe,
 	icims,
 	jobscore,
 	jobvite,
@@ -47,10 +51,12 @@ export const fetchers: Record<string, AtsFetcher> = {
 	paycom,
 	paylocity,
 	personio,
+	phenom,
 	pinpoint,
 	recruitee,
 	recruiterbox,
 	smartrecruiters,
+	snowflake,
 	taleo,
 	workable,
 	workday,
