@@ -432,6 +432,33 @@ export class Board extends DurableObject<Env> {
 		try {
 			if (!fetcher) throw new Error(`no fetcher for ats ${meta.ats}`);
 			if (provided?.status === "error") throw new Error(provided.error);
+			if (!provided && fetcher.fetchJobsStream) {
+				// streaming path: pages are applied to SQLite as they arrive and never accumulate in memory
+				const diff: Diff = { added: [], changed: [], removedIds: [], unchanged: 0 };
+				const existing = this.loadExisting();
+				const seen = new Set<string>();
+				const hasDetail = !!fetcher.fetchDetail;
+				const res = await withTimeout(
+					fetcher.fetchJobsStream(meta.slug, async (page) => {
+						this.ctx.storage.transactionSync(() => this.applyPage(page, now, hasDetail, existing, seen, diff));
+					}),
+					FETCH_JOBS_TIMEOUT_MS,
+					`fetchJobsStream ${meta.name}`,
+				);
+				if (res.status === "gone") {
+					meta.lastStatus = "gone"; meta.lastError = null; meta.consecutiveFailures++;
+					this.recordRun(now, "gone", null, null);
+				} else {
+					this.ctx.storage.transactionSync(() => this.sweepUnseen(existing, seen, now, diff));
+					meta.lastStatus = "ok"; meta.lastOkAt = now; meta.lastError = null; meta.consecutiveFailures = 0;
+					meta.jobCount = seen.size;
+					this.recordRun(now, "ok", diff, null);
+				}
+				let next0 = nextSlotAfter(now, meta.slotMs);
+				if (meta.consecutiveFailures >= BACKOFF_AFTER) next0 += 6 * DAY;
+				meta.nextFetchAt = next0;
+				return;
+			}
 			const result = provided ?? (await withTimeout(fetcher.fetchJobs(meta.slug), FETCH_JOBS_TIMEOUT_MS, `fetchJobs ${meta.name}`));
 			if (result.status === "gone") {
 				meta.lastStatus = "gone";
@@ -465,17 +492,40 @@ export class Board extends DurableObject<Env> {
 	 * are never re-queued, even when their content changes); jobs missing from the snapshot get
 	 * `removed_at` set (kept for history); reappearing jobs are revived.
 	 */
+	private loadExisting(): Map<string, { hash: string; removed: boolean }> {
+		const existing = new Map<string, { hash: string; removed: boolean }>();
+		for (const r of this.ctx.storage.sql.exec<{ id: string; content_hash: string; removed_at: number | null }>(
+			`SELECT id, content_hash, removed_at FROM jobs`,
+		)) {
+			existing.set(r.id, { hash: r.content_hash, removed: r.removed_at !== null });
+		}
+		return existing;
+	}
+
+	private sweepUnseen(existing: Map<string, { hash: string; removed: boolean }>, seen: Set<string>, now: number, diff: Diff): void {
+		for (const [id, prev] of existing) {
+			if (!seen.has(id) && !prev.removed) {
+				this.ctx.storage.sql.exec(`UPDATE jobs SET removed_at = ? WHERE id = ?`, now, id);
+				diff.removedIds.push(id);
+			}
+		}
+	}
+
 	private applySnapshot(jobs: Job[], now: number, hasDetail: boolean): Diff {
 		const diff: Diff = { added: [], changed: [], removedIds: [], unchanged: 0 };
 		this.ctx.storage.transactionSync(() => {
-			const sql = this.ctx.storage.sql;
-			const existing = new Map<string, { hash: string; removed: boolean }>();
-			for (const r of sql.exec<{ id: string; content_hash: string; removed_at: number | null }>(
-				`SELECT id, content_hash, removed_at FROM jobs`,
-			)) {
-				existing.set(r.id, { hash: r.content_hash, removed: r.removed_at !== null });
-			}
+			const existing = this.loadExisting();
 			const seen = new Set<string>();
+			this.applyPage(jobs, now, hasDetail, existing, seen, diff);
+			this.sweepUnseen(existing, seen, now, diff);
+		});
+		return diff;
+	}
+
+	/** Upsert one page of the snapshot; diff bookkeeping shared with the streaming path. */
+	private applyPage(jobs: Job[], now: number, hasDetail: boolean, existing: Map<string, { hash: string; removed: boolean }>, seen: Set<string>, diff: Diff): void {
+		{
+			const sql = this.ctx.storage.sql;
 			for (const job of jobs) {
 				if (seen.has(job.id)) continue; // provider duplicated a job in its listing
 				seen.add(job.id);
@@ -515,14 +565,7 @@ export class Board extends DurableObject<Env> {
 					else diff.unchanged++;
 				}
 			}
-			for (const [id, prev] of existing) {
-				if (!seen.has(id) && !prev.removed) {
-					sql.exec(`UPDATE jobs SET removed_at = ? WHERE id = ?`, now, id);
-					diff.removedIds.push(id);
-				}
-			}
-		});
-		return diff;
+		}
 	}
 
 	private recordRun(runAt: number, status: RunSummary["status"], diff: Diff | null, error: string | null): void {

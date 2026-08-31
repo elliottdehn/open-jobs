@@ -32,6 +32,12 @@ export interface JobDetail {
 export interface AtsFetcher {
 	fetchJobs(slug: string): Promise<FetchResult>;
 	/**
+	 * Optional: page-streaming variant for big boards. The Board prefers this when present: each page
+	 * is handed to `sink` and applied to storage immediately, so peak memory is one page instead of
+	 * the whole snapshot (a 10k-job board OOMs a 128 MB DO isolate otherwise).
+	 */
+	fetchJobsStream?(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }>;
+	/**
 	 * Optional: fetch the full posting for one job (providers whose listing has no description).
 	 * Called once per new job by the Board (never repeated), with <= 6 in flight per board.
 	 * Return null if the posting is unavailable (job likely closed); throw on transient errors.

@@ -20,10 +20,10 @@ interface JibeJob {
 }
 
 export const jibe: AtsFetcher = {
-	async fetchJobs(slug: string): Promise<FetchResult> {
-		const jobs: Job[] = []; const seen = new Set<string>();
+	async fetchJobsStream(slug, sink): Promise<{ status: "ok" } | { status: "gone" }> {
+		const seen = new Set<string>();
 		let total = Infinity;
-		for (let page = 1; page <= MAX_PAGES && jobs.length < total; page++) {
+		for (let page = 1; page <= MAX_PAGES && seen.size < total; page++) {
 			const res = await fetchRetry(`https://${slug}/api/jobs?page=${page}&limit=${PAGE}`, {
 				headers: { "user-agent": UA, accept: "application/json" },
 			});
@@ -32,6 +32,7 @@ export const jibe: AtsFetcher = {
 			const data = (await res.json()) as { totalCount?: number; jobs?: JibeJob[] };
 			if (!Array.isArray(data.jobs)) return { status: "gone" }; // not a Jibe site
 			total = data.totalCount ?? 0;
+			const out: Job[] = [];
 			for (const row of data.jobs) {
 				const d = row.data ?? {};
 				const id = d.req_id || d.slug;
@@ -39,7 +40,7 @@ export const jibe: AtsFetcher = {
 				seen.add(id);
 				const cats = Array.isArray(d.categories) ? d.categories.map((c) => c?.name).filter((x): x is string => !!x)
 					: Array.isArray(d.category) ? (d.category as string[]) : d.category ? [d.category as string] : [];
-				jobs.push({
+				out.push({
 					id,
 					title: d.title,
 					location: d.full_location || d.location_name || d.city || null,
@@ -51,8 +52,15 @@ export const jibe: AtsFetcher = {
 					raw: d,
 				});
 			}
+			if (out.length) await sink(out);
 			if ((data.jobs.length ?? 0) < PAGE) break;
 		}
-		return { status: "ok", jobs };
+		return { status: "ok" };
+	},
+
+	async fetchJobs(slug: string): Promise<FetchResult> {
+		const jobs: Job[] = [];
+		const res = await this.fetchJobsStream!(slug, async (page) => { jobs.push(...page); });
+		return res.status === "gone" ? { status: "gone" } : { status: "ok", jobs };
 	},
 };

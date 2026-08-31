@@ -47,7 +47,7 @@ function toJob(host: string, p: PhenomJob): Job | null {
 		publishedAt: p.postedDate || p.dateCreated || null,
 		updatedAt: null,
 		content: p.descriptionTeaser || null, // teaser; the real description arrives via fetchDetail
-		raw: p,
+		raw: { ...p, ml_skills: undefined, ml_job_parser: undefined } as unknown, // ml_* blobs are the bulk of the payload
 	};
 }
 
@@ -79,8 +79,8 @@ function ddoJson(html: string): unknown | null {
 }
 
 export const phenom: AtsFetcher = {
-	async fetchJobs(slug: string): Promise<FetchResult> {
-		const jobs: Job[] = []; const seen = new Set<string>();
+	async fetchJobsStream(slug, sink): Promise<{ status: "ok" } | { status: "gone" }> {
+		const seen = new Set<string>();
 		let total = Infinity;
 		for (let from = 0; from < Math.min(total, MAX); from += PAGE) {
 			const res = await fetchRetry(`https://${slug}/widgets`, {
@@ -95,13 +95,21 @@ export const phenom: AtsFetcher = {
 			if (!rs || !rs.data) return { status: "gone" }; // not a phenom site (or widget disabled)
 			total = rs.totalHits ?? 0;
 			const page = rs.data.jobs ?? [];
+			const out: Job[] = [];
 			for (const p of page) {
 				const j = toJob(slug, p);
-				if (j && !seen.has(j.id)) { seen.add(j.id); jobs.push(j); }
+				if (j && !seen.has(j.id)) { seen.add(j.id); out.push(j); }
 			}
+			if (out.length) await sink(out);
 			if (page.length < PAGE) break;
 		}
-		return { status: "ok", jobs };
+		return { status: "ok" };
+	},
+
+	async fetchJobs(slug: string): Promise<FetchResult> {
+		const jobs: Job[] = [];
+		const res = await this.fetchJobsStream!(slug, async (page) => { jobs.push(...page); });
+		return res.status === "gone" ? { status: "gone" } : { status: "ok", jobs };
 	},
 
 	async fetchDetail(slug: string, job: Job): Promise<JobDetail | null> {
@@ -112,6 +120,7 @@ export const phenom: AtsFetcher = {
 		const j = ddo?.jobDetail?.data?.job;
 		if (!j?.description) return null;
 		const content = unescapeHtml(j.description + (j.qualifications ? `\n${j.qualifications}` : ""));
-		return { content, raw: j };
+		// content only: storing the whole ddo job object as raw (~50-100 KB/job) OOMs a 10k-job board's DO
+		return { content };
 	},
 };
