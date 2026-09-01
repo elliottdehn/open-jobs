@@ -217,6 +217,7 @@ function rowToJob(r: JobRow, withEmbedding = false): StoredJob {
 	const detail = r.detail === null ? null : (JSON.parse(r.detail) as JobDetail);
 	if (detail) {
 		if (detail.title) job.title = detail.title;
+		if (detail.org) (job as Job & { org?: string }).org = detail.org;
 		if (detail.content) job.content = detail.content;
 		if (detail.location) job.location = detail.location;
 		if (detail.publishedAt) job.publishedAt = detail.publishedAt;

@@ -23,6 +23,8 @@ export interface JobDetail {
 	content: string | null;
 	/** A better title than the listing had (e.g. from JSON-LD); overrides the listing title when present. */
 	title?: string | null;
+	/** hiringOrganization from JSON-LD; lets the build drop aggregator boards (jobs spanning many orgs). */
+	org?: string | null;
 	/** Provider detail payload, kept alongside the listing `raw`. */
 	raw?: unknown;
 	publishedAt?: string | null;

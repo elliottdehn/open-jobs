@@ -164,11 +164,13 @@ export const dark: AtsFetcher = {
 		const d = findJobPosting(await res.text());
 		if (!d || !d.description) return null; // no JobPosting markup on this page (SPA/removed): drop it
 		const content = decodeEntities(d.description);
+		const org = typeof d.hiringOrganization === "object" ? d.hiringOrganization?.name : d.hiringOrganization;
 		return {
 			content,
 			title: d.title ? decodeEntities(d.title).slice(0, 200) : null,
 			location: locationOf(d),
 			publishedAt: d.datePosted ?? null,
+			org: org ? decodeEntities(org).slice(0, 120) : null,
 		};
 	},
 };
