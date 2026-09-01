@@ -58,9 +58,38 @@ For each domain, one worker produces a snapshot (list of `Job`), tiered so the b
 The tiering matters at scale: most large employers *do* serve JSON-LD statically on the job page once
 you have the right URL — the browser is only spent on the SPA fraction.
 
-## Infrastructure (the box)
+## Architecture: one DO per dark-pool company (primary), a box for the residual
 
-A single dedicated crawler service (one mid-size cloud VM, scalable horizontally by domain-sharding):
+The elegant fit — and the primary design — is **no separate box for the static-serving majority**.
+Common Crawl (which WDC extracts from) does **not execute JavaScript**, so every one of the 4.3M
+JobPostings WDC found was in *static HTML*. A site that only injects JSON-LD via client-side JS never
+enters WDC at all. Therefore the WDC seed is, by construction, the set a plain `fetch()` can read —
+which is exactly what a Durable Object can do. So each dark-pool company is just another board:
+
+- New pseudo-ATS **`dark`**, `slug` = the company's careers host (e.g. `careers.acme.com`). One DO per
+  company, self-scheduling its daily fetch like every other board.
+- `fetchJobs(slug)` = the crawler's discovery pass: fetch the site's `sitemap.xml` (or careers page),
+  return the current job URLs as the listing (title from the sitemap/URL).
+- `fetchDetail(job)` = fetch that job page and extract the `JobPosting` JSON-LD (title, location,
+  description, datePosted, hiringOrganization). Identical to teamtailor/softgarden/join/successfactors,
+  and the existing batched detail stage drains large sites across alarm ticks.
+- Everything downstream — diff, embeddings, enrichment, export, manifest — is reused unchanged.
+
+**Validate before spawning.** A seed-builder probes each filtered WDC domain with a static extraction
+test and creates a `dark` board only for the ones that actually yield JSON-LD in-DO. Live measurement
+on 40 filtered WDC employer domains: ~23% yield JSON-LD from a current job URL immediately, ~35% expose
+job URLs where extraction needs tuning, ~43% aren't statically reachable (SPA-since-crawl or bot-wall).
+So the `dark` DO model cleanly covers an estimated **25–50% of the seed (~10–20k companies) with zero
+new infrastructure** — the rest routes to a `needs-render` list.
+
+**The box is the escalation, not the start.** Sites that went SPA-only since the WDC crawl, or that
+bot-wall Cloudflare egress (403, like RTX), can't be read in-DO. Those are handled by an off-Cloudflare
+renderer that ingests via the `localOnly` path — the same pattern as today's RTX board, scaled. Build
+it only once the DO model's residual justifies it.
+
+## Infrastructure (the box) — for the render-needed residual
+
+This section applies only to the `needs-render` residual. A dedicated crawler service (one mid-size cloud VM, scalable horizontally by domain-sharding):
 
 - **Playwright / headless Chromium pool** — N reusable browser contexts; static-fetch workers vastly
   outnumber render workers (render only on JSON-LD miss).
