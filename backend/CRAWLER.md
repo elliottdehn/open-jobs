@@ -77,38 +77,43 @@ which is exactly what a Durable Object can do. So each dark-pool company is just
 
 **Validate before spawning.** A seed-builder probes each filtered WDC domain with a static extraction
 test and creates a `dark` board only for the ones that actually yield JSON-LD in-DO. Live measurement
-on 40 filtered WDC employer domains: ~23% yield JSON-LD from a current job URL immediately, ~35% expose
-job URLs where extraction needs tuning, ~43% aren't statically reachable (SPA-since-crawl or bot-wall).
-So the `dark` DO model cleanly covers an estimated **25–50% of the seed (~10–20k companies) with zero
-new infrastructure** — the rest routes to a `needs-render` list.
+on 500 filtered WDC employer domains: **26%** yield JobPosting JSON-LD in-DO (after a careers-page
+link-harvest fallback lifted it from 21%), median ~32 job URLs/board. The 500-domain `no-jobs` bucket
+sub-classifies as: ~64% SPA/shell (render tier), ~22% unreachable/bot-walled, ~13% recoverable-by-
+discovery (now folded into the 26%), ~1% genuinely no open roles. So the `dark` DO model covers
+**~26% of the seed (~10k companies) with zero new infrastructure**; ~33% of the whole seed is the
+render residual; the rest is unreachable/dead. **Apply the aggregator guard to the validated set** —
+job boards (jobbasel.ch, mnschooljobs.org, …) leak the domain filter and inflate the job count.
 
 **The box is the escalation, not the start.** Sites that went SPA-only since the WDC crawl, or that
 bot-wall Cloudflare egress (403, like RTX), can't be read in-DO. Those are handled by an off-Cloudflare
 renderer that ingests via the `localOnly` path — the same pattern as today's RTX board, scaled. Build
 it only once the DO model's residual justifies it.
 
-## Infrastructure (the box) — for the render-needed residual
+## The render residual — Cloudflare Browser Rendering, not a box
 
-This section applies only to the `needs-render` residual. A dedicated crawler service (one mid-size cloud VM, scalable horizontally by domain-sharding):
+The SPA fraction (~64% of `no-jobs` ≈ ~a third of the whole seed) needs a real browser. Cloudflare's
+**Browser Rendering** is a Worker binding, so this stays on-platform — no external box. A render-Worker
+(triggered per `needs-render` board; a DO can't hold a browser itself) loads the page, extracts the
+JobPosting JSON-LD / DOM, and the board ingests through the normal pipeline.
 
-- **Playwright / headless Chromium pool** — N reusable browser contexts; static-fetch workers vastly
-  outnumber render workers (render only on JSON-LD miss).
-- **Work queue over domains** — priority by last-success age and posting count; one in-flight request
-  per domain (politeness), global concurrency in the low hundreds of pages.
-- **Respect `robots.txt`**, a real UA string with contact, backoff on 429/403, and a per-domain crawl
-  budget so a giant site can't starve the pass.
-- **Content-hash cache** per job URL — unchanged pages are skipped without re-render; a domain whose
-  sitemap `lastmod` is unchanged is skipped wholesale. This is what makes a *daily* pass affordable:
-  steady-state work is only the delta.
-- **Snapshot → ingest**: batch POST each domain's snapshot to the Worker `/boards/custom/<domain>/ingest`
-  (Bearer `ADMIN_TOKEN`). The Board DO then runs the *identical* pipeline as every other board — diff,
-  detail, embeddings, enrichment, export, manifest. Boards are marked `localOnly` (no online fetch on
-  the DO; the box owns fetching), exactly like today's jobscore / RTX local boards.
+Pricing (Workers Paid, 2026): 10 browser-hours/mo + 10 concurrent browsers included, then **$0.09 /
+browser-hour** and **$2.00 / additional concurrent browser** (metered on wall-clock browser-hours and
+peak concurrency). Cost = pages rendered × seconds each × $0.09/hr, so the entire lever is rendering
+*fewer* pages:
+- **Render only to discover.** Render the SPA *listing* to get job URLs, then **static-fetch** the
+  detail pages — many SPAs are SPA on the list but server-render the detail with JSON-LD (free path).
+- **Content-hash cache**: daily passes render only new/changed pages; the expensive part is the first pass.
 
-New pseudo-ATS **`custom`**: `slug` = the career hostname. `fetchJobs` on the Worker side returns
-`gone` for any slug (the DO never fetches; it only ingests) — same shape as the `snowflake` stub.
+Order-of-magnitude: a naive full daily render (~13k domains × ~50 pages × ~3s) ≈ 500+ browser-hours/day
+≈ **~$1.5k/mo** + concurrency overage; with discover-only + delta caching, steady-state is plausibly
+**low-hundreds/mo**. Versus ~$0 infra and ~$16 one-time embeddings for the static `dark` tier — which is
+why the static tier ships first and the render tier turns on only if the residual's jobs-per-dollar earns it.
 
-## Freshness, dedup, safety
+For providers that bot-wall Cloudflare egress specifically (403, like RTX), the fallback stays the
+off-Cloudflare local-ingest path already in use — a small minority, not a farm.
+
+## Freshness, dedup, safety## Freshness, dedup, safety
 
 - **Daily full pass** with the content-hash cache making it incremental after the first run.
 - **Dedup vs ATS boards**: before ingesting a domain, resolve its canonical careers host; if it maps
