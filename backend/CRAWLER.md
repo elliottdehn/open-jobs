@@ -110,6 +110,17 @@ Order-of-magnitude: a naive full daily render (~13k domains × ~50 pages × ~3s)
 **low-hundreds/mo**. Versus ~$0 infra and ~$16 one-time embeddings for the static `dark` tier — which is
 why the static tier ships first and the render tier turns on only if the residual's jobs-per-dollar earns it.
 
+**Self-hosted alternative — Cloudflare Containers.** Instead of managed Browser Rendering, run our own
+headless Chromium (Playwright) in a Container, driven by the same Worker/DO queue. Containers bill on
+raw compute ($0.000020/vCPU-s, $0.0000025/GiB-s, scale-to-zero): a `standard-3` (2 vCPU, 8 GiB) is
+~$0.22/container-hour and packs ~12 concurrent renders, i.e. **~$0.018/browser-hour vs $0.09 managed —
+~5× cheaper**. Naive full daily render ≈ $270/mo (vs ~$1,350 managed), low-tens with discover-only +
+delta caching. Egress isn't the driver (page data is *ingress*, free; abort image/font/CSS requests to
+cut render time anyway). The 5× win needs *packing* — keep containers busy via a batched queue — and
+you own Chrome's lifecycle (recycle contexts around its leaks/crashes), concurrency, and image upkeep.
+Staging: pilot on Browser Rendering (10 free hrs, zero ops) to prove the residual's jobs-per-dollar,
+then migrate the hot path to a Containers Playwright pool for the saving if it earns it.
+
 For providers that bot-wall Cloudflare egress specifically (403, like RTX), the fallback stays the
 off-Cloudflare local-ingest path already in use — a small minority, not a farm.
 
