@@ -89,6 +89,8 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 | pinpoint | subdomain | yes | |
 | recruitee | subdomain | yes | |
 | recruiterbox | client name | yes | |
+| successfactors | RMK site hostname (jobs.exxonmobil.com) | full JD in the /sitemap.xml RSS feed | mined via rmkcdn CDN references |
+| ukg | host:companyCode:boardGuid | brief in listing; full via `fetchDetail` (embedded JSON) | boards mined from Common Crawl |
 | smartrecruiters | company id | via `fetchDetail` (`/postings/{id}`) | 0 results ⇒ probe careers page to distinguish gone/empty |
 | taleo | subdomain | via `fetchDetail` (jobdetail.ftl state blob) | default career section only; `tbe` (Business Edition) unsupported |
 | workable | account subdomain | yes | widget API |
