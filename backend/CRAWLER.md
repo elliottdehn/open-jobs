@@ -90,6 +90,23 @@ bot-wall Cloudflare egress (403, like RTX), can't be read in-DO. Those are handl
 renderer that ingests via the `localOnly` path — the same pattern as today's RTX board, scaled. Build
 it only once the DO model's residual justifies it.
 
+## Render pilot verdict (2026-09-01): the farm is NOT justified
+
+Before building any render infra, a pilot rendered 200 `needs-render` domains with local headless
+Chrome (a free stand-in for Browser Rendering) and measured JobPosting recovery. Result: **rendering
+does not cheaply recover the SPA residual.** After correcting a link-extraction bug that had inflated
+the raw yield (the regex matched `career.css`/`/feed/` asset paths), the real extractable-JSON-LD rate
+after render was ~0. Manual spot-checks explain why:
+- **XHR-only SPAs** (e.g. Skyworks): even fully rendered, jobs load via a later API call absent from
+  the DOM. Reaching them needs per-site API-sniffing, not a generic render — high effort, fragile.
+- **ATS-fronts we already cover** (e.g. SkyWest → iCIMS): rendering just surfaces a link to an ATS in
+  our fleet — a duplicate, not new coverage.
+
+So the addressable dark pool is the **static tier** (~26–30%, live) plus a small better-discovery slice.
+The SPA residual is not worth a rendering farm; **do not build one on current evidence.** If revisited,
+the only path with a chance is per-site API-sniffing for the highest-value custom SPAs, evaluated
+individually — not a blanket render farm. The infra designs below are retained for reference only.
+
 ## The render residual — Cloudflare Browser Rendering, not a box
 
 The SPA fraction (~64% of `no-jobs` ≈ ~a third of the whole seed) needs a real browser. Cloudflare's
