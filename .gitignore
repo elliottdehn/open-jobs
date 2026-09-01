@@ -19,3 +19,6 @@ other/
 
 # Worker admin token (also set as a wrangler secret)
 backend/admin_token.txt
+
+# USAJobs API key (also set as a wrangler secret)
+backend/usajobs_key.txt

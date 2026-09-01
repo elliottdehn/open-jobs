@@ -1,5 +1,7 @@
 // Secrets aren't emitted by `wrangler types`; declare them here (interface merging with the generated Env).
 interface Env {
+	/** `wrangler secret put USAJOBS_KEY` — data.usajobs.gov API key (public federal jobs) */
+	USAJOBS_KEY?: string;
 	/** `wrangler secret put ADMIN_TOKEN` — required; admin endpoints return 401 without it (fail closed). Never a var. */
 	ADMIN_TOKEN?: string;
 	/** `wrangler secret put OPENAI_KEY` */

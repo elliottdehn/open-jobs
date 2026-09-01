@@ -461,7 +461,7 @@ export class Board extends DurableObject<Env> {
 				meta.nextFetchAt = next0;
 				return;
 			}
-			const result = provided ?? (await withTimeout(fetcher.fetchJobs(meta.slug), FETCH_JOBS_TIMEOUT_MS, `fetchJobs ${meta.name}`));
+			const result = provided ?? (await withTimeout(fetcher.fetchJobs(meta.slug, { env: this.env }), FETCH_JOBS_TIMEOUT_MS, `fetchJobs ${meta.name}`));
 			if (result.status === "gone") {
 				meta.lastStatus = "gone";
 				meta.lastError = null;

@@ -33,8 +33,11 @@ export interface JobDetail {
 	departments?: string[];
 }
 
+/** Optional per-fetch context (secrets etc.); only key-based fetchers like usajobs use it. */
+export interface FetchCtx { env: Env }
+
 export interface AtsFetcher {
-	fetchJobs(slug: string): Promise<FetchResult>;
+	fetchJobs(slug: string, ctx?: FetchCtx): Promise<FetchResult>;
 	/**
 	 * Optional: page-streaming variant for big boards. The Board prefers this when present: each page
 	 * is handed to `sink` and applied to storage immediately, so peak memory is one page instead of
