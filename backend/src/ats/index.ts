@@ -26,14 +26,16 @@ import { taleo } from "./taleo";
 import { teamtailor } from "./teamtailor";
 import { workable } from "./workable";
 import { workday } from "./workday";
+import { ukg } from "./ukg";
+import { successfactors } from "./successfactors";
 import { phenom } from "./phenom";
 import { jibe } from "./jibe";
 import { snowflake } from "../snowflake";
 
 /**
  * Providers with a working fetcher. Boards for other ATSes are ignored (no DOs are created).
- * Not enabled: `ukg` and `successfactors` — their slugs are datacenter/CDN hostnames with no
- * company identifier, so there is nothing to fetch (see src/ats/ukg.ts, successfactors.ts).
+ * `ukg` slugs are host:companyCode:boardGuid triples and `successfactors` slugs are RMK site
+ * hostnames — both mined offline (legacy datacenter-hostname slugs return gone).
  * `comeet` is disabled until its slug->uid map is built (scripts/build-comeet.mjs --via=<worker-url>).
  */
 export const fetchers: Record<string, AtsFetcher> = {
@@ -60,12 +62,14 @@ export const fetchers: Record<string, AtsFetcher> = {
 	recruitee,
 	recruiterbox,
 	smartrecruiters,
+	successfactors,
 	snowflake,
 	softgarden,
 	taleo,
 	teamtailor,
 	workable,
 	workday,
+	ukg,
 };
 
 /**
