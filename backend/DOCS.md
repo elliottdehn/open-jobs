@@ -67,7 +67,7 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 |---|---|---|---|
 | ashby | board name | yes | single call |
 | breezy | subdomain | via `fetchDetail` (job page ld+json) | many dead portals |
-| comeet | company name | yes | **disabled** — needs `src/comeet-uids.json` (see below) |
+| comeet | company name | yes | enabled — uid map `src/comeet-uids.json` (73 live of 443 legacy slugs; rebuild: `scripts/build-comeet.mjs --via=<worker>`) |
 | crelate | portal name | snippet; full via `fetchDetail` (`GetJob`) | |
 | dayforce | `ns` or `ns/site` | yes | bare slug ⇒ `ns/CANDIDATEPORTAL`; ~35% of bare slugs are unmappable site codes → gone |
 | eightfold | subdomain | via `fetchDetail` (untested: WAF-blocked during dev) | 10/page, rate-limit sensitive |
@@ -95,7 +95,8 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 | taleo | subdomain | via `fetchDetail` (jobdetail.ftl state blob) | default career section only; `tbe` (Business Edition) unsupported |
 | workable | account subdomain | yes | widget API |
 | workday | hostname | via `fetchDetail` | sites discovered from robots.txt; 20/page; full JD from `/wday/cxs/.../job/...` once per job |
-| ukg, successfactors | datacenter/CDN hostnames | — | **not enabled**: slugs carry no company id; stubs throw |
+| ukg | `host:companyCode:boardGuid` (mined from Common Crawl) | brief in listing; full via `fetchDetail` | legacy datacenter slugs return gone |
+| successfactors | RMK site hostname, e.g. jobs.exxonmobil.com (mined via rmkcdn CDN refs) | full JD in `/sitemap.xml` RSS | legacy CDN slugs return gone |
 
 ### Board (company) enrichment (`src/company.ts`, `src/openai.ts`)
 Identifies the company behind a board — name, homepage, careers/LinkedIn URLs, HQ, industry,
