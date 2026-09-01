@@ -21,6 +21,7 @@ import { recruitee } from "./recruitee";
 import { recruiterbox } from "./recruiterbox";
 import { smartrecruiters } from "./smartrecruiters";
 import { taleo } from "./taleo";
+import { teamtailor } from "./teamtailor";
 import { workable } from "./workable";
 import { workday } from "./workday";
 import { phenom } from "./phenom";
@@ -58,6 +59,7 @@ export const fetchers: Record<string, AtsFetcher> = {
 	smartrecruiters,
 	snowflake,
 	taleo,
+	teamtailor,
 	workable,
 	workday,
 };
