@@ -10,6 +10,7 @@ import { gohire } from "./gohire";
 import { greenhouse } from "./greenhouse";
 import { icims } from "./icims";
 import { jobscore } from "./jobscore";
+import { join } from "./join";
 import { jobvite } from "./jobvite";
 import { lever } from "./lever";
 import { oraclecloud } from "./oraclecloud";
@@ -20,6 +21,7 @@ import { pinpoint } from "./pinpoint";
 import { recruitee } from "./recruitee";
 import { recruiterbox } from "./recruiterbox";
 import { smartrecruiters } from "./smartrecruiters";
+import { softgarden } from "./softgarden";
 import { taleo } from "./taleo";
 import { teamtailor } from "./teamtailor";
 import { workable } from "./workable";
@@ -46,6 +48,7 @@ export const fetchers: Record<string, AtsFetcher> = {
 	jibe,
 	icims,
 	jobscore,
+	join,
 	jobvite,
 	lever,
 	oraclecloud,
@@ -58,6 +61,7 @@ export const fetchers: Record<string, AtsFetcher> = {
 	recruiterbox,
 	smartrecruiters,
 	snowflake,
+	softgarden,
 	taleo,
 	teamtailor,
 	workable,
