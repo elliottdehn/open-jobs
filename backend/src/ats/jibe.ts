@@ -48,7 +48,7 @@ export const jibe: AtsFetcher = {
 					departments: cats,
 					publishedAt: d.posted_date || d.create_date || null,
 					updatedAt: null,
-					content: d.description || null,
+					content: (d.description || "").slice(0, 8_000) || null, // 15KB retail JDs × 10k jobs strain the DO; 8k keeps everything that matters
 					// raw without the description (already in content) — 10k-job boards with 25KB rows OOM the DO otherwise
 					raw: { ...d, description: undefined } as unknown,
 				});
