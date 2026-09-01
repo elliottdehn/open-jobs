@@ -41,7 +41,7 @@ import { snowflake } from "../snowflake";
 export const fetchers: Record<string, AtsFetcher> = {
 	ashby,
 	breezy,
-	// comeet, // disabled: slug->uid map (src/comeet-uids.json) not built yet; see scripts/build-comeet.mjs
+	comeet, // uid map: src/comeet-uids.json (scripts/build-comeet.mjs --via=<worker>)
 	crelate,
 	dayforce,
 	eightfold,

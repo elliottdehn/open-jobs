@@ -1,1 +1,664 @@
-{}
+{
+ "365scores": null,
+ "44ventures": null,
+ "4Manalytics": null,
+ "500tech": null,
+ "abra_rnd": null,
+ "accedo": null,
+ "accelerateddigitalmedia": null,
+ "accessibe": null,
+ "activefence": null,
+ "adcellerant": {
+  "name": "adcellerant",
+  "uid": "75.000"
+ },
+ "agora": {
+  "name": "agora",
+  "uid": "08.007"
+ },
+ "ai21": {
+  "name": "ai21",
+  "uid": "E6.001"
+ },
+ "Aidoc": {
+  "name": "Aidoc",
+  "uid": "B4.007"
+ },
+ "aiphoria": null,
+ "aitechsystems": null,
+ "aka_food": null,
+ "alice": {
+  "name": "alice",
+  "uid": "D5.005"
+ },
+ "allbetter": null,
+ "allcloud": null,
+ "allied-universal-em": null,
+ "almaobservatory": null,
+ "amimon": null,
+ "anchorfintech": null,
+ "AnonyomeLabs": {
+  "name": "AnonyomeLabs",
+  "uid": "C3.003"
+ },
+ "anyword": null,
+ "appdome": {
+  "name": "appdome",
+  "uid": "E6.005"
+ },
+ "appnext": {
+  "name": "appnext",
+  "uid": "42.003"
+ },
+ "appsforce": null,
+ "appstock": null,
+ "arpeely": {
+  "name": "arpeely",
+  "uid": "57.001"
+ },
+ "askai": null,
+ "aspectiva": null,
+ "aspireglobal": null,
+ "atera": null,
+ "atipica": null,
+ "audiocodes": null,
+ "augmedics": {
+  "name": "augmedics",
+  "uid": "26.00C"
+ },
+ "autobrains": null,
+ "automatit": null,
+ "bdrsolutionsllc": {
+  "name": "bdrsolutionsllc",
+  "uid": "79.00B"
+ },
+ "beaconcure": null,
+ "beehero": null,
+ "bettzedek": {
+  "name": "bettzedek",
+  "uid": "45.001"
+ },
+ "biocatch": null,
+ "biolojic": null,
+ "bizzabo": null,
+ "blinkist": null,
+ "blinkops": null,
+ "blockaid": null,
+ "bluesnap": null,
+ "boaideas": null,
+ "bond": null,
+ "bondsports": {
+  "name": "bondsports",
+  "uid": "F7.009"
+ },
+ "bounce": {
+  "name": "bounce",
+  "uid": "E9.00C"
+ },
+ "brandbastion": null,
+ "brightdata": null,
+ "brix": {
+  "name": "brix",
+  "uid": "D3.001"
+ },
+ "browzwear": null,
+ "buildots": null,
+ "bulls_media": null,
+ "buyme": null,
+ "caja": null,
+ "californiaonlinepublicschools": null,
+ "capslock": null,
+ "cardosystems": null,
+ "cbd": {
+  "name": "cbd",
+  "uid": "14.007"
+ },
+ "ccojubilee": null,
+ "cellebrite": {
+  "name": "cellebrite",
+  "uid": "C3.00F"
+ },
+ "cglms": null,
+ "chaoslabs": null,
+ "chargeafter": null,
+ "chargeflow": null,
+ "checkmarx": null,
+ "cheq": {
+  "name": "cheq",
+  "uid": "65.005"
+ },
+ "citadel": null,
+ "citygardenmontessori": {
+  "name": "citygardenmontessori",
+  "uid": "7A.00F"
+ },
+ "civalue": null,
+ "clarius": null,
+ "Claroty": {
+  "name": "Claroty",
+  "uid": "F2.004"
+ },
+ "clhsa": {
+  "name": "clhsa",
+  "uid": "7A.001"
+ },
+ "clinch": null,
+ "cloudinsurance": null,
+ "codeocean": null,
+ "codevalue": null,
+ "cognyte": null,
+ "comm-it": null,
+ "commbox": null,
+ "comunix": {
+  "name": "comunix",
+  "uid": "86.006"
+ },
+ "conifers_ai": null,
+ "creditunionofnewjersey": null,
+ "crossriver": null,
+ "ctera": null,
+ "curve": {
+  "name": "curve",
+  "uid": "E4.001"
+ },
+ "Cyberbit": null,
+ "cycode": null,
+ "cycognito": {
+  "name": "cycognito",
+  "uid": "14.00A"
+ },
+ "cyera": {
+  "name": "cyera",
+  "uid": "17.008"
+ },
+ "cymotive": null,
+ "cynet": null,
+ "cytoreason": null,
+ "dailydev": null,
+ "dataloop": null,
+ "Datarails": {
+  "name": "Datarails",
+  "uid": "53.005"
+ },
+ "daylightsecurity": null,
+ "daytwo": null,
+ "dbank": null,
+ "dcentralab": null,
+ "dealhub": null,
+ "deepdub": null,
+ "deepinstinct": null,
+ "deltagalil": null,
+ "dfcu": null,
+ "directeam": null,
+ "diverseforce": null,
+ "dlapiper": {
+  "name": "dlapiper",
+  "uid": "FA.000"
+ },
+ "doorloop": {
+  "name": "doorloop",
+  "uid": "0A.006"
+ },
+ "draftt": null,
+ "dragonfligroup": null,
+ "dreamedai": null,
+ "driivz": null,
+ "drivenets": null,
+ "droxiai": {
+  "name": "droxiai",
+  "uid": "1A.001"
+ },
+ "duve": null,
+ "easysend": null,
+ "echo": null,
+ "echosoftware": {
+  "name": "echosoftware",
+  "uid": "9A.006"
+ },
+ "eitanmedical": null,
+ "empathy": {
+  "name": "empathy",
+  "uid": "F8.007"
+ },
+ "enercon": null,
+ "enlightenergy": null,
+ "esh": {
+  "name": "esh",
+  "uid": "87.003"
+ },
+ "etoro": null,
+ "evoke": {
+  "name": "evoke",
+  "uid": "E2.001"
+ },
+ "exaware": null,
+ "exodigo": {
+  "name": "exodigo",
+  "uid": "89.005"
+ },
+ "exusia": {
+  "name": "exusia",
+  "uid": "B1.003"
+ },
+ "eyesatop": {
+  "name": "eyesatop",
+  "uid": "FA.006"
+ },
+ "factify": null,
+ "fansided": null,
+ "feedvisor": null,
+ "feex": null,
+ "fetcherr": null,
+ "fieldintech": null,
+ "final": null,
+ "finbounce": null,
+ "finubit": null,
+ "fire-arc": null,
+ "fireblocks": null,
+ "firebolt": null,
+ "firefly": null,
+ "firstalliancecreditunion": null,
+ "fiverr": null,
+ "flare": {
+  "name": "flare",
+  "uid": "36.00F"
+ },
+ "flexor": null,
+ "fluenttech": null,
+ "folxhealth": null,
+ "foresightauto": null,
+ "forsightrobotics": null,
+ "freightos": null,
+ "fullpath": null,
+ "fusion92": {
+  "name": "fusion92",
+  "uid": "C8.00F"
+ },
+ "g70": null,
+ "gelt": {
+  "name": "gelt",
+  "uid": "FA.005"
+ },
+ "gemtechnologiesinc": null,
+ "gett": null,
+ "gini-apps": null,
+ "gloat": {
+  "name": "gloat",
+  "uid": "E5.000"
+ },
+ "growthspace": {
+  "name": "growthspace",
+  "uid": "D7.00A"
+ },
+ "h2pro": null,
+ "halon": null,
+ "hereme": null,
+ "hexagate": null,
+ "historictoursofamerica": null,
+ "hivecollective": null,
+ "holganix": {
+  "name": "holganix",
+  "uid": "8A.00F"
+ },
+ "hub-technologies": {
+  "name": "hub-technologies",
+  "uid": "07.00F"
+ },
+ "hypernative": null,
+ "i4DM": null,
+ "iamusconsulting": null,
+ "identiq": null,
+ "idtechsolutions": null,
+ "igentify": null,
+ "ijag": null,
+ "ilyon": null,
+ "imagry": null,
+ "immunai": {
+  "name": "immunai",
+  "uid": "37.009"
+ },
+ "incredibuild": {
+  "name": "incredibuild",
+  "uid": "66.00F"
+ },
+ "indeni": null,
+ "infinidat": {
+  "name": "infinidat",
+  "uid": "D6.003"
+ },
+ "innovaderm": {
+  "name": "innovaderm",
+  "uid": "15.003"
+ },
+ "innovativeskincare": null,
+ "innoviz": null,
+ "insightec": {
+  "name": "insightec",
+  "uid": "4A.004"
+ },
+ "inspira": null,
+ "inspiredhr": null,
+ "Insycle": null,
+ "intech": null,
+ "intuitionrobotics": null,
+ "ironscales": null,
+ "island": null,
+ "israeltechguard": null,
+ "itsolutions": null,
+ "ivix": {
+  "name": "ivix",
+  "uid": "09.002"
+ },
+ "jether-energy": null,
+ "joinattil": {
+  "name": "joinattil",
+  "uid": "38.00A"
+ },
+ "k2view": null,
+ "kaltura": null,
+ "kazuar": null,
+ "kelasys": null,
+ "kelatechnologies": {
+  "name": "kelatechnologies",
+  "uid": "2A.007"
+ },
+ "kendago": null,
+ "keshet": null,
+ "keter-north-america": null,
+ "knauf": null,
+ "knostic": null,
+ "komodor": {
+  "name": "komodor",
+  "uid": "96.005"
+ },
+ "konnecto": null,
+ "layerxsecurity": null,
+ "leadingit": null,
+ "ledgebrook": {
+  "name": "ledgebrook",
+  "uid": "D9.006"
+ },
+ "legitsecurity.com": {
+  "name": "legitsecurity.com",
+  "uid": "37.004"
+ },
+ "lemalabs": null,
+ "leverate": null,
+ "lightstream": null,
+ "lili": null,
+ "linxsecurity": {
+  "name": "linxsecurity",
+  "uid": "99.00C"
+ },
+ "liquidity": null,
+ "liquiditygroup": null,
+ "liveu": null,
+ "localize": null,
+ "locusview": null,
+ "ludeo": null,
+ "lumenis": null,
+ "lumigo": null,
+ "lumus": null,
+ "lusha": null,
+ "maelyscosmetics": null,
+ "magalsolutions": null,
+ "maoz_il": null,
+ "masterschool": null,
+ "matrix-ifs": null,
+ "maytronics": null,
+ "mcfarlandcity": null,
+ "mdclone": null,
+ "medbridge": null,
+ "medicalreviewinstituteofamerica": {
+  "name": "medicalreviewinstituteofamerica",
+  "uid": "39.004"
+ },
+ "medison": null,
+ "medone": null,
+ "medvidi": {
+  "name": "medvidi",
+  "uid": "2A.003"
+ },
+ "mentee_robotics": null,
+ "metalbear-co": null,
+ "milpower": null,
+ "minerva": {
+  "name": "minerva",
+  "uid": "3A.007"
+ },
+ "minimus": null,
+ "minutemedia": null,
+ "mitiga": null,
+ "mitrelli": null,
+ "monday": null,
+ "moonactive": null,
+ "moonshot": null,
+ "moovit": {
+  "name": "moovit",
+  "uid": "63.007"
+ },
+ "morphisec": null,
+ "mprest": null,
+ "mrioa": null,
+ "msd-ahi-technologylabs": null,
+ "multinarity": null,
+ "mwdn": null,
+ "nagish": null,
+ "nanodimension": null,
+ "nanox": null,
+ "nationalmathcamps": null,
+ "native": null,
+ "navina": null,
+ "nayax": {
+  "name": "nayax",
+  "uid": "13.009"
+ },
+ "netafim": null,
+ "neusecharterschool": null,
+ "newhomesmate": null,
+ "nexite": null,
+ "nextsilicon": null,
+ "nokodsecurity": null,
+ "nominal": null,
+ "novidea": null,
+ "nymhealth": {
+  "name": "nymhealth",
+  "uid": "46.005"
+ },
+ "o3world": null,
+ "octup": null,
+ "odigos": null,
+ "oferjobs": null,
+ "onebeat": null,
+ "onestep": null,
+ "onezerobank": null,
+ "optibus": {
+  "name": "optibus",
+  "uid": "D1.00C"
+ },
+ "Orca-AI": null,
+ "orchid_security": null,
+ "Orpak": null,
+ "oscarmike": null,
+ "outerbox": {
+  "name": "outerbox",
+  "uid": "49.00D"
+ },
+ "overwolf": null,
+ "ox_security": {
+  "name": "ox_security",
+  "uid": "F8.006"
+ },
+ "paharainstitute": {
+  "name": "paharainstitute",
+  "uid": "6A.007"
+ },
+ "papayagaming": null,
+ "papayaglobal": null,
+ "parachutehealth": null,
+ "paragon": null,
+ "passportcard": null,
+ "paymentology": {
+  "name": "paymentology",
+  "uid": "38.007"
+ },
+ "penlink": null,
+ "pentera": null,
+ "personetics": null,
+ "pipl": null,
+ "playstudios": {
+  "name": "playstudios",
+  "uid": "E2.00B"
+ },
+ "port": {
+  "name": "port",
+  "uid": "59.004"
+ },
+ "ppcr": null,
+ "primusgroup": null,
+ "promptsecurity": null,
+ "proteantecs": null,
+ "ptc": null,
+ "pushoperations": null,
+ "qedma": null,
+ "qspark": null,
+ "quantummachines": null,
+ "quicklizard": null,
+ "quris": null,
+ "rapidapi": null,
+ "rapyd": {
+  "name": "rapyd",
+  "uid": "73.00E"
+ },
+ "razorlabs": null,
+ "reco": null,
+ "redefinemeat": {
+  "name": "redefinemeat",
+  "uid": "28.004"
+ },
+ "reeco": null,
+ "regscale": null,
+ "regulus": {
+  "name": "regulus",
+  "uid": "9A.00D"
+ },
+ "rekor": null,
+ "RemitlyIL": null,
+ "rewire": null,
+ "riverside-fm": null,
+ "rounds": null,
+ "safebreach": null,
+ "safefleet": null,
+ "samsung": {
+  "name": "samsung",
+  "uid": "D4.005"
+ },
+ "sansartecllc": null,
+ "saymine": null,
+ "scadafence": null,
+ "sciplay": null,
+ "scylladb": null,
+ "seasecuirty": null,
+ "secful": null,
+ "sedric": null,
+ "seekingalpha": null,
+ "seemplicity": null,
+ "seia": null,
+ "sentra": null,
+ "sequoiaconnect": null,
+ "seraphicsecurity": null,
+ "sett": null,
+ "shamrockroofer": null,
+ "shieldfc": null,
+ "shift4": null,
+ "sightful": null,
+ "silk": null,
+ "silverfort": null,
+ "sisense": null,
+ "skai": null,
+ "skyline": null,
+ "smart-shooter": null,
+ "snapscale": null,
+ "SolarEdge": null,
+ "soliduslabs": null,
+ "sorbet": null,
+ "spark-hire": null,
+ "sparsolutions": null,
+ "spineandsport": null,
+ "spinframe": null,
+ "SportsArena": null,
+ "stampli": null,
+ "starkware": null,
+ "statement": null,
+ "streamsecurity": null,
+ "sunbit": null,
+ "supercom": null,
+ "superplay": null,
+ "Surecomp": null,
+ "swimm": null,
+ "syqe": null,
+ "sysaid": null,
+ "tabnine": null,
+ "tailormed": null,
+ "tango": null,
+ "taranis": null,
+ "team8": null,
+ "teambuilderrecruiting": null,
+ "teamwork": null,
+ "tencyle": null,
+ "Tenengroup": null,
+ "thefirmexp": null,
+ "thesandbox": null,
+ "thetaray": null,
+ "thrivedx": null,
+ "tictuk": null,
+ "toloka": null,
+ "topgummiceuticals": null,
+ "trigo": null,
+ "tripleten": null,
+ "truvid": null,
+ "Uala": null,
+ "ultra": null,
+ "unleash": null,
+ "upwind": null,
+ "utila": null,
+ "uveye": null,
+ "vastdata": null,
+ "vectoriousmedtech": null,
+ "vega": {
+  "name": "vega",
+  "uid": "C9.009"
+ },
+ "vegasecurity": null,
+ "verbit": null,
+ "vertuagent": null,
+ "vetric": null,
+ "vi": null,
+ "viber": null,
+ "visanahealth": null,
+ "voyantis": null,
+ "vpgsensors": null,
+ "vydia": null,
+ "walmart": null,
+ "wand": null,
+ "watchfultechnologies": null,
+ "webbing": null,
+ "webselenese": null,
+ "webz": null,
+ "weissbeerger": null,
+ "weski": null,
+ "winn_ai": null,
+ "wonderful": null,
+ "xmcyber": null,
+ "xvivo": null,
+ "yinzcam": null,
+ "youappi": null,
+ "zafran_io": null,
+ "zemingo": null,
+ "zenity": null,
+ "zeronetworks": null,
+ "zeroport": null,
+ "zim": null,
+ "zoom": null,
+ "zyg": null
+}
