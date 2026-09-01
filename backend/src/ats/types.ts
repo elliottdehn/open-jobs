@@ -21,6 +21,8 @@ export type FetchResult =
 /** Extra per-job data obtained from a detail request (merged over the listing data at read time). */
 export interface JobDetail {
 	content: string | null;
+	/** A better title than the listing had (e.g. from JSON-LD); overrides the listing title when present. */
+	title?: string | null;
 	/** Provider detail payload, kept alongside the listing `raw`. */
 	raw?: unknown;
 	publishedAt?: string | null;

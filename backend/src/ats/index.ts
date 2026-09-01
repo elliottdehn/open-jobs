@@ -5,6 +5,7 @@ import { breezy } from "./breezy";
 import { comeet } from "./comeet";
 import { crelate } from "./crelate";
 import { dayforce } from "./dayforce";
+import { dark } from "./dark";
 import { eightfold } from "./eightfold";
 import { gohire } from "./gohire";
 import { greenhouse } from "./greenhouse";
@@ -43,6 +44,7 @@ export const fetchers: Record<string, AtsFetcher> = {
 	breezy,
 	comeet, // uid map: src/comeet-uids.json (scripts/build-comeet.mjs --via=<worker>)
 	crelate,
+	dark,
 	dayforce,
 	eightfold,
 	gohire,

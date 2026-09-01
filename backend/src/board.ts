@@ -216,6 +216,7 @@ function rowToJob(r: JobRow, withEmbedding = false): StoredJob {
 	// Detail data (fetched once per job) overrides the listing where present.
 	const detail = r.detail === null ? null : (JSON.parse(r.detail) as JobDetail);
 	if (detail) {
+		if (detail.title) job.title = detail.title;
 		if (detail.content) job.content = detail.content;
 		if (detail.location) job.location = detail.location;
 		if (detail.publishedAt) job.publishedAt = detail.publishedAt;
