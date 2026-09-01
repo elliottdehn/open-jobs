@@ -12,6 +12,9 @@ import { readFileSync } from "node:fs";
 // Keep in sync with `localOnlyAts` in src/ats/index.ts (imported directly here because Node's
 // ESM loader needs explicit .ts extensions that the Worker bundle doesn't use).
 const LOCAL_ONLY = ["jobscore"];
+// Individual boards whose provider blocks Cloudflare egress: fetched here, ingested, and their Board DO
+// marks itself localOnly (online fetches skipped). Exported like any other board.
+const LOCAL_BOARDS = [["phenom", "careers.rtx.com"]];
 const boards = JSON.parse(readFileSync(new URL("../src/boards.json", import.meta.url), "utf8"));
 const slugsFor = (ats) => boards[ats] ?? [];
 const args = process.argv.slice(2);
@@ -27,6 +30,20 @@ async function postIngest(ats, slug, body) {
 		if (res.ok) return res.json();
 		if (attempt >= 3) throw new Error(`ingest ${slug}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
 		await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+	}
+}
+
+if (ingest) {
+	for (const [ats, slug] of LOCAL_BOARDS) {
+		const mod = await import(`../src/ats/${ats}.ts`);
+		const fetcher = mod[ats] ?? Object.values(mod)[0];
+		try {
+			const result = await fetcher.fetchJobs(slug);
+			const r = await postIngest(ats, slug, result.status === "ok" ? { status: "ok", jobs: result.jobs } : { status: result.status });
+			console.log(`[local-board ${ats}/${slug}] ${result.status}, ${result.jobs?.length ?? 0} jobs -> ingested (board jobCount ${r.jobCount})`);
+		} catch (e) {
+			console.log(`[local-board ${ats}/${slug}] FAILED: ${e.message?.slice(0, 140)}`);
+		}
 	}
 }
 
