@@ -28,6 +28,10 @@ import { teamtailor } from "./teamtailor";
 import { workable } from "./workable";
 import { workday } from "./workday";
 import { usajobs } from "./usajobs";
+import { governmentjobs } from "./governmentjobs";
+import { bamboohr } from "./bamboohr";
+import { jazzhr } from "./jazzhr";
+import { cornerstone } from "./cornerstone";
 import { ukg } from "./ukg";
 import { successfactors } from "./successfactors";
 import { phenom } from "./phenom";
@@ -74,6 +78,10 @@ export const fetchers: Record<string, AtsFetcher> = {
 	workday,
 	ukg,
 	usajobs,
+	governmentjobs,
+	bamboohr,
+	jazzhr,
+	cornerstone,
 };
 
 /**
@@ -81,7 +89,7 @@ export const fetchers: Record<string, AtsFetcher> = {
  * a laptop). They are excluded from the Worker fleet and fetched locally by scripts/fetch-local.mjs
  * during consolidation instead.
  */
-export const localOnlyAts = ["jobscore"];
+export const localOnlyAts = ["jobscore", "governmentjobs"];
 
 export const enabledAts = Object.keys(fetchers).filter((a) => !localOnlyAts.includes(a));
 

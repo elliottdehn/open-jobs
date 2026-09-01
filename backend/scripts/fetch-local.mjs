@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 
 // Keep in sync with `localOnlyAts` in src/ats/index.ts (imported directly here because Node's
 // ESM loader needs explicit .ts extensions that the Worker bundle doesn't use).
-const LOCAL_ONLY = ["jobscore"];
+const LOCAL_ONLY = ["jobscore", "governmentjobs"];
 // Individual boards whose provider blocks Cloudflare egress: fetched here, ingested, and their Board DO
 // marks itself localOnly (online fetches skipped). Exported like any other board.
 const LOCAL_BOARDS = [["phenom", "careers.rtx.com"]];
@@ -21,6 +21,9 @@ const args = process.argv.slice(2);
 const ingest = args.find((a) => a.startsWith("--ingest="))?.slice(9) ?? (args.includes("--ingest") ? process.env.WORKER_URL : undefined);
 const atses = args.filter((a) => !a.startsWith("--")).length ? args.filter((a) => !a.startsWith("--")) : LOCAL_ONLY;
 const CONCURRENCY = 4;
+// Providers whose pagination session is pinned to the egress IP: concurrent streams from one
+// machine collide and truncate, so fetch their boards one at a time.
+const SERIAL_ATS = new Set(["governmentjobs"]);
 const headers = { "content-type": "application/json", "user-agent": "open-jobs-cli", ...(process.env.ADMIN_TOKEN ? { authorization: `Bearer ${process.env.ADMIN_TOKEN}` } : {}) };
 mkdirSync("export", { recursive: true });
 
@@ -55,7 +58,8 @@ for (const ats of atses) {
 	const out = ingest ? null : createWriteStream(`export/${ats}.ndjson`);
 	let done = 0, ok = 0, jobsTotal = 0;
 	const queue = [...slugs];
-	await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+	const concurrency = SERIAL_ATS.has(ats) ? 1 : CONCURRENCY;
+	await Promise.all(Array.from({ length: concurrency }, async () => {
 		for (;;) {
 			const slug = queue.shift();
 			if (slug === undefined) return;

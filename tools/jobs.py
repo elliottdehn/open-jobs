@@ -157,11 +157,29 @@ def cmd_enrich(a):
         print(f"  {min(i + 100, len(todo))}/{len(todo)}: ${c.get('thisCallUsd', 0):.3f} this call, ${c.get('hourUsd', 0):.2f}/${c.get('hourLimit')} this hour, ${c.get('dayUsd', 0):.2f}/${c.get('dayLimit')} today", flush=True)
     print(f"wrote {p}: {len(store['jobs'])} jobs, {len(store['boards'])} boards enriched (this run ≈ ${spent:.2f}). Re-run `html` to use it.")
 
+def dedup_rows(rows):
+    """Collapse identical (company, title) postings: the same role mirrored across boards/ATSes (e.g. a
+    company crawled via both its dark careers site and greenhouse), or listed for several locations.
+    Rows arrive sorted by sim desc, so the copy we keep is the best match to the ideal JD.
+
+    Defense in depth: the backend parquet build already drops aggregator boards, but the same posting can
+    still legitimately land on two boards we crawl, so every local consumer (html, enrich, rank) dedups
+    on read — one representative each, no duplicate cards, and no enrichment spend on mirrors."""
+    def n(x): return re.sub(r"\W+", " ", (x or "").lower()).strip()
+    seen = set(); uniq = []
+    for r in rows:
+        key = (n(r[4]), n(r[3]))  # (company, title)
+        if key in seen: continue
+        seen.add(key); uniq.append(r)
+    if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings", file=sys.stderr)
+    return uniq
+
 def load_jobs():
     import duckdb
     p = os.path.join(WORK, "jobs.parquet")
     if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
-    return duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
+    rows = duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
+    return dedup_rows(rows)
 
 def subgroups(vecs, titles, comps, k=6, min_size=8):
     """Split a slice into at most k groups: start with everything as one group and repeatedly bisect
@@ -257,14 +275,7 @@ def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
     sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
-    # dedupe identical (company, title) postings (multi-location / ATS mirrors): keep the highest-sim one
-    seen = set(); uniq = []
-    for r in rows:
-        key = (re.sub(r"\W+", " ", (r[4] or "").lower()).strip(), re.sub(r"\W+", " ", (r[3] or "").lower()).strip())
-        if key in seen: continue
-        seen.add(key); uniq.append(r)
-    if len(uniq) < len(rows): print(f"deduped {len(rows) - len(uniq)} repeated (company, title) postings")
-    rows = uniq
+    # rows are already deduped by load_jobs() (identical company+title mirrors collapsed)
     # "never show <company> again" clicks are logged as hide_company events; honor the final state at compile time
     hidden = {}
     ip = os.path.join(WORK, "interactions.jsonl")
