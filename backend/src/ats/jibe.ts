@@ -49,7 +49,8 @@ export const jibe: AtsFetcher = {
 					publishedAt: d.posted_date || d.create_date || null,
 					updatedAt: null,
 					content: d.description || null,
-					raw: d,
+					// raw without the description (already in content) — 10k-job boards with 25KB rows OOM the DO otherwise
+					raw: { ...d, description: undefined } as unknown,
 				});
 			}
 			if (out.length) await sink(out);
