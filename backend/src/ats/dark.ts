@@ -52,6 +52,23 @@ async function discover(slug: string): Promise<string[]> {
 			for (const u of locs(await res.text())) if (JOB_URL.test(u)) jobs.add(u);
 		} catch { /* ignore */ }
 	}
+	// Discovery fallback: many sites list jobs only in the careers-page HTML, not in a sitemap. When the
+	// sitemap pass came up short, harvest job-shaped links straight from the careers landing pages.
+	if (jobs.size < 3) {
+		for (const p of ["/careers", "/jobs", "/", "/en/careers", "/karriere", "/careers/jobs", "/join-us"]) {
+			if (jobs.size >= MAX_JOBS) break;
+			try {
+				const res = await fetchRetry(`https://${slug}${p}`, { headers: { "user-agent": UA } });
+				if (!res.ok) continue;
+				const html = await res.text();
+				for (const m of html.matchAll(/<a[^>]+href=["']([^"'#]+)["']/gi)) {
+					if (!JOB_URL.test(m[1])) continue;
+					try { jobs.add(new URL(m[1], `https://${slug}${p}`).href.replace(/#.*$/, "")); } catch { /* skip bad href */ }
+				}
+				if (jobs.size >= 3) break; // a landing page that yielded links is enough
+			} catch { /* ignore */ }
+		}
+	}
 	return [...jobs].slice(0, MAX_JOBS);
 }
 
