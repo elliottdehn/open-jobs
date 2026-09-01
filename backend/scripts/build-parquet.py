@@ -63,7 +63,7 @@ JOB_COLUMNS = ("{id:'VARCHAR', title:'VARCHAR', location:'VARCHAR', url:'VARCHAR
                "publishedAt:'VARCHAR', updatedAt:'VARCHAR', content:'VARCHAR', raw:'JSON', detailRaw:'JSON', "
                "detailStatus:'VARCHAR', contentHash:'VARCHAR', firstSeenAt:'BIGINT', lastSeenAt:'BIGINT', "
                "changedAt:'BIGINT', removedAt:'BIGINT', enrichStatus:'VARCHAR', enrichedAt:'BIGINT', "
-               "enrichment:'JSON', embedStatus:'VARCHAR', embedModel:'VARCHAR', embedding:'FLOAT[]', ats:'VARCHAR', slug:'VARCHAR'}")
+               "enrichment:'JSON', embedStatus:'VARCHAR', embedModel:'VARCHAR', embedding:'FLOAT[]', org:'VARCHAR', ats:'VARCHAR', slug:'VARCHAR'}")
 
 JOBS_SQL = """
 SELECT ats, slug, id, title, location, url, departments,
@@ -84,6 +84,7 @@ SELECT ats, slug, id, title, location, url, departments,
        enrichment::VARCHAR AS enrichment_json,
        embedStatus AS embed_status,
        embedModel  AS embed_model,
+       org,
        embedding
 FROM {src}
 """
@@ -121,6 +122,20 @@ for f in files:
     con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
     con.execute(f"COPY ({JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     os.remove(jl); os.remove(bl)
+    if ats == "dark":
+        # aggregator guard: a `dark` board whose open postings name >2 distinct hiringOrganizations is a job
+        # board, not an employer -> drop all its jobs from the export (keeps the corpus employer-only).
+        agg = con.execute(f"""SELECT slug FROM (SELECT slug, count(DISTINCT lower(org)) AS o
+                              FROM read_parquet('{outs['jobs']}') WHERE is_open AND org IS NOT NULL GROUP BY slug)
+                              WHERE o > 2""").fetchall()
+        if agg:
+            drop = {r[0] for r in agg}
+            con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}') WHERE slug NOT IN ({','.join('?'*len(drop))})) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)", list(drop))
+            print(f"  dark aggregator guard: dropped {len(drop)} multi-org boards", flush=True)
+        else:
+            con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+    if ats != "dark":
+        con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     print(f"{ats:16} {n:>9,} jobs", flush=True)
 

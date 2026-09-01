@@ -18,8 +18,14 @@ import { fetchRetry } from "./http.ts";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) open-jobs-crawler/0.1 (+github.com/elliottdehn/open-jobs)";
 const MAX_JOBS = 3000;
 const MAX_SITEMAPS = 25; // sub-sitemaps followed per board
-const JOB_URL = /\/job[s]?\/|\/career|\/vacan|\/position|\/opening|\/stelle|\/offre|requisition|jobid=|gh_jid=/i;
-const JOB_SITEMAP = /job|career|vacan|stelle|offre|position/i;
+// Static/asset URLs that pattern-match a job path (career.css, /feed/, bundle.js) but aren't jobs.
+const ASSET = /\.(css|js|mjs|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|pdf|xml|json|rss|zip|mp4|webm)(\?|#|$)/i;
+// A job DETAIL url: a job/career/vacancy segment followed by a slug or id (excludes bare landings and
+// listing/category/search pages), or a job-id query param. Callers also apply !ASSET.
+const JOB_URL_RE = /(?:\/job[s]?\/(?![s]?\/?$)[^/?#]{2,}|\/(?:career|careers|vacan\w*|position|opening|stelle|offre|emploi|puesto)\/[^/?#]{2,}|[?&](?:jobid|job_id|gh_jid|reqid|requisitionid|opportunityid)=)/i;
+const NOT_JOB = /\/(feed|rss|sitemap|category|categories|search|tag|tags|page|about|contact|privacy|cookie|login|apply-tips|faq)(\/|$|\?)/i;
+function isJobUrl(u: string): boolean { return JOB_URL_RE.test(u) && !ASSET.test(u) && !NOT_JOB.test(u); }
+const JOB_SITEMAP = /job|career|vacan|stelle|offre|position|emploi|puesto/i;
 
 function locs(xml: string): string[] {
 	const out: string[] = [];
@@ -43,13 +49,13 @@ async function discover(slug: string): Promise<string[]> {
 	const subs = [...roots].filter((u) => JOB_SITEMAP.test(u) && /\.xml($|\?|\.gz)/i.test(u));
 	const toScan = (subs.length ? subs : [...roots].filter((u) => /\.xml($|\?)/i.test(u))).slice(0, MAX_SITEMAPS);
 	// any job URLs already listed directly in the roots
-	for (const u of roots) if (JOB_URL.test(u)) jobs.add(u);
+	for (const u of roots) if (isJobUrl(u)) jobs.add(u);
 	for (const sm of toScan) {
 		if (jobs.size >= MAX_JOBS) break;
 		try {
 			const res = await fetchRetry(sm, { headers: { "user-agent": UA } });
 			if (!res.ok) continue;
-			for (const u of locs(await res.text())) if (JOB_URL.test(u)) jobs.add(u);
+			for (const u of locs(await res.text())) if (isJobUrl(u)) jobs.add(u);
 		} catch { /* ignore */ }
 	}
 	// Discovery fallback: many sites list jobs only in the careers-page HTML, not in a sitemap. When the
@@ -62,7 +68,7 @@ async function discover(slug: string): Promise<string[]> {
 				if (!res.ok) continue;
 				const html = await res.text();
 				for (const m of html.matchAll(/<a[^>]+href=["']([^"'#]+)["']/gi)) {
-					if (!JOB_URL.test(m[1])) continue;
+					if (!isJobUrl(m[1])) continue;
 					try { jobs.add(new URL(m[1], `https://${slug}${p}`).href.replace(/#.*$/, "")); } catch { /* skip bad href */ }
 				}
 				if (jobs.size >= 3) break; // a landing page that yielded links is enough
