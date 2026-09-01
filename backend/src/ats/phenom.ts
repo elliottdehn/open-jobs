@@ -115,6 +115,7 @@ export const phenom: AtsFetcher = {
 	async fetchDetail(slug: string, job: Job): Promise<JobDetail | null> {
 		const res = await fetchRetry(job.url, { headers: { "user-agent": UA } });
 		if (res.status === 404 || res.status === 410) return null;
+		if (res.status === 403) return null; // WAF blocks Cloudflare egress (e.g. RTX): retrying daily won't help; keep the listing teaser
 		if (!res.ok) throw new Error(`phenom job page HTTP ${res.status}`);
 		const ddo = ddoJson(await res.text()) as { jobDetail?: { data?: { job?: { description?: string; qualifications?: string } } } } | null;
 		const j = ddo?.jobDetail?.data?.job;
