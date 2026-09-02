@@ -72,6 +72,22 @@ the ranked list with labels and exemplars if you want to eyeball it or hand-pick
 title, company, location, url, seen_ms, jd (full text), leaf, sim (cosine to the ideal JD),
 vec_b64`. Query it directly with DuckDB for anything the UI doesn't do.
 
+**Union vs. replace — `fetch` keeps the old slice by default.** A `fetch` does **not** throw away
+what you fetched before. It **unions** the new groups into the existing `work/jobs.parquet`, deduped by
+job key (this fetch wins for any job it re-fetched; prior jobs it didn't touch are kept). So each
+revise-the-JD → re-`fetch` pass **accumulates** coverage — the neighbourhood moves, but jobs from the
+old neighbourhood stay in the slice (and their labels with them). Do **not** delete or reset the slice
+just to fetch again; that is the default and it is what you almost always want.
+
+Reach for `fetch --replace` (overwrite, drop the old slice) only when the person explicitly wants a
+clean current-only view, or the JD pivoted so hard that carrying the old jobs would pollute the facets
+and counts, or you want to prune the accumulated stale/closed postings. Union is the default because
+losing a job the person already labelled — or a good match from an earlier angle — is worse than a
+slightly larger, slightly staler slice. When in doubt, union (do nothing special); only `--replace`
+when told to start fresh. Labelled jobs are additionally pinned: they are persisted in
+`work/labelled.jsonl` and re-injected on every `fetch`, so a yes/no never falls out of the slice even
+across an index rebuild.
+
 ## 3. Compile the search page and serve it (then offer the LLM sort, §3c)
 ```
 uv run tools/jobs.py html        # -> work/search.html (single file, self-contained)
@@ -162,7 +178,8 @@ Paylocity URLs (and Greenhouse boards embedded on company sites, `?gh_jid=`) don
 pass `--board` if the posting isn't already in `work/jobs.parquet`.
 
 Loop: revise the JD → `embed` → `fetch` (new groups only; already-downloaded ones are cached in
-`work/groups/`) → `html` → they browse again. Each pass should tighten.
+`work/groups/`, and the result unions into the existing slice — see §2) → `html` → they browse again.
+Each pass should tighten and the slice grows; only `fetch --replace` when they want to start fresh.
 
 ## 5. Deliverables to leave behind
 - `work/ranked.csv`: the shortlist, best first, with their labels.
