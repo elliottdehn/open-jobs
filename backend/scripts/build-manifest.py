@@ -63,8 +63,14 @@ texts = pa.Table.from_batches(text_batches); del text_batches, reader
 jd_col = texts.column("jd"); enr_col = texts.column("enrichment")
 meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"]))
 del small
-X = np.nan_to_num(X, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them (unit-normalized below)
-X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
+# Clean + unit-normalize IN ROW BLOCKS: a whole-matrix np.linalg.norm materializes an X-sized x*x temp
+# (~18 GB at 3M jobs), which doubled peak memory and got this process SIGKILLed once the corpus outgrew
+# RAM. Blockwise keeps the temp at ~1 GB regardless of N.
+for _i in range(0, X.shape[0], 200_000):
+	_blk = X[_i:_i + 200_000]
+	np.nan_to_num(_blk, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them
+	_blk /= np.sqrt((_blk * _blk).sum(axis=1, keepdims=True)) + 1e-9
+del _blk
 N, D = X.shape
 print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s")
 
