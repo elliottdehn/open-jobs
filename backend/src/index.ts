@@ -270,6 +270,19 @@ export default {
 			if (parts.length === 2) return Response.json(await env.REGISTRY.getByName(parts[1]).status());
 		}
 
+		// GET /snapshots?ats=<ats>[&cursor=...] -> list R2 board-snapshot objects for one ATS (keys, sizes,
+		// etags, uploaded) so the consolidation can download them incrementally. See src/snapshot.ts.
+		if (parts[0] === "snapshots" && parts.length === 1 && request.method === "GET") {
+			const ats = url.searchParams.get("ats");
+			if (!ats) return Response.json({ error: "ats required" }, { status: 400 });
+			const cursor = url.searchParams.get("cursor") ?? undefined;
+			const r = await env.DATA.list({ prefix: `snapshots/${ats}/`, cursor, limit: 1000 });
+			return Response.json({
+				objects: r.objects.map((o) => ({ key: o.key, size: o.size, etag: o.etag, uploaded: o.uploaded })),
+				cursor: r.truncated ? r.cursor : null,
+			});
+		}
+
 		// POST /backfill[?ats=a,b] -> kick every board with a detail/embed/enrich backlog so it drains now
 		//   (minute ticks per board, 150 detail requests / 100 embeddings per tick). Progress: GET /sync/:ats
 		//   (`fetched` = boards kicked, `skipped` = boards with nothing to do).
@@ -324,6 +337,8 @@ export default {
 				return Response.json({ requeued: await stub.retryEnrichment() });
 			}
 			if (action === "embed" && request.method === "POST") return Response.json(await stub.embedNow());
+			// POST /boards/:ats/:slug/snapshot -> write the R2 parquet snapshot now (backfill/testing)
+			if (action === "snapshot" && request.method === "POST") return Response.json(await stub.snapshotNow());
 			if (action === "runs") return Response.json(await stub.getRuns());
 			// POST /boards/:ats/:slug/wipe -> drop all rows (recovery for pathological boards); refetch after
 			if (action === "wipe" && request.method === "POST") return Response.json(await stub.wipe());

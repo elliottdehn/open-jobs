@@ -15,5 +15,8 @@
     "typescript": "^5.5.2",
     "wrangler": "^4.126.0"
   },
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "hyparquet-writer": "^0.16.9"
+  }
 }

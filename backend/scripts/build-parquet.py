@@ -87,6 +87,12 @@ SELECT ats, slug, id, title, location, url, departments,
        org,
        embedding
 FROM {src}
+-- Contentless jobs are noise: a discovered URL whose detail fetch never yielded a JD (dark links,
+-- bot-walled detail pages) can't be usefully searched, ranked, or embedded — drop them here.
+WHERE content IS NOT NULL AND length(trim(content)) > 0
+-- Collapse duplicate (ats, slug, id) rows: a resumed pull can re-fetch a seam board, so the same
+-- posting can appear twice in the ndjson. Keep the freshest / most-complete copy.
+QUALIFY row_number() OVER (PARTITION BY ats, slug, id ORDER BY changedAt DESC NULLS LAST, length(content) DESC NULLS LAST) = 1
 """
 
 import json

@@ -6,6 +6,7 @@ import { EMBED_TAG, embedTexts } from "./openai";
 import { deriveCandidates } from "./company";
 import { resolveCompany, type CompanyEnrichment } from "./company";
 import { usd } from "./pricing";
+import { buildSnapshotParquet, snapshotKey } from "./snapshot";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -68,6 +69,12 @@ export interface BoardMeta {
 	 * `ingest()`. The alarm never fetches; it only drains detail/embed/enrich backlogs.
 	 */
 	localOnly?: boolean;
+	/** R2 parquet snapshot of current open jobs (see snapshot.ts). */
+	snapshotAt?: number | null;
+	/** Open set changed since the last snapshot; written once embeds drain (or after 48h regardless). */
+	snapshotDirty?: boolean;
+	dirtySince?: number | null;
+	snapshotError?: string | null;
 }
 
 export interface RunSummary {
@@ -174,6 +181,10 @@ type JobRow = {
 /** Upper bounds for provider calls so a hung connection can never pin the alarm to its 15-min limit. */
 const FETCH_JOBS_TIMEOUT_MS = 5 * MINUTE;
 const FETCH_DETAIL_TIMEOUT_MS = 45_000;
+/** Snapshot staleness escape: write even with a pending embed backlog after this long dirty. */
+const SNAPSHOT_STALE_MS = 48 * 60 * 60 * 1000;
+/** Boards with more open jobs than this skip snapshotting (isolate memory); they're aggregator-shaped anyway. */
+const SNAPSHOT_MAX_JOBS = 15_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 	let t: ReturnType<typeof setTimeout>;
@@ -375,6 +386,7 @@ export class Board extends DurableObject<Env> {
 		await this.runDetails(meta);
 		await this.runEmbed(meta);
 		await this.runEnrich(meta);
+		await this.maybeSnapshot(meta);
 		await this.arm(meta);
 		await this.ctx.storage.put("meta", meta);
 	}
@@ -392,6 +404,7 @@ export class Board extends DurableObject<Env> {
 		await this.runDetails(meta);
 		await this.runEmbed(meta);
 		await this.runEnrich(meta);
+		await this.maybeSnapshot(meta);
 		await this.arm(meta);
 		await this.ctx.storage.put("meta", meta);
 		return true;
@@ -405,6 +418,7 @@ export class Board extends DurableObject<Env> {
 		await this.runDetails(meta);
 		await this.runEmbed(meta);
 		await this.runEnrich(meta);
+		await this.maybeSnapshot(meta);
 		await this.arm(meta);
 		await this.ctx.storage.put("meta", meta);
 		return meta;
@@ -422,6 +436,7 @@ export class Board extends DurableObject<Env> {
 		await this.runDetails(meta);
 		await this.runEmbed(meta);
 		await this.runEnrich(meta);
+		await this.maybeSnapshot(meta);
 		await this.arm(meta);
 		await this.ctx.storage.put("meta", meta);
 		return meta;
@@ -455,6 +470,7 @@ export class Board extends DurableObject<Env> {
 					meta.lastStatus = "ok"; meta.lastOkAt = now; meta.lastError = null; meta.consecutiveFailures = 0;
 					meta.jobCount = seen.size;
 					this.recordRun(now, "ok", diff, null);
+					this.markSnapshotDirty(meta, diff, now);
 				}
 				let next0 = nextSlotAfter(now, meta.slotMs);
 				if (meta.consecutiveFailures >= BACKOFF_AFTER) next0 += 6 * DAY;
@@ -475,6 +491,7 @@ export class Board extends DurableObject<Env> {
 				meta.consecutiveFailures = 0;
 				meta.jobCount = result.jobs.length;
 				this.recordRun(now, "ok", diff, null);
+				this.markSnapshotDirty(meta, diff, now);
 				if ((this.env.BOARD_ENRICH as string) === "on") await this.enrichBoard(meta, result.jobs, false);
 			}
 		} catch (e) {
@@ -1007,12 +1024,73 @@ export class Board extends DurableObject<Env> {
 
 	/** Drop every job row and reset counters; the next fetch repopulates from scratch. Recovery for
 	 * boards whose stored rows grew pathological (e.g. fat detail raw written by an older fetcher). */
+	/** Flag the open set as changed so the next eligible tick writes a fresh R2 snapshot. */
+	private markSnapshotDirty(meta: BoardMeta, diff: Diff, now: number): void {
+		if (diff.added.length || diff.changed.length || diff.removedIds.length) {
+			meta.snapshotDirty = true;
+			meta.dirtySince ??= now;
+		}
+	}
+
+	/**
+	 * Write the R2 parquet snapshot of current open jobs when (a) the open set changed since the last
+	 * snapshot AND (b) the embed backlog has drained — so each change writes once, complete with
+	 * vectors. Escape hatch: if the board has been dirty for >48h (stuck/erroring embeds, API outage),
+	 * write anyway; the next successful drain rewrites it. Failures never break the pipeline.
+	 */
+	private async maybeSnapshot(meta: BoardMeta, force = false): Promise<void> {
+		if (!force && !meta.snapshotDirty && meta.snapshotAt != null) return;
+		const now = Date.now();
+		const embedsDone = !this.autoEmbed() || this.pendingEmbedCount() === 0;
+		const stale = meta.dirtySince != null && now - meta.dirtySince > SNAPSHOT_STALE_MS;
+		if (!force && !embedsDone && !stale) return; // wait for vectors; a backlog tick will retry
+		try {
+			const open = this.ctx.storage.sql
+				.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
+			if (open === 0) {
+				// no current openings: remove the object so consolidation doesn't see a stale board
+				await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug));
+			} else if (open > SNAPSHOT_MAX_JOBS) {
+				meta.snapshotError = `snapshot skipped: ${open} open jobs > ${SNAPSHOT_MAX_JOBS}`;
+				meta.snapshotAt = now; meta.snapshotDirty = false; meta.dirtySince = null;
+				return;
+			} else {
+				const cursor = this.ctx.storage.sql.exec(`SELECT * FROM jobs WHERE removed_at IS NULL`);
+				function* rows(): Iterable<StoredJob & { embeddingBuf?: ArrayBuffer | null }> {
+					for (const r of cursor) {
+						const j = rowToJob(r as unknown as JobRow) as StoredJob & { embeddingBuf?: ArrayBuffer | null };
+						j.embeddingBuf = (r as unknown as JobRow).embedding ?? null;
+						yield j;
+					}
+				}
+				const buf = buildSnapshotParquet({ ats: meta.ats, slug: meta.slug, jobs: rows(), meta });
+				await this.env.DATA.put(snapshotKey(meta.ats, meta.slug), buf);
+			}
+			meta.snapshotAt = now; meta.snapshotDirty = false; meta.dirtySince = null; meta.snapshotError = null;
+		} catch (e) {
+			meta.snapshotError = e instanceof Error ? e.message : String(e); // stays dirty; retried on later ticks
+		}
+	}
+
+	/** Force a snapshot write now (admin/backfill). */
+	async snapshotNow(): Promise<{ snapshotAt: number | null; error: string | null }> {
+		const meta = await this.meta();
+		if (!meta) throw new Error("board not initialized");
+		await this.maybeSnapshot(meta, true);
+		await this.ctx.storage.put("meta", meta);
+		return { snapshotAt: meta.snapshotAt ?? null, error: meta.snapshotError ?? null };
+	}
+
 	async wipe(): Promise<{ wiped: number }> {
 		const n = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs`).one().n;
 		this.ctx.storage.sql.exec(`DELETE FROM jobs`);
 		this.ctx.storage.sql.exec(`DELETE FROM runs`);
 		const meta = await this.meta();
-		if (meta) { meta.jobCount = 0; await this.ctx.storage.put("meta", meta); }
+		if (meta) {
+			meta.jobCount = 0; meta.snapshotAt = null; meta.snapshotDirty = false; meta.dirtySince = null;
+			try { await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug)); } catch { /* best effort */ }
+			await this.ctx.storage.put("meta", meta);
+		}
 		return { wiped: n };
 	}
 
