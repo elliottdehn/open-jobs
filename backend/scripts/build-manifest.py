@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "zstandard"]
 # ///
 """Build the local-first client data from export/jobs/*.parquet (must include embeddings):
   export/web/manifest.json     tree nodes {id, parent, lo, hi, radius, size, label, medoid, exemplars, children}
@@ -22,7 +22,7 @@ root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR"
 out = os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
 J = os.path.join(root, "jobs", "*.parquet")
 con = duckdb.connect()
-con.execute("SET threads=4"); con.execute("SET memory_limit='12GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
+con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
 t = time.time()
 recipe = con.execute(f"SELECT embed_model, count(*) FROM read_parquet('{J}') WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY 2 DESC").fetchall()
 print("recipes:", recipe)
@@ -40,11 +40,16 @@ q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'')
 # columns become Python lists, and the big text columns (jd, enrichment) stay in Arrow until a group
 # file needs them. Peak memory ≈ 4·N·D bytes + text, instead of ~3x that.
 import pyarrow as pa
+import zstandard
+# jd text for 3M jobs is ~10 GB uncompressed; held raw (as an Arrow table) it stacked on the 18 GB
+# vector matrix and got this process OOM-killed. Hold each row zstd-compressed (~3x smaller) and
+# decompress only when a group file is written.
+_zc = zstandard.ZstdCompressor(level=3); _zd = zstandard.ZstdDecompressor()
 N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
 D = 1536
 X = np.empty((N, D), dtype=np.float32)
 small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms")}
-text_batches = []
+jd_z = []; enr_z = []
 pos_ = 0
 reader = con.execute(q).fetch_record_batch(50_000)
 while True:
@@ -55,12 +60,12 @@ while True:
     n = len(b)
     X[pos_:pos_ + n] = vals.reshape(n, -1)[:, :D]
     for c in small: small[c].extend(b.column(c).to_pylist())
-    text_batches.append(b.select(["jd", "enrichment"]))
+    jd_z.extend(_zc.compress(t.encode()) if t else None for t in b.column("jd").to_pylist())
+    enr_z.extend(_zc.compress(t.encode()) if t else None for t in b.column("enrichment").to_pylist())
     pos_ += n
     print(f"\r  loaded {pos_:,}/{N:,}", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
-texts = pa.Table.from_batches(text_batches); del text_batches, reader
-jd_col = texts.column("jd"); enr_col = texts.column("enrichment")
+del reader
 meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"]))
 del small
 # Clean + unit-normalize IN ROW BLOCKS: a whole-matrix np.linalg.norm materializes an X-sized x*x temp
@@ -86,7 +91,10 @@ samp = X[rng.choice(N, min(N, 50_000), replace=False)]
 mu = samp.mean(0)
 _, _, Vt = np.linalg.svd(samp - mu, full_matrices=False)
 P = Vt[: args.pca].T.astype(np.float32)
-Z = (X - mu) @ P
+# project in row blocks: (X - mu) would materialize an X-sized temp (~18 GB at 3M jobs)
+Z = np.empty((N, args.pca), dtype=np.float32)
+for _i in range(0, N, 200_000):
+	Z[_i:_i + 200_000] = (X[_i:_i + 200_000] - mu) @ P
 print(f"PCA-{args.pca} in {time.time()-t:.0f}s")
 
 def sims_to(idx, cen, chunk=200_000):
@@ -97,14 +105,20 @@ def sims_to(idx, cen, chunk=200_000):
 
 # recursive bisection
 nodes = []; order = np.empty(N, dtype=np.int64); pos = 0
-def two_means(idx, iters=6):
+def two_means(idx, iters=6, chunk=500_000):
+    # chunked: Z[idx] for the root node is a multi-GB copy, and each iteration made several of them
     r = np.random.default_rng(len(idx) * 7919)
     c = Z[r.choice(idx, 2, replace=False)].copy()
+    lab = np.empty(len(idx), dtype=bool)
     for _ in range(iters):
-        d0 = ((Z[idx] - c[0]) ** 2).sum(1); d1 = ((Z[idx] - c[1]) ** 2).sum(1)
-        lab = (d1 < d0)
+        for i in range(0, len(idx), chunk):
+            zi = Z[idx[i:i + chunk]]
+            lab[i:i + chunk] = ((zi - c[1]) ** 2).sum(1) < ((zi - c[0]) ** 2).sum(1)
         for k, m in ((0, ~lab), (1, lab)):
-            if m.any(): c[k] = Z[idx[m]].mean(0)
+            if m.any():
+                sel = idx[m]; acc = np.zeros(Z.shape[1], dtype=np.float64)
+                for i in range(0, len(sel), chunk): acc += Z[sel[i:i + chunk]].sum(0, dtype=np.float64)
+                c[k] = (acc / len(sel)).astype(np.float32)
     return lab
 def build(idx, parent, depth):
     global pos
@@ -202,7 +216,8 @@ for n in leaves:
     jobs = []
     for i, r in enumerate(idx):
         a, s, jid, title, loc, url, _, fs = meta_rows[r]
-        jd = jd_col[int(r)].as_py(); enr = enr_col[int(r)].as_py()
+        _j = jd_z[int(r)]; _e = enr_z[int(r)]
+        jd = _zd.decompress(_j).decode() if _j else ""; enr = _zd.decompress(_e).decode() if _e else None
         jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "jd": jd,
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
                      "v": base64.b64encode(V[i].tobytes()).decode()})
