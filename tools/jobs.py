@@ -6,7 +6,8 @@
 
   uv run tools/jobs.py embed  --file work/ideal-jd.md            -> work/ideal.json (vector + recipe)
   uv run tools/jobs.py groups [--k 30] [--min-sim 0]              -> nearest groups (id, size, label, exemplars)
-  uv run tools/jobs.py fetch  --groups 12,45,301 [--top N]        -> download groups -> work/jobs.parquet
+  uv run tools/jobs.py fetch  --groups 12,45,301 [--top N] [--replace]  -> download groups -> work/jobs.parquet
+                                                                  (unions with the previous slice by default; --replace overwrites)
   uv run tools/jobs.py html   [--out work/search.html]            -> single-file search UI over work/jobs.parquet
   uv run tools/jobs.py serve  [--port 8765]                       -> serve work/ + record interactions to work/interactions.jsonl
   uv run tools/jobs.py enrich [--top N | --all]                   -> structured extraction + company for the slice (metered per IP: $5/h, $50/day) -> work/enrichment.json
@@ -129,6 +130,16 @@ def cmd_fetch(a):
         if key in have or not rec.get("vec_b64"): continue
         rows.append(store_row(rec, v)); inj += 1
     if inj: print(f"re-injected {inj} labelled job(s) that fell outside the new slice (from work/{LABEL_STORE})", file=sys.stderr)
+    # Accumulate across fetches: union the new slice with the previously-fetched one (dedup by job key,
+    # this fetch wins for jobs it re-fetched). Keeps prior coverage instead of discarding it every rebuild.
+    # `--replace` overwrites instead — only when explicitly asked.
+    pq = os.path.join(WORK, "jobs.parquet")
+    if not a.replace and os.path.exists(pq):
+        have = {f"{r[0]}/{r[1]}#{r[2]}" for r in rows}
+        prev = duckdb.connect().execute(f"SELECT * FROM read_parquet('{pq}')").fetchall()
+        kept = [r for r in prev if f"{r[0]}/{r[1]}#{r[2]}" not in have]
+        rows = rows + kept
+        print(f"unioned with the previous slice: kept {len(kept):,} prior job(s) not in this fetch (total {len(rows):,}). Pass --replace to start fresh.", file=sys.stderr)
     con = duckdb.connect(os.path.join(WORK, "jobs.duckdb"))
     con.execute("CREATE OR REPLACE TABLE jobs (ats VARCHAR, slug VARCHAR, id VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, url VARCHAR, seen_ms BIGINT, jd VARCHAR, leaf INTEGER, sim DOUBLE, vec_b64 VARCHAR)")
     con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
@@ -633,7 +644,7 @@ TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html"), encoding
 ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")
 s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add_argument("--min-sim", type=float, default=0.0)
-s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12)
+s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12); s.add_argument("--replace", action="store_true", help="overwrite the previous slice instead of unioning the new fetch with it")
 s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000)
 s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true")
 s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.add_argument("--all", action="store_true")
