@@ -119,11 +119,43 @@ def cmd_fetch(a):
         total += len(g["jobs"])
         print(f"\r{li+1}/{len(leaves)} groups, {total:,} jobs", end="", file=sys.stderr)
     print(file=sys.stderr)
+    # Persist + re-inject labelled jobs so yes/no survive this rebuild: capture any labelled job still
+    # in the new slice (refreshing the store), then add back every labelled job that fell outside it.
+    labels = load_interaction_labels(os.path.join(WORK, "interactions.jsonl"))
+    store = capture_labelled(rows, labels)
+    have = {f"{r[0]}/{r[1]}#{r[2]}" for r in rows}
+    inj = 0
+    for key, rec in store.items():
+        if key in have or not rec.get("vec_b64"): continue
+        rows.append(store_row(rec, v)); inj += 1
+    if inj: print(f"re-injected {inj} labelled job(s) that fell outside the new slice (from work/{LABEL_STORE})", file=sys.stderr)
     con = duckdb.connect(os.path.join(WORK, "jobs.duckdb"))
     con.execute("CREATE OR REPLACE TABLE jobs (ats VARCHAR, slug VARCHAR, id VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, url VARCHAR, seen_ms BIGINT, jd VARCHAR, leaf INTEGER, sim DOUBLE, vec_b64 VARCHAR)")
     con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     con.execute(f"COPY (SELECT * FROM jobs) TO '{os.path.join(WORK, 'jobs.parquet')}' (FORMAT PARQUET)")
     print(f"wrote {WORK}/jobs.parquet and {WORK}/jobs.duckdb: {len(rows):,} jobs from {len(leaves)} groups. Columns: ats, slug, id, title, company, location, url, seen_ms, jd, leaf, sim (cosine to ideal JD), vec_b64 (float32 LE base64).")
+    # Surface dropouts: previously top-ranked jobs that fell out of the new slice after a manifest rebuild.
+    # fetch picks groups by centroid rank, so a re-cluster can move a still-open job into a group below --top;
+    # nothing else flags the disappearance, so a confidently-wrong ranking looks fine. Report them here.
+    newkeys = {f"{r[0]}/{r[1]}#{r[2]}" for r in rows}
+    for rf in ("llm-ranked.csv", "ranked.csv"):  # prefer the agent-ranked list if present
+        rp = os.path.join(WORK, rf)
+        if not os.path.exists(rp): continue
+        import csv
+        prev = []
+        with open(rp, encoding="utf-8") as f:
+            for i, row in enumerate(csv.DictReader(f)):
+                if i >= 50: break
+                if row.get("key"): prev.append((row["key"], row.get("title") or "", row.get("url") or ""))
+        dropped = [p for p in prev if p[0] not in newkeys]
+        if dropped:
+            print(f"\n! {len(dropped)} of your previous top {len(prev)} ({rf}) are NOT in this slice after the rebuild "
+                  f"(moved into groups below --top {a.top}):", file=sys.stderr)
+            for k, t, u in dropped[:10]:
+                print(f"    {(t or k)[:64]}  {u}", file=sys.stderr)
+            print("  `jobs.py probe <url>` shows each one's new group and the --top that would restore it; "
+                  "or re-fetch with a higher --top.", file=sys.stderr)
+        break  # only the preferred existing list
 
 def post(path, body):
     req = urllib.request.Request(f"{BASE}{path}", data=json.dumps(body).encode(), headers={**UA, "content-type": "application/json"}, method="POST")
@@ -180,6 +212,69 @@ def load_jobs():
     if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
     rows = duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
     return dedup_rows(rows)
+
+# --- Labelled-job persistence -------------------------------------------------
+# Your yes/no labels live in interactions.jsonl, but a label is only *useful* while the job it points
+# at is in the current parquet slice (the taste model needs the job's vector, and the UI needs the
+# job's row). A daily index rebuild re-clusters, and fetch pulls a different set of groups, so labelled
+# jobs routinely fall out of the new slice — the label survives but the job (and its vector) is gone.
+# To make yes/no truly survive rebuilds we persist the *whole* record of every labelled job to
+# work/labelled.jsonl, and re-inject those rows at fetch time so they're always in the slice.
+LABEL_STORE = "labelled.jsonl"
+
+def load_interaction_labels(path):
+    """Latest yes/no per job key from the append-only interaction log (last write wins; null = removed)."""
+    labels = {}
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            try: e = json.loads(line)
+            except Exception: continue
+            if e.get("type") == "label": labels[e["key"]] = e["value"]
+    return labels
+
+def load_label_store():
+    """Persisted full records of labelled jobs, keyed by job key (ats/slug#id)."""
+    p = os.path.join(WORK, LABEL_STORE); store = {}
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8"):
+            try: r = json.loads(line)
+            except Exception: continue
+            if r.get("key"): store[r["key"]] = r
+    return store
+
+def save_label_store(store):
+    with open(os.path.join(WORK, LABEL_STORE), "w", encoding="utf-8") as f:
+        for r in store.values(): f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+def capture_labelled(rows, labels, store=None):
+    """Upsert the full record of every currently-labelled job that is present in `rows` (the loaded
+    slice) into the store, and drop entries whose label was removed. Called by the commands that hold
+    the current slice, so a job is captured while its full data (incl. vector) is still on hand —
+    before a later rebuild can drop it. Returns the updated store."""
+    if store is None: store = load_label_store()
+    by_key = {f"{r[0]}/{r[1]}#{r[2]}": r for r in rows}
+    changed = False
+    for key, val in labels.items():
+        if val not in (0, 1):
+            if store.pop(key, None) is not None: changed = True
+            continue
+        r = by_key.get(key)
+        if r is not None:
+            store[key] = {"key": key, "value": val, "ats": r[0], "slug": r[1], "id": r[2], "title": r[3],
+                          "company": r[4], "location": r[5], "url": r[6], "seen_ms": r[7], "jd": r[8],
+                          "leaf": r[9], "sim": r[10], "vec_b64": r[11], "ts": int(time.time() * 1000)}
+            changed = True
+        elif key in store and store[key].get("value") != val:
+            store[key]["value"] = val; changed = True  # keep the persisted record, refresh the label
+    if changed: save_label_store(store)
+    return store
+
+def store_row(rec, v):
+    """Turn a persisted label record back into a jobs.parquet row tuple (sim recomputed vs the ideal)."""
+    vec = np.frombuffer(base64.b64decode(rec["vec_b64"]), dtype=np.float32)
+    return (rec.get("ats"), rec.get("slug"), rec.get("id"), rec.get("title"), rec.get("company"),
+            rec.get("location"), rec.get("url"), rec.get("seen_ms") or 0, rec.get("jd") or "",
+            rec.get("leaf") if rec.get("leaf") is not None else -1, float(vec @ v), rec["vec_b64"])
 
 def subgroups(vecs, titles, comps, k=6, min_size=8):
     """Split a slice into at most k groups: start with everything as one group and repeatedly bisect
@@ -274,6 +369,7 @@ def seniority_model():
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
+    capture_labelled(rows, load_interaction_labels(os.path.join(WORK, "interactions.jsonl")))  # persist labelled jobs (survive rebuilds)
     sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
     # rows are already deduped by load_jobs() (identical company+title mirrors collapsed)
     # "never show <company> again" clicks are logged as hide_company events; honor the final state at compile time
@@ -401,6 +497,7 @@ def cmd_rank(a):
             except Exception: continue
             if e.get("type") == "label": labels[e["key"]] = e["value"]
             if e.get("type") == "compare": compares.append((e["a"], e["b"], e["win"]))
+    capture_labelled(rows, labels)  # persist labelled jobs while they're in the slice, so they survive rebuilds
     X = np.stack([np.frombuffer(base64.b64decode(r[11]), dtype=np.float32) for r in rows]); keys = [f"{r[0]}/{r[1]}#{r[2]}" for r in rows]
     pos = [i for i, k in enumerate(keys) if labels.get(k) == 1]; neg = [i for i, k in enumerate(keys) if labels.get(k) == 0]
     kidx = {k: i for i, k in enumerate(keys)}
@@ -418,7 +515,11 @@ def cmd_rank(a):
             p = 1 / (1 + np.exp(-(X[idx] @ w + b))); g = p - y
             w -= 0.5 * (X[idx].T @ g / len(idx) + 0.01 * (w - u)); b -= 0.5 * g.mean()
         score = 1 / (1 + np.exp(-(X @ w + b)))
-        print(f"classifier trained on {len(pos)} yes / {len(neg)} no")
+        tot_pos = sum(1 for x in labels.values() if x == 1); tot_neg = sum(1 for x in labels.values() if x == 0)
+        used = len(pos) + len(neg); tot = tot_pos + tot_neg; skipped = tot - used
+        print(f"classifier trained on {len(pos)} yes / {len(neg)} no  (used {used} of {tot} labels; {skipped} skipped: their jobs aren't in the current slice)")
+        if skipped and (len(pos) < 3 or len(neg) < 3 or used < 0.6 * tot):
+            print(f"  ! thin taste model: {skipped}/{tot} of your labels fell outside this slice (a rebuild/re-fetch can drop labelled jobs), so the classifier is fit on just {used} points and may overfit them. Re-fetch with a higher --top (or --groups) to pull your labelled jobs back in, or fall back to the 'sim' column (raw JD cosine), which is unaffected.")
     else:
         score = X @ u; print("no labels (need >=1 yes and >=1 no): ranking by " + ("taste model" if pairs else "similarity to the ideal JD"))
     order = np.argsort(-score)
