@@ -1,7 +1,7 @@
 // Download per-board R2 parquet snapshots (written by the Board DOs; see src/snapshot.ts) for one or
 // more ATSes into <out>/snapshots/<ats>/. This replaces the /export JSON pull for consolidation:
 // static R2 objects, no DO wake, vectors already binary — the whole corpus in minutes.
-// Usage: node scripts/pull-snapshots.mjs [worker-url] [--out=DIR] [--ats=a,b,...] [--concurrency=N]
+// Usage: node scripts/pull-snapshots.mjs [worker-url] [--out=DIR] [--ats=a,b,...] [--exclude=a,b] [--concurrency=N]
 //   env ADMIN_TOKEN for the /snapshots listing endpoint; objects themselves come via public /data/.
 // Listing and objects are keyed snapshots/{ats}/{encodeURIComponent(slug)}.parquet; local files keep
 // the encoded basename (filesystem-safe). Boards with no open jobs have no object, so a fresh --out
@@ -16,9 +16,11 @@ const conc = Math.max(1, Number(flags.concurrency || 24));
 const headers = process.env.ADMIN_TOKEN ? { authorization: `Bearer ${process.env.ADMIN_TOKEN}` } : {};
 
 // default: every ATS in boards.json (snapshots exist only where boards wrote them; empty lists are fine)
-const atses = flags.ats
+const excluded = new Set((flags.exclude ?? "").split(",").filter(Boolean));
+const atses = (flags.ats
 	? flags.ats.split(",").filter(Boolean)
-	: Object.keys(JSON.parse(readFileSync(new URL("../src/boards.json", import.meta.url), "utf8")));
+	: Object.keys(JSON.parse(readFileSync(new URL("../src/boards.json", import.meta.url), "utf8")))
+).filter((a) => !excluded.has(a));
 
 async function listSnapshots(ats) {
 	const objects = [];

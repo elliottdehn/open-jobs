@@ -12,8 +12,10 @@ import duckdb
 
 root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
 files = sorted(glob.glob(os.path.join(root, "*.ndjson")))
-if not files:
-    sys.exit("no export/*.ndjson files; run scripts/export.mjs or scripts/pull-all.sh first")
+snap_dirs = sorted(d for d in glob.glob(os.path.join(root, "snapshots", "*")) if glob.glob(os.path.join(d, "*.parquet")))
+snap_ats = {os.path.basename(d) for d in snap_dirs}
+if not files and not snap_dirs:
+    sys.exit("no export/*.ndjson files or snapshots/; run scripts/pull-snapshots.mjs or scripts/export.mjs first")
 for d in ("jobs", "boards"):
     os.makedirs(os.path.join(root, d), exist_ok=True)
 
@@ -97,6 +99,36 @@ QUALIFY row_number() OVER (PARTITION BY ats, slug, id ORDER BY changedAt DESC NU
 
 import json
 
+# Jobs from per-board R2 parquet snapshots (src/snapshot.ts): already columnar, open jobs only.
+# Mapped to the exact schema JOBS_SQL produces so everything downstream is source-agnostic.
+# raw/detailRaw are not carried in snapshots (debug-only weight) -> NULL columns.
+SNAPSHOT_JOBS_SQL = """
+SELECT ats, slug, id, title, location, url,
+       coalesce(from_json(departments_json, '["VARCHAR"]'), []) AS departments,
+       try_cast(published_at AS TIMESTAMPTZ) AS published_at,
+       try_cast(updated_at   AS TIMESTAMPTZ) AS updated_at,
+       content,
+       CAST(NULL AS VARCHAR) AS raw_json,
+       CAST(NULL AS VARCHAR) AS detail_raw_json,
+       detail_status,
+       content_hash,
+       to_timestamp(first_seen_ms/1000) AS first_seen_at,
+       to_timestamp(last_seen_ms/1000)  AS last_seen_at,
+       to_timestamp(changed_ms/1000)    AS changed_at,
+       CAST(NULL AS TIMESTAMPTZ) AS removed_at,
+       TRUE AS is_open,
+       enrich_status,
+       CAST(NULL AS TIMESTAMPTZ) AS enriched_at,
+       enrichment_json,
+       embed_status,
+       embed_model,
+       org,
+       embedding
+FROM {src}
+WHERE content IS NOT NULL AND length(trim(content)) > 0
+QUALIFY row_number() OVER (PARTITION BY ats, slug, id ORDER BY changed_ms DESC NULLS LAST, length(content) DESC NULLS LAST) = 1
+"""
+
 def split_ndjson(f, jobs_out, boards_out):
     """Stream one per-board NDJSON file into per-job and per-board JSONL (bounded memory:
     one board line at a time; boards with thousands of jobs are 100+ MB lines)."""
@@ -112,22 +144,8 @@ def split_ndjson(f, jobs_out, boards_out):
                 j["ats"] = b["ats"]; j["slug"] = b["slug"]
                 jo.write(json.dumps(j) + "\n")
 
-tmp = os.path.join(root, ".split")
-os.makedirs(tmp, exist_ok=True)
-force = "--force" in sys.argv
-for f in files:
-    ats = os.path.basename(f)[: -len(".ndjson")]
-    outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
-    if not force and all(os.path.exists(o) and os.path.getmtime(o) > os.path.getmtime(f) for o in outs.values()):
-        print(f"{ats:16} up to date", flush=True)
-        continue
-    jl, bl = os.path.join(tmp, f"{ats}.jobs.jsonl"), os.path.join(tmp, f"{ats}.boards.jsonl")
-    split_ndjson(f, jl, bl)
-    bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
-    jsrc = f"read_ndjson('{jl}', maximum_object_size=67108864, columns={JOB_COLUMNS})"
-    con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
-    con.execute(f"COPY ({JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
-    os.remove(jl); os.remove(bl)
+def finalize(ats, outs):
+    """Shared tail for both sources: dark aggregator guard, org column strip, count."""
     if ats == "dark":
         # aggregator guard: a `dark` board whose open postings name >2 distinct hiringOrganizations is a job
         # board, not an employer -> drop all its jobs from the export (keeps the corpus employer-only).
@@ -140,10 +158,61 @@ for f in files:
             print(f"  dark aggregator guard: dropped {len(drop)} multi-org boards", flush=True)
         else:
             con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
-    if ats != "dark":
+    else:
         con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     print(f"{ats:16} {n:>9,} jobs", flush=True)
+
+tmp = os.path.join(root, ".split")
+os.makedirs(tmp, exist_ok=True)
+force = "--force" in sys.argv
+for f in files:
+    ats = os.path.basename(f)[: -len(".ndjson")]
+    if ats in snap_ats:
+        print(f"{ats:16} (ndjson skipped: R2 snapshots present)", flush=True)
+        continue
+    outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
+    if not force and all(os.path.exists(o) and os.path.getmtime(o) > os.path.getmtime(f) for o in outs.values()):
+        print(f"{ats:16} up to date", flush=True)
+        continue
+    jl, bl = os.path.join(tmp, f"{ats}.jobs.jsonl"), os.path.join(tmp, f"{ats}.boards.jsonl")
+    split_ndjson(f, jl, bl)
+    bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
+    jsrc = f"read_ndjson('{jl}', maximum_object_size=67108864, columns={JOB_COLUMNS})"
+    con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    con.execute(f"COPY ({JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+    os.remove(jl); os.remove(bl)
+    finalize(ats, outs)
+
+
+# ---- per-board R2 snapshot parquets (scripts/pull-snapshots.mjs) ----
+for d in snap_dirs:
+    ats = os.path.basename(d)
+    outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
+    parts = glob.glob(os.path.join(d, "*.parquet"))
+    newest = max(os.path.getmtime(x) for x in parts)
+    if not force and all(os.path.exists(o) and os.path.getmtime(o) > newest for o in outs.values()):
+        print(f"{ats:16} up to date (snapshots)", flush=True)
+        continue
+    pq = os.path.join(d, "*.parquet")
+    # boards.parquet: board meta rides in each snapshot's footer kv; rebuild the boards.jsonl shape
+    # split_ndjson produces so BOARDS_SQL is reused unchanged.
+    kv = con.execute(f"SELECT file_name, decode(value) FROM parquet_kv_metadata('{pq}') WHERE decode(key) = 'board_meta'").fetchall()
+    counts = dict(con.execute(f"SELECT filename, count(*) FROM read_parquet('{pq}', filename=true) GROUP BY 1").fetchall())
+    bl = os.path.join(tmp, f"{ats}.boards.jsonl")
+    with open(bl, "w") as bo:
+        for fn, meta_json in kv:
+            try: meta = json.loads(meta_json)
+            except Exception: meta = None
+            if not isinstance(meta, dict): continue
+            bo.write(json.dumps({"ats": ats, "slug": meta.get("slug"), "meta": meta,
+                                 "exported_jobs": counts.get(fn, 0), "error": None}) + "\n")
+    bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
+    jsrc = f"read_parquet('{pq}')"
+    con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    os.remove(bl)
+    con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+    finalize(ats, outs)
 
 def show(sql):
     con.sql(sql).show(max_rows=50, max_width=200)

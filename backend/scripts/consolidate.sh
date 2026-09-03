@@ -22,8 +22,27 @@ if [[ " $* " != *" --skip-ingest "* ]]; then
   node --experimental-strip-types scripts/fetch-local.mjs --ingest="$BASE" 2>&1 | grep -v -i "warning\|^(Use\|Reparsing\|To eliminate" || true
 fi
 
-echo "--- 2/5 pull every ATS with JDs + vectors, all at once, resumable $(date '+%H:%M:%S')"
-NODE_OPTIONS=--max-old-space-size=16384 python3 -u scripts/pull-pool.py --base "$BASE" --out "$OUT" -- --status=open --embed --resume
+echo "--- 2/5 pull: R2 board snapshots, then /export for whatever lacks them $(date '+%H:%M:%S')"
+# Primary: static per-board parquet snapshots from R2 (written by the Board DOs; no DO wakes, ~5x
+# smaller than the JSON export). Local-only ATSes are excluded: step 1 just ingested them fresh, and
+# their snapshots lag until embeds drain — the /export fallback pulls them same-run instead.
+node scripts/pull-snapshots.mjs "$BASE" --out="$OUT" --exclude=jobscore,governmentjobs \
+  || echo "WARNING: snapshot pull failed; the /export fallback below will cover everything"
+# Fallback: ATSes with no snapshots yet (fleet still backfilling after a deploy) + the local-only ones.
+FALLBACK=$(OUT="$OUT" python3 - <<'PYEOF'
+import glob, json, os
+out = os.environ["OUT"]
+boards = json.load(open("src/boards.json"))
+missing = sorted(a for a in boards if not glob.glob(os.path.join(out, "snapshots", a, "*.parquet")))
+print(" ".join(missing))
+PYEOF
+)
+if [ -n "$FALLBACK" ]; then
+  echo "  /export fallback for: $FALLBACK"
+  NODE_OPTIONS=--max-old-space-size=16384 python3 -u scripts/pull-pool.py --base "$BASE" --out "$OUT" --ats "$FALLBACK" -- --status=open --embed --resume
+else
+  echo "  all ATSes covered by snapshots"
+fi
 
 echo "--- 3/5 parquet $(date '+%H:%M:%S')"
 EXPORT_DIR="$OUT" uv run scripts/build-parquet.py
