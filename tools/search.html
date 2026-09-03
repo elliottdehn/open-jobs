@@ -275,8 +275,17 @@ let prior=Float32Array.from(cideal);
 function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(cideal);return}
   const v=Float32Array.from(cideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.cvec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.cvec[i]/N.length;prior=norm(v)}
 // ---- state
-const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
+const INIT_LABELS=__INIT_LABELS__;
+const LS='open-jobs:'+(IDEAL.title||'');  // stable per search; the slice grows (unions, expansion) without losing state
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{},hideCo:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
+try{ // migrate state from the old 'title:jobcount' keys (the count changed on every recompile)
+  for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
+    if(k&&k.startsWith(LS+':')&&/:[0-9]+$/.test(k)){const o=JSON.parse(localStorage.getItem(k)||'{}');
+      for(const f of ['labels','notes','opened','enrich','companies','hideCo','kw'])if(o[f])st[f]=Object.assign({},o[f],st[f]||{});
+      if(o.compares)st.compares=(st.compares||[]).concat(o.compares);if(o.exclGroups)st.exclGroups=[...new Set([...(st.exclGroups||[]),...o.exclGroups])]}}
+}catch{}
+try{for(const[k,v] of Object.entries(INIT_LABELS||{}))if(st.labels[k]===undefined&&(v===0||v===1))st.labels[k]=v}catch{} // labels serve recorded: survive any storage loss
+save();
 if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
