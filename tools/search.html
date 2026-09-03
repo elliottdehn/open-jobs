@@ -182,12 +182,12 @@ aside .clear{width:100%;margin-top:10px}
   <aside id="side">
     <button class="btn closef" id="closef">Close</button>
     <details class="sec" open><summary>Fit for you<span class="cnt" id="cnt-fit"></span></summary><div class="sub">
-      <div id="f-el"></div></div></details>
+      <div id="f-el"></div>
+      <h4>Freshness</h4><div id="f-fr"></div></div></details>
     <details class="sec" open><summary>Role<span class="cnt" id="cnt-role"></span></summary><div class="sub">
       <h4>Seniority</h4><div id="f-sn"></div>
       <h4>Work arrangement</h4><div id="f-rm"></div>
       <h4>Salary (annual)</h4><div id="f-sa"></div>
-      <h4>Freshness</h4><div id="f-fr"></div>
       <h4>Posted</h4><div id="f-ag"></div>
       <h4>Employment</h4><div id="f-et"></div>
       <h4>Role family</h4><div id="f-rf"></div></div></details>
@@ -420,7 +420,7 @@ function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML=
       l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
       l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
     if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}}
-  const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf','ag','fr']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
+  const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el','fr']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf','ag']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
   renderChips()}
 function renderChips(){const el=$('#chips');el.innerHTML='';
   if(PREF){const b=document.createElement('button');const hidden=JOBS.filter(j=>j.el===false).length;b.className='chip'+(st.eligOnly?' on':'');b.innerHTML=`✓ eligible for ${esc(PREF)}${st.eligOnly?` <span class="n">hiding ${hidden}</span>`:''}`;b.title='Jobs restricted to other countries/regions, or not labelled remote when you asked for remote, are hidden while this is on';b.onclick=()=>{st.eligOnly=!st.eligOnly;save();event({type:'filter',facet:'eligible',value:PREF,on:st.eligOnly});renderFacets();render(true,'filter')};el.appendChild(b)}
