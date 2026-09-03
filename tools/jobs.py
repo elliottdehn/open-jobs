@@ -116,7 +116,7 @@ def cmd_fetch(a):
         g = json.load(open(p, encoding="utf-8"))
         for j in g["jobs"]:
             vec = np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32)
-            rows.append((j["ats"], j["slug"], j["id"], j["title"], j["company"], j["location"], j["url"], j.get("seen") or 0, j.get("jd") or "", leaf["id"], float(vec @ v), j["v"]))
+            rows.append((j["ats"], j["slug"], j["id"], j["title"], j["company"], j["location"], j["url"], j.get("seen") or 0, j.get("jd") or "", leaf["id"], float(vec @ v), j["v"], j.get("pub") or None))
         total += len(g["jobs"])
         print(f"\r{li+1}/{len(leaves)} groups, {total:,} jobs", end="", file=sys.stderr)
     print(file=sys.stderr)
@@ -137,12 +137,13 @@ def cmd_fetch(a):
     if not a.replace and os.path.exists(pq):
         have = {f"{r[0]}/{r[1]}#{r[2]}" for r in rows}
         prev = duckdb.connect().execute(f"SELECT * FROM read_parquet('{pq}')").fetchall()
+        prev = [tuple(r) + (None,) * (13 - len(r)) for r in prev]  # older slices predate the pub_ms column
         kept = [r for r in prev if f"{r[0]}/{r[1]}#{r[2]}" not in have]
         rows = rows + kept
         print(f"unioned with the previous slice: kept {len(kept):,} prior job(s) not in this fetch (total {len(rows):,}). Pass --replace to start fresh.", file=sys.stderr)
     con = duckdb.connect(os.path.join(WORK, "jobs.duckdb"))
-    con.execute("CREATE OR REPLACE TABLE jobs (ats VARCHAR, slug VARCHAR, id VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, url VARCHAR, seen_ms BIGINT, jd VARCHAR, leaf INTEGER, sim DOUBLE, vec_b64 VARCHAR)")
-    con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    con.execute("CREATE OR REPLACE TABLE jobs (ats VARCHAR, slug VARCHAR, id VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, url VARCHAR, seen_ms BIGINT, jd VARCHAR, leaf INTEGER, sim DOUBLE, vec_b64 VARCHAR, pub_ms BIGINT)")
+    con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     con.execute(f"COPY (SELECT * FROM jobs) TO '{os.path.join(WORK, 'jobs.parquet')}' (FORMAT PARQUET)")
     print(f"wrote {WORK}/jobs.parquet and {WORK}/jobs.duckdb: {len(rows):,} jobs from {len(leaves)} groups. Columns: ats, slug, id, title, company, location, url, seen_ms, jd, leaf, sim (cosine to ideal JD), vec_b64 (float32 LE base64).")
     # Surface dropouts: previously top-ranked jobs that fell out of the new slice after a manifest rebuild.
@@ -273,7 +274,8 @@ def capture_labelled(rows, labels, store=None):
         if r is not None:
             store[key] = {"key": key, "value": val, "ats": r[0], "slug": r[1], "id": r[2], "title": r[3],
                           "company": r[4], "location": r[5], "url": r[6], "seen_ms": r[7], "jd": r[8],
-                          "leaf": r[9], "sim": r[10], "vec_b64": r[11], "ts": int(time.time() * 1000)}
+                          "leaf": r[9], "sim": r[10], "vec_b64": r[11], "published_ms": (r[12] if len(r) > 12 else None),
+                          "ts": int(time.time() * 1000)}
             changed = True
         elif key in store and store[key].get("value") != val:
             store[key]["value"] = val; changed = True  # keep the persisted record, refresh the label
@@ -285,7 +287,8 @@ def store_row(rec, v):
     vec = np.frombuffer(base64.b64decode(rec["vec_b64"]), dtype=np.float32)
     return (rec.get("ats"), rec.get("slug"), rec.get("id"), rec.get("title"), rec.get("company"),
             rec.get("location"), rec.get("url"), rec.get("seen_ms") or 0, rec.get("jd") or "",
-            rec.get("leaf") if rec.get("leaf") is not None else -1, float(vec @ v), rec["vec_b64"])
+            rec.get("leaf") if rec.get("leaf") is not None else -1, float(vec @ v), rec["vec_b64"],
+            rec.get("published_ms"))
 
 def subgroups(vecs, titles, comps, k=6, min_size=8):
     """Split a slice into at most k groups: start with everything as one group and repeatedly bisect
@@ -440,7 +443,7 @@ def cmd_html(a):
             mid = float(np.exp(vec @ sm[0] + sm[1])); k = float(np.exp(sm[2]))
             est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
-        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
+        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "p": (r[12] if len(r) > 12 else None), "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": rm_known, "rme": rme, "coe": coe, "sn": sn, "sne": sne, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")

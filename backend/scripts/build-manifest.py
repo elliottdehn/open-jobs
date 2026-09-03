@@ -30,6 +30,7 @@ tag = recipe[0][0]
 q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
                coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint,
                epoch_ms(first_seen_at) AS first_seen_ms,
+               epoch_ms(published_at) AS published_ms,
                left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
                json_extract(enrichment_json, '$.data') AS enrichment,
                embedding
@@ -48,7 +49,7 @@ _zc = zstandard.ZstdCompressor(level=3); _zd = zstandard.ZstdDecompressor()
 N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
 D = 1536
 X = np.empty((N, D), dtype=np.float32)
-small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms")}
+small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "published_ms")}
 jd_z = []; enr_z = []
 pos_ = 0
 reader = con.execute(q).fetch_record_batch(50_000)
@@ -66,7 +67,7 @@ while True:
     print(f"\r  loaded {pos_:,}/{N:,}", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
 del reader
-meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"]))
+meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"], small["published_ms"]))
 del small
 # Clean + unit-normalize IN ROW BLOCKS: a whole-matrix np.linalg.norm materializes an X-sized x*x temp
 # (~18 GB at 3M jobs), which doubled peak memory and got this process SIGKILLed once the corpus outgrew
@@ -215,10 +216,10 @@ for n in leaves:
     V = X[idx].astype(np.float32)  # exact vectors (unit length), float32 little-endian base64
     jobs = []
     for i, r in enumerate(idx):
-        a, s, jid, title, loc, url, _, fs = meta_rows[r]
+        a, s, jid, title, loc, url, _, fs, pub = meta_rows[r]
         _j = jd_z[int(r)]; _e = enr_z[int(r)]
         jd = _zd.decompress(_j).decode() if _j else ""; enr = _zd.decompress(_e).decode() if _e else None
-        jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "jd": jd,
+        jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "pub": int(pub or 0), "jd": jd,
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
                      "v": base64.b64encode(V[i].tobytes()).decode()})
     with open(os.path.join(out, "groups", f"{n['id']}.json"), "w") as f: json.dump({"leaf": n["id"], "lo": n["lo"], "hi": n["hi"], "jobs": jobs}, f)
