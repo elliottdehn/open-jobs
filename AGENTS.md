@@ -93,6 +93,15 @@ across an index rebuild.
 uv run tools/jobs.py html        # -> work/search.html (single file, self-contained)
 uv run tools/jobs.py serve       # http://127.0.0.1:8765/search.html, records interactions
 ```
+**Freshness is the flagship signal — use it.** Every job with a posted date gets a chip: 🌱 Fresh
+(younger than the model-predicted typical age for its content), 🥀 Stale (older: hard-to-fill,
+reposted, or possibly never filled), 👻 ghost risk (open >1 year), 🔁 date-bumped (claims to be newer
+than when our crawler first saw it — the re-stamp is caught because first_seen can't be forged). The
+Freshness facet sits in "Fit for you" next to eligibility: when building a shortlist, default to
+eligible → fresh, and flag any 👻/🔁 you'd otherwise include so the person knows the listing may not
+be real. Stale isn't always bad — a stale-but-real posting can mean thin competition and a motivated
+hiring manager; say so when it's relevant.
+
 The page ranks by a model seeded at the ideal JD, has text search, facets (group, company,
 location, source), J/K labeling that refits the model live, notes, and an export button.
 While served, every interaction is appended to `work/interactions.jsonl`:
