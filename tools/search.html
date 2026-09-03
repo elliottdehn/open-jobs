@@ -475,7 +475,11 @@ function badges(j,compact=false){const out=[];
   if(j.sn)out.push(`<span class="b">${esc(j.sn)}</span>`);else if(j.sne)out.push(`<span class="b est" title="${j.sne.p?'Seniority estimated from the posting\'s embedding; the title doesn\'t say':'Default: the title states no level and the model has no strong signal'}">${esc(j.sne.v)}${j.sne.p?' '+Math.round(j.sne.p*100)+'%':''}</span>`);
   const s=salaryOf(j);if(s){if(s.src==='est')out.push(`<span class="b est" title="Estimated from similar postings with stated pay; not from this posting">${fmtk(s.lo)}–${fmtk(s.hi)}</span>`);else out.push(`<span class="b ok" title="${esc(s.raw)}">💰 ${s.src==='llm'?esc(fmtSal(j.e)):esc(j.sal.raw.length>26?fmtk(s.lo)+'–'+fmtk(s.hi):j.sal.raw)+(j.sal&&j.sal.currency!=='USD'?' '+esc(j.sal.currency):'')}</span>`)}
   if(j.coe&&!(j.co&&j.co.length))out.push(`<span class="b est" title="Country estimated from similar location strings; the posting doesn't state one">${esc(NAMES[j.coe.country]||j.coe.country)}</span>`);
-  if(j.p){const d=(Date.now()-j.p)/864e5;const t=d<1?'today':d<30?Math.round(d)+'d ago':d<365?Math.round(d/30)+'mo ago':(d/365).toFixed(1)+'y ago';out.push(`<span class="b${d>365?' no':''}" title="Posted ${new Date(j.p).toISOString().slice(0,10)}${d>365?' — open for over a year; may be a ghost listing that is never filled':''}">${d>365?'👻 ':''}${t}</span>`)}
+  if(j.p){const d=(Date.now()-j.p)/864e5;const t=d<1?'today':d<30?Math.round(d)+'d ago':d<365?Math.round(d/30)+'mo ago':(d/365).toFixed(1)+'y ago';
+    if(d>365)out.push(`<span class="b no" title="Posted ${new Date(j.p).toISOString().slice(0,10)} — open for over a year; may be a ghost listing that is never filled">👻 ${t}</span>`);
+    else if(j.agp!=null){const fresh=d<=j.agp;const ttl=`Posted ${new Date(j.p).toISOString().slice(0,10)} (${t}). Postings with this content are typically ~${j.agp<2?j.agp.toFixed(1):Math.round(j.agp)} days old — this one is ${fresh?'younger (the market moves fast: fresh means apply soon)':'older (an outlier survivor: hard-to-fill, reposted, or possibly never filled)'}`;
+      out.push(`<span class="b ${fresh?'ok':'est'}" title="${ttl}">${fresh?'🌱 Fresh':'🥀 Stale'} · ${t}</span>`)}
+    else out.push(`<span class="b" title="Posted ${new Date(j.p).toISOString().slice(0,10)}">${t}</span>`)}
   if(!compact&&j.e&&j.e.visa_sponsorship==='yes')out.push('<span class="b acc">visa ✓</span>');
   if(!compact&&j.co_&&j.co_.staffing)out.push('<span class="b warn">staffing agency</span>');
   return out.join('')}

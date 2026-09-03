@@ -55,11 +55,12 @@ if [[ " $* " != *" --skip-models "* ]]; then
   EXPORT_DIR="$OUT" uv run scripts/train-salary.py 2>&1 | grep -v Warning
   EXPORT_DIR="$OUT" uv run scripts/train-arrangement.py 2>&1 | grep -v Warning
   EXPORT_DIR="$OUT" uv run scripts/train-seniority.py 2>&1 | grep -v Warning
+  EXPORT_DIR="$OUT" uv run scripts/train-age.py 2>&1 | grep -v Warning
   EXPORT_DIR="$OUT" uv run scripts/build-city-table.py
   EXPORT_DIR="$OUT" uv run scripts/build-location-table.py 2>&1 | grep -v Warning   # embeds only new location strings (pennies)
 else
   echo "--- 4b/5 estimators skipped (--skip-models); carrying yesterday's model files forward"
-  mkdir -p "$OUT/web"; for f in salary-model.json arrangement-model.json seniority-model.json location-countries.json; do
+  mkdir -p "$OUT/web"; for f in salary-model.json arrangement-model.json seniority-model.json age-model.json location-countries.json; do
     [ -f "export/latest/web/$f" ] && [ ! -f "$OUT/web/$f" ] && cp "export/latest/web/$f" "$OUT/web/$f" || true; done
 fi
 

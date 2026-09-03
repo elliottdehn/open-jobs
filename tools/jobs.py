@@ -348,6 +348,32 @@ def salary_model():
     except Exception:
         return None
 
+def age_model():
+    """Posting-age estimator (head on the embedding -> log1p(days a posting of this content is typically
+    open)); Fresh/Stale chips compare a job's actual age to it. Published with the index; cached in work/."""
+    p = os.path.join(WORK, "age-model.json")
+    try:
+        if not os.path.exists(p) or time.time() - os.path.getmtime(p) > 24 * 3600:
+            open(p, "w", encoding="utf-8").write(json.dumps(get("/data/age-model.json")))
+        m = json.load(open(p, encoding="utf-8"))
+        if m["kind"] == "mlp":
+            m["_W1"] = np.asarray(m["W1"], dtype=np.float32); m["_b1"] = np.asarray(m["b1"], dtype=np.float32)
+            m["_W2"] = np.asarray(m["W2"], dtype=np.float32)
+        else:
+            m["_w"] = np.asarray(m["w"], dtype=np.float32)
+        return m
+    except Exception:
+        return None
+
+def age_predict(m, vec):
+    """Expected age in days for a unit job vector, under the published model."""
+    if m["kind"] == "mlp":
+        h = np.maximum(vec @ m["_W1"] + m["_b1"], 0)
+        z = float(h @ m["_W2"] + m["b2"])
+    else:
+        z = float(vec @ m["_w"] + m["b"])
+    return max(0.0, float(np.expm1(z)))
+
 def arrangement_model():
     """Work-arrangement estimator (softmax on the embedding -> remote/hybrid/onsite), published with the index; cached in work/."""
     p = os.path.join(WORK, "arrangement-model.json")
@@ -384,7 +410,7 @@ def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
     capture_labelled(rows, load_interaction_labels(os.path.join(WORK, "interactions.jsonl")))  # persist labelled jobs (survive rebuilds)
-    sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
+    sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); agm = age_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
     # rows are already deduped by load_jobs() (identical company+title mirrors collapsed)
     # "never show <company> again" clicks are logged as hide_company events; honor the final state at compile time
     hidden = {}
@@ -437,13 +463,16 @@ def cmd_html(a):
             elif loc["cities"] or loc["regions"]: rme = {"v": "onsite", "p": None}  # default: names a place, nothing says remote/hybrid
             if rme: n_est_rm += 1
             if rme and el is False and elr == "not labelled remote": elr = f"not labelled remote (est. {rme['v']}" + (f" {rme['p']:.0%})" if rme['p'] else ")")
-        est = None
-        if sm is not None:
+        est = None; agp = None
+        if sm is not None or agm is not None:
             vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
-            mid = float(np.exp(vec @ sm[0] + sm[1])); k = float(np.exp(sm[2]))
-            est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
+            if sm is not None:
+                mid = float(np.exp(vec @ sm[0] + sm[1])); k = float(np.exp(sm[2]))
+                est = {"mid": round(mid, -3), "lo": round(mid / k, -3), "hi": round(mid * k, -3)}
+            if agm is not None:
+                agp = round(age_predict(agm, vec), 1)  # typical age (days) for a posting with this content
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
-        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "p": (r[12] if len(r) > 12 else None), "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
+        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "p": (r[12] if len(r) > 12 else None), "agp": agp, "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
                      "rm": rm_known, "rme": rme, "coe": coe, "sn": sn, "sne": sne, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
