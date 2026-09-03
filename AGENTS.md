@@ -93,6 +93,10 @@ across an index rebuild.
 uv run tools/jobs.py html        # -> work/search.html (single file, self-contained)
 uv run tools/jobs.py serve       # http://127.0.0.1:8765/search.html, records interactions
 ```
+While `serve` runs, a **yes label expands the search**: the tool fetches the labelled job's 12
+nearest groups from the full corpus, unions any missing ones into the slice (labels survive), and
+recompiles the page — the serve log says when to refresh. Disable with `serve --no-expand`.
+
 **Freshness is the flagship signal — use it.** Every job with a posted date gets a chip: 🌱 Fresh
 (younger than the model-predicted typical age for its content), 🥀 Stale (older: hard-to-fill,
 reposted, or possibly never filled), 👻 ghost risk (open >1 year), 🔁 date-bumped (claims to be newer

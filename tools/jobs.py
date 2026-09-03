@@ -504,9 +504,42 @@ def cmd_html(a):
     open(out, "w", encoding="utf-8").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")
 
+def _expand_around(key, done, lock):
+    """A yes is the strongest signal there is: fetch the labelled job's 12 nearest groups from the
+    full corpus and union them into the slice (labels survive; `fetch` dedups), then recompile the
+    page. Runs in a serve worker thread; one expansion at a time."""
+    import subprocess, duckdb
+    if not lock.acquire(blocking=False):
+        print(f"[expand] busy; skipping {key} (label again later to retry)", flush=True); return
+    try:
+        if key in done: return
+        done.add(key)
+        pq = os.path.join(WORK, "jobs.parquet")
+        row = duckdb.connect().execute(
+            f"SELECT vec_b64 FROM read_parquet('{pq}') WHERE ats || '/' || slug || '#' || id = ?", [key]).fetchone()
+        if not row: print(f"[expand] {key}: not in slice, skipped", flush=True); return
+        vec = np.frombuffer(base64.b64decode(row[0]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
+        m, C = manifest()
+        near = [n["id"] for n, _ in nearest(m, C, vec, 12)]
+        have = {r[0] for r in duckdb.connect().execute(f"SELECT DISTINCT leaf FROM read_parquet('{pq}')").fetchall()}
+        new = [i for i in near if i not in have]
+        if not new:
+            print(f"[expand] yes on {key}: all 12 nearest groups already in the slice", flush=True); return
+        print(f"[expand] yes on {key}: fetching {len(new)} new nearby groups {new} ...", flush=True)
+        me = os.path.abspath(__file__)
+        r1 = subprocess.run([sys.executable, me, "fetch", "--groups", ",".join(map(str, new))], capture_output=True, text=True)
+        if r1.returncode != 0: print(f"[expand] fetch failed:\n{r1.stderr[-400:]}", flush=True); return
+        r2 = subprocess.run([sys.executable, me, "html"], capture_output=True, text=True)
+        if r2.returncode != 0: print(f"[expand] html failed:\n{r2.stderr[-400:]}", flush=True); return
+        tail = [l for l in r1.stdout.splitlines() if "unioned" in l or "wrote" in l][-1:]
+        print(f"[expand] done: {tail[0] if tail else 'slice grown'} -> refresh the page", flush=True)
+    finally:
+        if lock.locked(): lock.release()
+
 def cmd_serve(a):
-    import http.server, socketserver, webbrowser
+    import http.server, socketserver, webbrowser, threading
     work = os.path.abspath(WORK); log = os.path.join(work, "interactions.jsonl")
+    exp_done = set(); exp_lock = threading.Lock()
     class H(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kw): super().__init__(*args, directory=work, **kw)
         def end_headers(self):
@@ -517,6 +550,11 @@ def cmd_serve(a):
                 n = int(self.headers.get("content-length", 0)); body = self.rfile.read(n)
                 with open(log, "ab") as f: f.write(body.rstrip(b"\n") + b"\n")
                 self.send_response(204); self.end_headers()
+                if not a.no_expand:
+                    try: e = json.loads(body)
+                    except Exception: e = {}
+                    if e.get("type") == "label" and e.get("value") == 1 and e.get("key"):
+                        threading.Thread(target=_expand_around, args=(e["key"], exp_done, exp_lock), daemon=True).start()
             else: self.send_response(404); self.end_headers()
         def do_GET(self):
             if self.path in ("/", ""):
@@ -678,7 +716,7 @@ s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argu
 s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add_argument("--min-sim", type=float, default=0.0)
 s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12); s.add_argument("--replace", action="store_true", help="overwrite the previous slice instead of unioning the new fetch with it")
 s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000)
-s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true")
+s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true"); s.add_argument("--no-expand", action="store_true", help="don't auto-fetch the nearest groups when a job is labelled yes")
 s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.add_argument("--all", action="store_true")
 s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))
 s = sub.add_parser("probe", help="why isn't this posting in my list?"); s.add_argument("url"); s.add_argument("--board", help="ats/slug when the URL doesn't name the board (workable, paylocity)")
