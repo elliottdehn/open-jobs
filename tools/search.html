@@ -187,6 +187,7 @@ aside .clear{width:100%;margin-top:10px}
       <h4>Seniority</h4><div id="f-sn"></div>
       <h4>Work arrangement</h4><div id="f-rm"></div>
       <h4>Salary (annual)</h4><div id="f-sa"></div>
+      <h4>Freshness</h4><div id="f-fr"></div>
       <h4>Posted</h4><div id="f-ag"></div>
       <h4>Employment</h4><div id="f-et"></div>
       <h4>Role family</h4><div id="f-rf"></div></div></details>
@@ -392,7 +393,7 @@ const PREF_REMOTE_ONLY=__PREF_REMOTE_ONLY__;  // computed by jobs.py: every OR-c
 function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(!j.sn&&e.seniority&&e.seniority!=='unspecified'){j.sn=({intern:'intern',entry:'junior',junior:'junior',mid:'mid',senior:'senior',staff:'staff',principal:'staff',lead:'lead',manager:'manager',senior_manager:'manager',director:'director',vp:'executive',c_level:'executive'})[e.seniority]||e.seniority;j.sne=null}if(e.work_arrangement&&e.work_arrangement!=='unspecified'){j.rm=e.work_arrangement;if(PREF_REMOTE_ONLY){if((j.rm==='onsite'||j.rm==='hybrid')&&j.el!==false){j.el=false;j.elr=j.rm+' (you asked for remote)'}else if(j.rm==='remote'&&j.elr==='not labelled remote'){j.el=true;j.elr='remote (enrichment)'}}}}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;j.c=c.name||j.c}}}
 $('#enrichbtn').onclick=()=>enrichTop(300);$('#enrichbtn').addEventListener('mouseenter',loadBudget,{once:true});
 // ---- facets
-const FACETS=['el','rm','sn','rf','et','sa','ag','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
+const FACETS=['el','rm','sn','rf','et','sa','fr','ag','in','cs','co','rg','ci','g','c','a'];const facets={};const sel={};for(const f of FACETS){facets[f]={};sel[f]=new Set()}
 st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);st.kw=st.kw||{t:{},b:{}};
 if(st.eligOnly===undefined)st.eligOnly=!!PREF;
 function termRe(t){return new RegExp('(^|[^a-z0-9+#.])'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![a-z0-9+#])','i')}
@@ -407,8 +408,9 @@ function salaryOf(j){const e=j.e;if(e&&(e.salary_min!=null||e.salary_max!=null))
 const band=v=>v>=250000?'250k+':v>=200000?'200–250k':v>=150000?'150–200k':v>=100000?'100–150k':v>=60000?'60–100k':'<60k';
 const salaryBucket=j=>{const s=salaryOf(j);if(!s)return['(unknown)'];if(s.src==='est')return['≈ '+band(s.mid)+' (est.)'];return[(s.cur&&s.cur!=='USD'?s.cur+' ':'')+band(s.hi)]};
 const fmtk=v=>'$'+Math.round(v/1000)+'k';
+function freshness(j){if(!j.p)return 'unknown';const d=(Date.now()-j.p)/864e5;if(d>365)return '👻 ghost risk';if(j.agp==null)return 'unknown';return d<=j.agp?'🌱 fresh':'🥀 stale'}
 function ageBucket(j){if(!j.p)return 'unknown';const d=(Date.now()-j.p)/864e5;return d<=7?'this week':d<=31?'this month':d<=93?'≤ 3 months':d<=365?'≤ 1 year':'over 1 year 👻'}
-const keysOf={ag:j=>[ageBucket(j)],el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
+const keysOf={fr:j=>[freshness(j)],ag:j=>[ageBucket(j)],el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
 function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
 const facetShow={};
 function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
@@ -416,7 +418,7 @@ function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML=
       l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
       l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
     if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}}
-  const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf','ag']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
+  const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf','ag','fr']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
   renderChips()}
 function renderChips(){const el=$('#chips');el.innerHTML='';
   if(PREF){const b=document.createElement('button');const hidden=JOBS.filter(j=>j.el===false).length;b.className='chip'+(st.eligOnly?' on':'');b.innerHTML=`✓ eligible for ${esc(PREF)}${st.eligOnly?` <span class="n">hiding ${hidden}</span>`:''}`;b.title='Jobs restricted to other countries/regions, or not labelled remote when you asked for remote, are hidden while this is on';b.onclick=()=>{st.eligOnly=!st.eligOnly;save();event({type:'filter',facet:'eligible',value:PREF,on:st.eligOnly});renderFacets();render(true,'filter')};el.appendChild(b)}
