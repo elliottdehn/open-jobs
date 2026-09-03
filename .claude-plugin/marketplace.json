@@ -1,0 +1,12 @@
+{
+  "name": "open-jobs",
+  "owner": { "name": "elliottdehn", "url": "https://github.com/elliottdehn" },
+  "plugins": [
+    {
+      "name": "job-search",
+      "source": "./",
+      "description": "Local-first semantic job search over the Open Jobs dataset (~3M postings, crawled daily) with freshness, ghost, and date-bump detection no job board provides.",
+      "version": "0.1.0"
+    }
+  ]
+}

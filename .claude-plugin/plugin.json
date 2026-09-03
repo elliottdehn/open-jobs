@@ -1,0 +1,5 @@
+{
+  "name": "job-search",
+  "description": "Find real, current job openings: semantic search over ~3M postings with 🌱 fresh / 🥀 stale / 👻 ghost / 🔁 date-bump signals. Runs locally except one embedding call.",
+  "version": "0.1.0"
+}

@@ -12,9 +12,12 @@ embeds the user's ideal job description (get their OK for that call before makin
 
 ## Setup
 
-1. If there is no `open-jobs` checkout yet: `git clone https://github.com/elliottdehn/open-jobs`
-   (or `git -C open-jobs pull` to update an existing one). `cd open-jobs`.
-2. Requires `uv` (https://docs.astral.sh/uv/) and Python 3.10+. Every command is
+1. Locate the repo. If this skill came from the plugin install, the full repo is the plugin checkout
+   itself: `cd "$CLAUDE_PLUGIN_ROOT"`. Otherwise `git clone https://github.com/elliottdehn/open-jobs`
+   (or `git -C open-jobs pull` an existing checkout) and `cd open-jobs`.
+2. Keep the user's artifacts out of the plugin dir (plugin updates replace it): export
+   `WORK="$HOME/.open-jobs/work"` before running any command; the tools honor `WORK`.
+3. Requires `uv` (https://docs.astral.sh/uv/) and Python 3.10+. Every command is
    `uv run tools/jobs.py <cmd>`.
 
 ## How to work
