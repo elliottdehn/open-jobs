@@ -272,6 +272,51 @@ function centered(v){const o=new Float32Array(v.length);let n=0;for(let i=0;i<v.
 for(const j of JOBS)j.cvec=centered(j.vec);
 const cideal=centered(ideal);
 let prior=Float32Array.from(cideal);
+// ---- taste worker: fitting + rescoring off the UI thread (the kNN rescore is ~1B ops at 10k+ jobs) ----
+function tasteWorkerMain(){
+  let CV=null,N=0,D=0,cideal=null;
+  const dot=(a,o,b)=>{let s=0;for(let i=0;i<D;i++)s+=a[o+i]*b[i];return s};
+  function fitOn(C,L,prior,iters){const w=Float32Array.from(prior);let bb=0;if(!C.length&&!L.length)return [w,0];const lr=.5,l2=.02,n=Math.max(1,C.length+L.length);
+    let c0=0;if(L.length){for(const [ji] of L)c0+=dot(CV,ji*D,prior);c0/=L.length}
+    for(let ep=0;ep<iters;ep++){
+      for(const [ai,bi,winA] of C){let sc=0;for(let i=0;i<D;i++)sc+=w[i]*(CV[ai*D+i]-CV[bi*D+i]);const y=winA?1:0,pp=1/(1+Math.exp(-sc)),g=pp-y;for(let i=0;i<D;i++)w[i]-=lr*(g*(CV[ai*D+i]-CV[bi*D+i])+l2*(w[i]-prior[i])/n)}
+      for(const [ji,y] of L){const sc=dot(CV,ji*D,w)-c0+bb,pp=1/(1+Math.exp(-sc)),g=pp-y;for(let i=0;i<D;i++)w[i]-=lr*(g*CV[ji*D+i]+l2*(w[i]-prior[i])/n);bb-=lr*g}}
+    return [w,bb-c0]}
+  function knnTermIdx(ji,L){let best=-1,worst=-1;for(const [xi,y] of L){if(xi===ji)continue;let c=0;for(let i=0;i<D;i++)c+=CV[ji*D+i]*CV[xi*D+i];if(y===1){if(c>best)best=c}else if(c>worst)worst=c}
+    return (best<0?0:best)-(worst<0?0:worst)}
+  onmessage=e=>{const m=e.data;
+    if(m.type==='init'){CV=new Float32Array(m.cv);N=m.n;D=m.dims;cideal=Float32Array.from(m.cideal);return}
+    const {seq,L,C,K}=m;  // L=[[idx,y]], C=[[ia,ib,winA]]
+    const prior=Float32Array.from(cideal);
+    {const P=L.filter(x=>x[1]===1),Ng=L.filter(x=>x[1]===0);
+     for(const [ji] of P)for(let i=0;i<D;i++)prior[i]+=0.6*CV[ji*D+i]/P.length;
+     for(const [ji] of Ng)for(let i=0;i<D;i++)prior[i]-=0.4*CV[ji*D+i]/Ng.length;
+     let nr=0;for(let i=0;i<D;i++)nr+=prior[i]*prior[i];nr=Math.sqrt(nr)+1e-9;for(let i=0;i<D;i++)prior[i]/=nr}
+    const [u,b]=fitOn(C,L,prior,60);
+    const committee=[];for(let k=0;k<K;k++){const R=[];for(let i=0;i<C.length;i++)R.push(C[Math.floor(Math.random()*C.length)]);const RL=[];for(let i=0;i<L.length;i++)RL.push(L[Math.floor(Math.random()*L.length)]);committee.push(fitOn(R,RL,prior,40)[0])}
+    let KNN_L=1.0,looAcc=null;
+    const ys=L.filter(x=>x[1]===1).length,ns=L.length-ys;
+    if(ys>=2&&ns>=2&&L.length>=6){const cands=[0,0.5,1,2,3];const hits=cands.map(()=>0);
+      for(const [ji,y] of L){const rest=L.filter(x=>x[0]!==ji);const [wj,bj]=fitOn(C,rest,prior,40);const lin=dot(CV,ji*D,wj)+bj;const kn=knnTermIdx(ji,rest);
+        cands.forEach((lam,i)=>{if(((lin+lam*kn)>0)===(y===1))hits[i]++})}
+      let bi=0;for(let i=1;i<cands.length;i++)if(hits[i]>hits[bi])bi=i;KNN_L=cands[bi];looAcc=hits[bi]/L.length}
+    const scores=new Float32Array(N);
+    for(let ji=0;ji<N;ji++){const lin=dot(CV,ji*D,u)+b;const kn=L.length?knnTermIdx(ji,L):0;scores[ji]=1/(1+Math.exp(-(lin+KNN_L*kn)))}
+    postMessage({seq,scores:scores.buffer,u:u.buffer,b,committee:committee.map(w=>w.buffer),KNN_L,looAcc},[scores.buffer,u.buffer,...committee.map(w=>w.buffer)])}
+}
+let TW=null,twSeq=0,twBusy=false,twQueued=false;
+try{
+  TW=new Worker(URL.createObjectURL(new Blob(['('+tasteWorkerMain.toString()+')()'],{type:'text/javascript'})));
+  const cv=new Float32Array(JOBS.length*1536);JOBS.forEach((j,i)=>cv.set(j.cvec,i*1536));
+  TW.postMessage({type:'init',cv:cv.buffer,n:JOBS.length,dims:1536,cideal:Array.from(cideal)},[cv.buffer]);
+  TW.onmessage=e=>{const m=e.data;twBusy=false;
+    if(m.seq!==twSeq){if(twQueued){twQueued=false;refit()}return}
+    const scores=new Float32Array(m.scores);JOBS.forEach((j,i)=>j.score=scores[i]);
+    u=new Float32Array(m.u);w=u;b=m.b;committee=m.committee.map(x=>new Float32Array(x));KNN_L=m.KNN_L;looAcc=m.looAcc;
+    render(false,'refit');
+    if(twQueued){twQueued=false;refit()}};
+  TW.onerror=()=>{TW=null};
+}catch(e){TW=null}
 function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(cideal);return}
   const v=Float32Array.from(cideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.cvec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.cvec[i]/N.length;prior=norm(v)}
 // ---- state
@@ -319,7 +364,17 @@ function fitAll(){updatePrior();const C=pairsFrom(st.compares),L=labelItems();[u
   taste=C.length>0||L.length>0;chooseLambda();rescore()}
 function rescore(){const L=labelItems();if(!taste){for(const j of JOBS)j.score=j.pre;return}
   for(const j of JOBS){const lin=dot(u,j.cvec)+b;const kn=L.length?knnTerm(j,L):0;j.score=1/(1+Math.exp(-(lin+KNN_L*kn)))}}
-function refit(){fitAll()}
+function refit(){
+  const C0=pairsFrom(st.compares),L0=labelItems();
+  taste=C0.length>0||L0.length>0;
+  if(!taste){for(const j of JOBS)j.score=j.pre;return}
+  if(!TW){fitAll();return}
+  if(twBusy){twQueued=true;return}
+  twBusy=true;twSeq++;
+  const ki={};JOBS.forEach((j,i)=>ki[j.k]=i);
+  TW.postMessage({seq:twSeq,K:K_COMMITTEE,
+    L:L0.map(([j,y])=>[ki[j.k],y]),
+    C:C0.map(([a,bj,win])=>[ki[a.k],ki[bj.k],win==='a'?1:0])})}
 function fitPairs(){fitAll()}
 function predictsRecent(k=10){if(st.compares.length<k+3)return 0;const [wv]=fitOn(pairsFrom(st.compares.slice(0,-k)),labelItems());let ok=0,n=0;
   for(const c of st.compares.slice(-k)){const a=byKey[c.a],bb=byKey[c.b];if(!a||!bb)continue;n++;if((dot(wv,a.cvec)-dot(wv,bb.cvec)>0)===(c.win==='a'))ok++}return n?ok/n:0}
@@ -375,7 +430,7 @@ function renderWhat(){const list=inScopeJobs().filter(j=>st.labels[j.k]===undefi
 function whatCount(){const P=JOBS.filter(j=>st.labels[j.k]===1).length,N=JOBS.filter(j=>st.labels[j.k]===0).length;$('#wh-n').textContent=`${P} more · ${N} less · ${inScopeJobs().length.toLocaleString()} in scope`}
 function toWhat(){event({type:'scope',rm:[...sel.rm],co:[...sel.co],rg:[...sel.rg],n:JOBS.filter(passes).length});step(2);renderWhat()}
 function beginPairs(){event({type:'seed_done',more:JOBS.filter(j=>st.labels[j.k]===1).map(j=>j.k),less:JOBS.filter(j=>st.labels[j.k]===0).map(j=>j.k),n:JOBS.filter(passes).length});
-  fitAll();renderFacets();render(true,'seed');step(3);showPair()}
+  refit();renderFacets();render(true,'seed');step(3);showPair()}
 function stopCmp(){$('#cmp').classList.remove('on');fitAll();if(taste)$('#sort').value='model';
   event({type:'sort_done',compares:st.compares.length,accuracy:predictsRecent(),stability:topSetStability()});render(true,'sort')}
 function median(){const v=JOBS.map(j=>dot(u,j.cvec)).sort((a,b)=>a-b);return v[Math.floor(v.length/2)]||0}
@@ -535,5 +590,5 @@ $('#helpbtn').onclick=()=>$('#help').classList.add('on');$('#helpclose').onclick
 $('#filtersbtn').onclick=()=>document.body.classList.toggle('filters');$('#closef').onclick=()=>document.body.classList.remove('filters');
 for(const m of ['#cmp','#help'])$(m).addEventListener('click',e=>{if(e.target===$(m)){$(m).classList.remove('on')}});
 $('#brand-title').textContent=IDEAL.title?'· '+IDEAL.title:'';
-st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitAll();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
+st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();if(TW){for(const j of JOBS)j.score=j.pre;refit()}else{fitAll()};rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>
