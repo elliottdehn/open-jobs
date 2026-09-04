@@ -43,7 +43,9 @@ async function download(key, dest, etag) {
 	if (existsSync(dest) && existsSync(tag) && readFileSync(tag, "utf8") === etag) return false;
 	for (let attempt = 0; ; attempt++) {
 		try {
-			const res = await fetch(`${base}/data/${key}`);
+			// keys store slugs encodeURIComponent-ed; the URL path decodes once, so encode each
+			// segment again or a slug containing "/" (stored as %2F) resolves to the wrong key
+			const res = await fetch(`${base}/data/${key.split("/").map(encodeURIComponent).join("/")}`);
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
 			writeFileSync(tag, etag);
@@ -55,7 +57,7 @@ async function download(key, dest, etag) {
 	}
 }
 
-let totalObjects = 0, totalBytes = 0, downloaded = 0;
+let totalObjects = 0, totalBytes = 0, downloaded = 0, failed = 0;
 for (const ats of atses) {
 	const objects = await listSnapshots(ats);
 	if (!objects.length) { process.stderr.write(`${ats}: no snapshots\n`); continue; }
@@ -68,7 +70,11 @@ for (const ats of atses) {
 			const o = queue.shift();
 			if (!o) return;
 			const dest = `${dir}/${o.key.split("/").pop()}`;
-			if (await download(o.key, dest, o.etag)) got++;
+			try {
+				if (await download(o.key, dest, o.etag)) got++;
+			} catch (e) {
+				failed++; process.stderr.write(`\nSKIP ${e.message}\n`);
+			}
 			done++;
 			if (done % 200 === 0 || done === objects.length) process.stderr.write(`\r${ats}: ${done}/${objects.length} (${got} fetched)`);
 		}
@@ -77,4 +83,4 @@ for (const ats of atses) {
 	totalBytes += objects.reduce((a, o) => a + o.size, 0);
 	process.stderr.write(`\r${ats}: ${objects.length} snapshots, ${got} fetched\n`);
 }
-console.log(`snapshots: ${totalObjects} boards, ${(totalBytes / 1e9).toFixed(2)} GB listed, ${downloaded} downloaded -> ${outDir}/snapshots/`);
+console.log(`snapshots: ${totalObjects} boards, ${(totalBytes / 1e9).toFixed(2)} GB listed, ${downloaded} downloaded${failed ? `, ${failed} FAILED (those boards ride yesterday's data or the fallback)` : ""} -> ${outDir}/snapshots/`);
