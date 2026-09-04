@@ -48,7 +48,7 @@ import zstandard
 _zc = zstandard.ZstdCompressor(level=3); _zd = zstandard.ZstdDecompressor()
 N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
 D = 1536
-X = np.empty((N, D), dtype=np.float32)
+X = np.empty((N, D), dtype=np.float16)  # storage only; every consumer computes in f32/f64 per block
 small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "published_ms")}
 jd_z = []; enr_z = []
 pos_ = 0
@@ -75,7 +75,9 @@ del small
 for _i in range(0, X.shape[0], 200_000):
 	_blk = X[_i:_i + 200_000]
 	np.nan_to_num(_blk, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them
-	_blk /= np.sqrt((_blk * _blk).sum(axis=1, keepdims=True)) + 1e-9
+	_b32 = _blk.astype(np.float32)
+	_blk[:] = _b32 / (np.sqrt((_b32 * _b32).sum(axis=1, keepdims=True)) + 1e-9)
+	del _b32
 del _blk
 N, D = X.shape
 print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s")
@@ -88,7 +90,7 @@ compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq
 # PCA for splitting
 t = time.time()
 rng = np.random.default_rng(0)
-samp = X[rng.choice(N, min(N, 50_000), replace=False)]
+samp = X[rng.choice(N, min(N, 50_000), replace=False)].astype(np.float32)
 mu = samp.mean(0)
 _, _, Vt = np.linalg.svd(samp - mu, full_matrices=False)
 P = Vt[: args.pca].T.astype(np.float32)
@@ -173,7 +175,7 @@ def sub_medoids(idx, k, rng_seed):
     for j in np.argsort(-np.bincount(lab, minlength=k)):
         m = np.where(lab == j)[0]
         if len(m) == 0: continue
-        sub = samp[m]; cen = X[sub].mean(0); cen /= np.linalg.norm(cen) + 1e-9
+        sub = samp[m]; cen = X[sub].mean(0, dtype=np.float32); cen /= np.linalg.norm(cen) + 1e-9
         out.append((int(len(m)), sub[int(np.argmax(X[sub] @ cen))]))
     return out
 
