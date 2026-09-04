@@ -126,7 +126,6 @@ SELECT ats, slug, id, title, location, url,
        embedding
 FROM {src}
 WHERE content IS NOT NULL AND length(trim(content)) > 0
-QUALIFY row_number() OVER (PARTITION BY ats, slug, id ORDER BY changed_ms DESC NULLS LAST, length(content) DESC NULLS LAST) = 1
 """
 
 def split_ndjson(f, jobs_out, boards_out):
