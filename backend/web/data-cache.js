@@ -29,3 +29,6 @@ export function chooseGroups(ranked,downloaded,{advance=false,count=12}={}) {
   const loaded=new Set(downloaded);
   return advance?ranked.filter(n=>!loaded.has(n.id)).slice(0,count):ranked.slice(0,count).filter(n=>!loaded.has(n.id));
 }
+
+// Compression may change a strong ETag into its weak form without changing the index.
+export function sameETag(a,b){return !!a&&!!b&&a.replace(/^W\//,'')===b.replace(/^W\//,'')}

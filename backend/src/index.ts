@@ -245,7 +245,7 @@ export default {
 			headers.set("etag", obj.httpEtag);
 			headers.set("accept-ranges", "bytes");
 			headers.set("cache-control", "public, max-age=3600");
-			if (request.headers.get("if-none-match") === obj.httpEtag) return new Response(null, { status: 304, headers });
+			if ((request.headers.get("if-none-match") || "").split(",").some(tag => tag.trim() === "*" || tag.trim().replace(/^W\//, "") === obj.httpEtag.replace(/^W\//, ""))) return new Response(null, { status: 304, headers });
 			const body = (obj as R2ObjectBody).body;
 			if (!body) return new Response(null, { headers });
 			if (range && obj.range && "offset" in obj.range && obj.range.offset !== undefined) {

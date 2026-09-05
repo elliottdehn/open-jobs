@@ -1,7 +1,7 @@
 import {strict as assert} from 'node:assert';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {createDataCache,chooseGroups} from '../web/data-cache.js';
+import {createDataCache,chooseGroups,sameETag} from '../web/data-cache.js';
 import {createRenderGuard} from '../web/render-guard.js';
 const entries=new Map();let downloads=0;
 const storage={open:async()=>({match:async key=>entries.get(key)?.clone(),put:async(key,value)=>{entries.set(key,new Response(await value.arrayBuffer(),{headers:value.headers}))}})};
@@ -55,3 +55,6 @@ indexSelf.onmessage({data:{id:1,type:'init',dims:2,leaves:[{id:0},{id:1},{id:2}]
 assert.equal(indexReply.ready,true);indexSelf.onmessage({data:{id:2,type:'rank',vector:[1,0]}});
 assert.deepEqual(Array.from(indexReply.ranked),[0,2,1]);
 console.log('PASS: off-thread index ranking matches expected centroid order.');
+
+assert.equal(sameETag('W/\"snapshot\"','\"snapshot\"'),true);
+assert.equal(sameETag('W/\"old\"','\"new\"'),false);

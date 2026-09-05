@@ -1,9 +1,10 @@
 import {getSearch,setSearch} from './storage.js';
 import {decode,dot,norm,jsonFetch} from './search-data.js';
-import {cachedData,chooseGroups} from './data-cache.js';
+import {cachedData,chooseGroups,sameETag} from './data-cache.js';
 import {workerClient} from './worker-client.js';
+import {prepareJobs} from './prepare-client.js';
 const $=s=>document.querySelector(s), draftKey='open-jobs:conversation:v1';
-let conversation={messages:[],title:'',location:'',jd:'',versions:[],id:crypto.randomUUID()},current=null,busy=false,expanding=false,chatBusy=false,manifest=null,indexClient=null,indexBuild=null,indexChecked=0,models=null,parser=null,parserModels=null,sequence=0;
+let conversation={messages:[],title:'',location:'',jd:'',versions:[],id:crypto.randomUUID()},current=null,busy=false,expanding=false,chatBusy=false,manifest=null,indexClient=null,indexBuild=null,indexChecked=0,models=null;
 try{const saved=JSON.parse(localStorage.getItem(draftKey));if(saved?.id)conversation={...conversation,...saved}}catch{}
 function persist(){try{localStorage.setItem(draftKey,JSON.stringify(conversation))}catch{$('#chat-status').textContent='Your browser could not save the draft. Keep this tab open.'}}
 function syncDraft(){conversation.title=$('#title').value.trim();conversation.location=$('#loc').value.trim();conversation.jd=$('#draft').value;clearTimeout(syncDraft.timer);syncDraft.timer=setTimeout(persist,250);$('#find').disabled=busy||chatBusy||expanding||conversation.jd.trim().length<40||!conversation.title||!conversation.location}
@@ -11,6 +12,11 @@ function populate(){for(const [id,key] of [['title','title'],['loc','location'],
 function appendMessage(m){const a=document.createElement('article');a.className='message '+m.role;const d=document.createElement('div'),b=document.createElement('b'),p=document.createElement('p');b.textContent=m.role==='user'?'You':'Your job assistant';p.textContent=m.content;d.append(b,p);if(m.role==='assistant'){const icon=document.createElement('span');icon.className='avatar';icon.textContent='↗';a.append(icon)}a.append(d);$('#messages').append(a);$('#messages').scrollTop=$('#messages').scrollHeight}
 conversation.messages.forEach(appendMessage);populate();if(conversation.messages.length)$('#suggestions').hidden=true;
 for(const id of ['title','loc','draft'])$('#'+id).oninput=syncDraft;
+$('.workspace-switch').querySelectorAll('button').forEach(button=>button.onclick=()=>{
+ $('#workspace').dataset.view=button.dataset.view;
+ $('.workspace-switch').querySelectorAll('button').forEach(other=>other.setAttribute('aria-pressed',String(other===button)));
+ if(button.dataset.view==='chat')$('#messages').scrollTop=$('#messages').scrollHeight;
+});
 const starts=['I want to build things. Help me figure out what kind of role fits.','I’m changing careers. Help me describe the work I want to move into.','I know my next role. Help me turn it into a great job description.'];
 $('#suggestions').querySelectorAll('button').forEach((b,i)=>b.onclick=()=>{$('#message').value=starts[i];$('#message').focus()});
 $('#message').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#chat-form').requestSubmit()}};
@@ -32,7 +38,7 @@ async function loadIndex(){
  let m=manifest;
  if(manifest){
   const head=await fetch('/data/manifest.json',{method:'HEAD',cache:'no-cache',signal:AbortSignal.timeout(30000)});
-  if(!head.ok||!manifest.etag||head.headers.get('etag')!==manifest.etag)m=null;
+  if(!head.ok||!manifest.etag||!sameETag(head.headers.get('etag'),manifest.etag))m=null;
  }
  if(!m){
   const r=await fetch('/data/manifest.json',{cache:'no-cache',signal:AbortSignal.timeout(90000)});
@@ -62,25 +68,22 @@ async function nearest(vector,excluded=[],advance=false){
  const {ranked}=await indexClient.request({type:'rank',vector});
  return chooseGroups(ranked.map(id=>manifest.tree[id]),excluded,{advance});
 }
-async function parseJobs(jobs,pref,anchor){
- if(!parser)parser=new Worker('/prepare-worker.js',{type:'module'});const worker=parser,id=++sequence;
- return new Promise((resolve,reject)=>{const cleanup=()=>{clearTimeout(timer);worker.removeEventListener('message',receive);worker.removeEventListener('error',fail)};const fail=e=>{cleanup();worker.terminate();if(parser===worker)parser=null;parserModels=null;reject(Error(e.message||'Search preparation could not load. Check your connection and retry.'))};const receive=({data})=>{if(data.id!==id)return;cleanup();data.error?reject(Error(data.error)):resolve(data)};const timer=setTimeout(()=>fail({message:'Search preparation timed out. Please retry.'}),180000);worker.addEventListener('message',receive);worker.addEventListener('error',fail);worker.postMessage({id,jobs,pref,anchor,...(parserModels===models?{}:{models})});parserModels=models});
-}
+function parseJobs(jobs,pref,anchor,progress){return prepareJobs(jobs,pref,anchor,models,undefined,(done,total,stage)=>progress?.(done,total,`${stage||'Preparing your matches'} · ${done.toLocaleString()} of ${total.toLocaleString()}`))}
 async function fetchSlice(vector,ideal,previous,progress,text=conversation.jd,advance=false){
  const sameBuild=previous?.builtAt===manifest.built_at;
- const nodes=await nearest(vector,sameBuild?(previous.fetched||[]):[],advance),raw=[],fetched=[];let completed=0;
+ const nodes=(await nearest(vector,sameBuild?(previous.fetched||[]):[],advance)).slice(0,previous?12:1),raw=[],fetched=[];let completed=0;
  // Bounded downloads keep both the network and memory usable on small devices.
  const queue=[...nodes];const failures=[];const anchor=norm(ideal.vector);
  const sameIdeal=previous&&JSON.stringify(previous.ideal.vector)===JSON.stringify(ideal.vector);
  if(!nodes.length&&previous&&sameIdeal&&previous.ideal.location===ideal.location)return previous;
  await Promise.all(Array.from({length:3},async()=>{while(queue.length){const n=queue.shift();try{const g=await(await cachedData(`/data/groups/${n.id}.json`,manifest.built_at,{validate:async r=>{const g=await r.json();if(!Array.isArray(g.jobs)||g.leaf!==n.id||g.jobs.some(j=>typeof j.v!=='string'||j.v.length!==4*Math.ceil(manifest.dims*4/3)))throw Error('The group is incomplete. Please retry.')}})).json();if(g.leaf!==undefined&&g.leaf!==n.id)throw Error('Index changed');for(const j of g.jobs)raw.push({...j,leaf:n.id});fetched.push(n.id)}catch(e){failures.push(n.id)}progress(++completed,nodes.length)}}));
  if(!raw.length&&nodes.length)throw Error('Could not download matching jobs. Please retry; your previous search is safe.');
- if(nodes.length&&manifest.etag){const check=await fetch('/data/manifest.json',{method:'HEAD',cache:'no-cache'});if(!check.ok||check.headers.get('etag')!==manifest.etag){indexChecked=0;throw Error('The daily index was updated during your search. Please retry.')}}
+ if(nodes.length&&manifest.etag){const check=await fetch('/data/manifest.json',{method:'HEAD',cache:'no-cache'});if(!check.ok||!sameETag(check.headers.get('etag'),manifest.etag)){indexChecked=0;throw Error('The daily index was updated during your search. Please retry.')}}
  progress(nodes.length,nodes.length,'Preparing location, salary and freshness filters…');
- const prepared=raw.length?await parseJobs(raw,ideal.location,anchor):{jobs:[],remoteOnly:previous?.remoteOnly||false};
+ const prepared=raw.length?await parseJobs(raw,ideal.location,anchor,progress):{jobs:[],remoteOnly:previous?.remoteOnly||false};
  const union=new Map((previous?.jobs||[]).map(j=>[j.k,j]));
  // Re-apply eligibility to the old slice when the person revises their location preference.
- if(previous&&previous.ideal.location!==ideal.location){const oldRaw=previous.jobs.map(j=>{const [ats,rest]=j.k.split(/\/(.+)/),[slug,id]=rest.split(/#(.+)/);return{ats,slug,id,title:j.t,company:j.c,location:j.l,url:j.u,seen:j.s,pub:j.p,jd:j.jd,leaf:j.g,v:j.v,sim:sameIdeal?j.sim:dot(anchor,decode(j.v))}});const old=await parseJobs(oldRaw,ideal.location,anchor);for(const j of old.jobs)union.set(j.k,j)}
+ if(previous&&previous.ideal.location!==ideal.location){const oldRaw=previous.jobs.map(j=>{const [ats,rest]=j.k.split(/\/(.+)/),[slug,id]=rest.split(/#(.+)/);return{ats,slug,id,title:j.t,company:j.c,location:j.l,url:j.u,seen:j.s,pub:j.p,jd:j.jd,leaf:j.g,v:j.v,sim:sameIdeal?j.sim:dot(anchor,decode(j.v))}});const old=await parseJobs(oldRaw,ideal.location,anchor,progress);for(const j of old.jobs)union.set(j.k,j)}
  for(const j of prepared.jobs)union.set(j.k,j);
  if(previous&&!sameIdeal)for(const j of union.values())j.sim=dot(anchor,decode(j.v));
  const groups={...(previous?.groups||{})};for(const n of nodes)groups[n.id]={label:n.label,medoid:n.medoid,size:n.size,exemplars:n.exemplars};
@@ -98,7 +101,8 @@ $('#find').onclick=async()=>{
   else{const e=await jsonFetch('/embed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:conversation.jd,title:conversation.title,location:conversation.location})});if(e.recipe!==manifest.recipe||e.vector?.length!==manifest.dims)throw Error('The search index is updating. Please try again shortly.');ideal={...e,title:conversation.title,location:conversation.location};conversation.embedding={signature,ideal};persist()}
   const next=await fetchSlice(norm(ideal.vector),ideal,current,(done,total,msg)=>{$('#progress').max=total||12;$('#progress').value=done;$('#search-status').textContent=msg||`Gathering your matches · ${done} of ${total}`});
   if(!next.jobs.length)throw Error('No matching jobs were available. Try a broader description.');
-  await setSearch(next);current=next;showResults();$('#expand-status').textContent=next.failures.length?'Some matches could not load. The search will try again as you browse.':'';
+  $('#search-status').textContent='Opening your matches…';
+  await setSearch(next);current=next;showResults();if(!expansionQueue.includes(null))expansionQueue.push(null);$('#expand-status').textContent=next.failures.length?'Some matches could not load. The search will try again as you browse.':'';
  }catch(e){$('#search-status').textContent=e.message}
  finally{busy=false;$('#send').disabled=false;for(const id of ['title','loc','draft'])$('#'+id).readOnly=false;$('#progress').hidden=true;syncDraft();if(expansionQueue.length)expand(expansionQueue.shift())}
 };

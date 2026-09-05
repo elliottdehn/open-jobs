@@ -29,3 +29,8 @@ mkdirSync(web+'python',{recursive:true});
 for(const name of ['locparse.py','salary.py','seniority.py','city_countries.json'])copyFileSync(root+'tools/'+name,web+'python/'+name);
 copyFileSync(web+'prepare.py',web+'python/prepare.py');
 console.log('Hosted search and exact local parsing rules built.');
+
+// Serve the pinned runtime on our own origin; search startup must not depend on a third-party CDN.
+const runtime=web+'runtime/314.0.6/';
+mkdirSync(runtime,{recursive:true});
+for(const name of ['pyodide.mjs','pyodide.asm.mjs','pyodide.asm.wasm','python_stdlib.zip','pyodide-lock.json'])copyFileSync(root+'backend/node_modules/pyodide/'+name,runtime+name);

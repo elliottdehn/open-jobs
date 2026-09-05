@@ -7,3 +7,77 @@ body.results-mode{height:100dvh;overflow:hidden}
 .results-mode .results-heading .quiet{padding:6px 10px}
 .results-mode #expand-status{grid-column:1;grid-row:1;align-self:center;margin:0;padding:0 18px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .results-mode #search-frame{grid-column:1/-1;grid-row:2;height:100%;min-height:0}
+
+/* The crafting workspace stays within the screen; its content scrolls independently. */
+body:not(.results-mode){height:100dvh;overflow:hidden;display:flex;flex-direction:column}
+body:not(.results-mode) .site-header{height:64px;min-height:64px;width:100%;padding:0 32px}
+body:not(.results-mode) .site-footer{display:none}
+.workspace{width:100%;flex:1;min-height:0;padding:20px 32px;gap:clamp(24px,5vw,72px);grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.workspace-switch{display:none}
+.conversation{display:flex;flex-direction:column;min-height:0;min-width:0;height:100%;overflow:auto;scrollbar-width:thin}
+.conversation>.eyebrow{font-size:10px;flex:none}
+h1{font-size:clamp(30px,3vw,44px);letter-spacing:-1.6px;margin:14px 0 10px;flex:none}
+.intro{font-size:15px;line-height:1.5;margin:0 0 12px;flex:none}
+.intro br{display:none}
+#messages{flex:1;min-height:80px;max-height:none;overscroll-behavior:contain}
+.message{font-size:14px;line-height:1.55;margin:14px 0}
+.message.user{padding:12px 16px}
+.suggestions{flex:none;padding-top:8px;gap:6px}
+.suggestions button{font-size:12px;padding:6px 10px}
+#chat-form{flex:none;margin-top:12px}
+#message{display:block;min-height:64px;height:72px;max-height:none;resize:none;padding:12px 16px 4px}
+.composer-footer{padding:4px 10px 10px 16px}
+.send{width:32px;height:32px}
+.privacy{flex:none;font-size:11px;line-height:1.45;margin:10px 0 0;max-width:none}
+.status:empty{display:none}
+#chat-status{flex:none;margin:8px 0 0}
+.draft-panel{display:flex;flex-direction:column;align-self:stretch;height:100%;min-height:0;min-width:0}
+.draft-heading{flex:none;padding:14px 18px}
+.document{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;margin:0 16px;padding:16px 20px}
+.document-heading{flex:none;margin-bottom:4px}
+.document label{flex:none;margin:10px 0 4px}
+.document input{flex:none;padding:6px 0}
+.document #title{font-size:22px}
+.document textarea{flex:1;min-height:80px;resize:none;line-height:1.65;overscroll-behavior:contain}
+.draft-footer{flex:none;padding:12px 16px 16px}
+.draft-footer p{font-size:12px;line-height:1.4;margin:0 0 10px}
+.draft-footer p br{display:none}
+.draft-footer .status:not(:empty){margin:8px 0 0}
+.primary{padding:12px 16px}
+@media(max-height:720px){
+ .workspace{padding-top:12px;padding-bottom:12px}
+ .conversation>.eyebrow,.document-heading{display:none}
+ h1{font-size:30px;margin:0 0 8px}
+ h1 br{display:none}
+ .intro{font-size:14px;margin-bottom:4px}
+ .draft-heading{padding:10px 16px}
+ .document label{margin-top:6px}
+ .privacy{font-size:10px;margin-top:6px}
+ .draft-footer>p:first-child{display:none}
+}
+@media(max-width:900px){
+ body:not(.results-mode) .site-header{height:56px;min-height:56px;padding:0 16px}
+ .site-header nav{display:none}
+ #resume-search{margin-left:auto}
+ .workspace{padding:10px 16px 16px;gap:12px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+ .workspace-switch{display:flex;gap:4px;background:#e3eaf2;padding:4px;border-radius:10px;width:100%;max-width:650px;justify-self:center}
+ .workspace-switch button{flex:1;border:0;background:transparent;color:var(--muted);font-size:14px;padding:8px;border-radius:7px}
+ .workspace-switch button[aria-pressed="true"]{background:white;color:var(--accent);box-shadow:0 1px 4px #17385112;font-weight:600}
+ .workspace[data-view="chat"] .draft-panel,.workspace[data-view="draft"] .conversation{display:none}
+ .conversation,.draft-panel{grid-row:2;margin:0 auto;height:100%;min-height:0}
+ h1{font-size:32px;margin:10px 0 8px}
+ h1 br{display:none}
+ .conversation>.eyebrow{display:none}
+ .intro{font-size:14px;margin-bottom:8px}
+ .document{padding:12px 16px;margin:0 12px}
+ .document input,.document textarea{font-size:16px}
+ .privacy{font-size:10px}
+}
+@media(max-height:500px){
+ h1,.intro,.suggestions{display:none}
+ #message{height:52px;min-height:52px}
+ .draft-heading{display:none}
+ .document{margin-top:10px}
+ .document textarea{min-height:60px}
+ .draft-footer{padding:8px 12px}
+}

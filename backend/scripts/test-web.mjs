@@ -19,7 +19,7 @@ const body={messages:[{role:'user',content:'I want to build software remotely in
 assert.equal((await chat(req(body,'https://other.example'),env)).status,403);
 assert.equal((await chat(req({}),env)).status,400);
 assert.equal(called,0);
-const success=await chat(req(body),env);assert.equal(success.status,200);assert.equal((await success.json()).ready,true);assert.equal(requestBody.store,false);assert.equal(requestBody.text.format.strict,true);assert.equal(requestBody.max_output_tokens,2400);
+const success=await chat(req(body),env);assert.equal(success.status,200);assert.equal((await success.json()).ready,true);assert.equal(requestBody.store,false);assert.equal(requestBody.text.format.strict,true);assert.equal(requestBody.max_output_tokens,3600);
 const limited={...env,RATELIMIT:{getByName:()=>({hit:async()=>({ok:false,resetMs:4000})})}};
 assert.equal((await chat(req(body),limited)).status,429);assert.equal(called,1);
 globalThis.fetch=async()=>{throw Error('secret-token-detail')};const fail=await chat(req(body),env);assert.equal(fail.status,503);assert.ok(!(await fail.text()).includes('secret-token'));
