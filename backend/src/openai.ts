@@ -6,6 +6,8 @@
 export const OPENAI_MODEL = "gpt-5.6-luna";
 
 export interface StructuredRequest {
+	store?: boolean;
+	timeoutMs?: number;
 	/** Defaults to OPENAI_MODEL. */
 	model?: string;
 	/** System-style instructions. */
@@ -39,6 +41,7 @@ export async function structuredResponse<T>(env: Env, req: StructuredRequest): P
 		input: req.input,
 		text: { format: { type: "json_schema", name: req.schemaName, schema: req.schema, strict: true } },
 	};
+	if (req.store !== undefined) body.store = req.store;
 	if (req.tools?.length) body.tools = req.tools;
 	body.reasoning = { effort: req.reasoningEffort ?? "none" };
 	if (req.maxOutputTokens) body.max_output_tokens = req.maxOutputTokens;
@@ -47,6 +50,7 @@ export async function structuredResponse<T>(env: Env, req: StructuredRequest): P
 		method: "POST",
 		headers: { authorization: `Bearer ${env.OPENAI_KEY}`, "content-type": "application/json" },
 		body: JSON.stringify(body),
+		...(req.timeoutMs ? { signal: AbortSignal.timeout(req.timeoutMs) } : {}),
 	});
 	const json = (await res.json()) as {
 		id: string;

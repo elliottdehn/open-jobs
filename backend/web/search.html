@@ -144,7 +144,7 @@ aside .clear{width:100%;margin-top:10px}
   .jc{white-space:normal}.jh{flex-wrap:wrap}.jr{margin-left:auto}
 }
 @media (min-width:821px){aside .closef{display:none}}
-</style></head>
+</style><link rel="stylesheet" href="/search-theme.css"></head>
 <body>
 <header class="top">
   <div class="row row-search">
@@ -251,8 +251,15 @@ aside .clear{width:100%;margin-top:10px}
 </div></div>
 <div id="toast"><i></i><span id="toasttxt"></span></div>
 
-<script>
-const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__, GROUPS3=__GROUPS3__, PREF=__PREF__;
+<script type="module">
+import {getSearch} from "/storage.js";
+import {createRenderGuard} from "/render-guard.js";
+var hoverGuard;
+const hosted=await getSearch();
+if(!hosted?.jobs?.length){location.replace("/");throw Error("No saved search")}
+window.OPEN_JOBS_API=location.origin;
+
+const JOBS=hosted.jobs, IDEAL=hosted.ideal, IDEAL_TEXT=hosted.text, GROUPS=hosted.groups, GROUPS3=hosted.groups, PREF=hosted.ideal.location;
 const $=s=>document.querySelector(s);
 function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
@@ -315,14 +322,14 @@ try{
     const scores=new Float32Array(m.scores);JOBS.forEach((j,i)=>j.score=scores[i]);
     u=new Float32Array(m.u);w=u;b=m.b;committee=m.committee.map(x=>new Float32Array(x));KNN_L=m.KNN_L;looAcc=m.looAcc;
     render(false,'refit');
-    if(twQueued){twQueued=false;refit()}};
+    if(twQueued){twQueued=false;refit()}window.onHostedTasteIdle?.()};
   TW.onerror=()=>{TW=null;twBusy=false;twQueued=false;window.onHostedTasteIdle?.()};
 }catch(e){TW=null}
 function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(j=>st.labels[j.k]===0);if(!P.length&&!N.length){prior=Float32Array.from(cideal);return}
   const v=Float32Array.from(cideal);for(const j of P)for(let i=0;i<v.length;i++)v[i]+=0.6*j.cvec[i]/P.length;for(const j of N)for(let i=0;i<v.length;i++)v[i]-=0.4*j.cvec[i]/N.length;prior=norm(v)}
 // ---- state
-const INIT_LABELS=__INIT_LABELS__;
-const LS='open-jobs:'+(IDEAL.title||'');  // stable per search; the slice grows (unions, expansion) without losing state
+const INIT_LABELS={};
+const LS='open-jobs:hosted:'+hosted.id;  // stable per search; the slice grows (unions, expansion) without losing state
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{},hideCo:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
 try{ // migrate state from the old 'title:jobcount' keys (the count changed on every recompile)
   for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
@@ -332,9 +339,9 @@ try{ // migrate state from the old 'title:jobcount' keys (the count changed on e
 }catch{}
 try{for(const[k,v] of Object.entries(INIT_LABELS||{}))if(st.labels[k]===undefined&&(v===0||v===1))st.labels[k]=v}catch{} // labels serve recorded: survive any storage loss
 save();
-if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
+if(new URLSearchParams(location.search).get('reset')==='1'){st.hostedFilters={};st.hostedFreshInitialized=false;st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
-function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
+function event(e){e.ts=Date.now();if(e.type==='label'&&e.value===1)parent.postMessage({type:'expand',key:e.key},location.origin)}
 // ---- one taste model. Evidence: pairwise comparisons (Bradley-Terry: P(a>b)=σ(u·(va−vb))) and yes/no labels
 // (pointwise: P(yes)=σ(u·v+b)), fit jointly from the Rocchio prior (ideal shifted by the yes/no means) with L2 back
 // toward that prior. On top, a local kNN term (max cosine to any yes minus max cosine to any no) captures "more like
@@ -454,7 +461,7 @@ async function enrichTop(n=300){const btn=$('#enrichbtn');btn.disabled=true;cons
   event({type:'enrich',n:done,usd:spent});btn.innerHTML=`⚡ Enrich <span class="lbl-long">top 300</span>`;btn.disabled=false;rebuildFacets();renderFacets();render(false,'enrich');toast(`Enriched ${done} jobs for $${spent.toFixed(2)} · new facets and badges`);loadBudget()}
 async function loadBudget(){try{const r=await fetch((window.OPEN_JOBS_API||'https://backend.dehnbostele.workers.dev')+'/enrich/budget');const d=await r.json();const h=d.hour||d.hourly||{},dd=d.day||d.daily||{};const left=v=>v==null?'?':'$'+Number(v).toFixed(2);
   $('#budgetline').innerHTML=`<span>Your budget left</span><span>${left(h.remainingUsd??h.remaining)} this hour · ${left(dd.remainingUsd??dd.remaining)} today</span>`}catch{}}
-const PREF_REMOTE_ONLY=__PREF_REMOTE_ONLY__;  // computed by jobs.py: every OR-clause of the preference is remote-only
+const PREF_REMOTE_ONLY=hosted.remoteOnly;  // computed by jobs.py: every OR-clause of the preference is remote-only
 function applyEnrich(){for(const j of JOBS){const e=st.enrich[j.k];if(e){j.e=e;if(!j.sn&&e.seniority&&e.seniority!=='unspecified'){j.sn=({intern:'intern',entry:'junior',junior:'junior',mid:'mid',senior:'senior',staff:'staff',principal:'staff',lead:'lead',manager:'manager',senior_manager:'manager',director:'director',vp:'executive',c_level:'executive'})[e.seniority]||e.seniority;j.sne=null}if(e.work_arrangement&&e.work_arrangement!=='unspecified'){j.rm=e.work_arrangement;if(PREF_REMOTE_ONLY){if((j.rm==='onsite'||j.rm==='hybrid')&&j.el!==false){j.el=false;j.elr=j.rm+' (you asked for remote)'}else if(j.rm==='remote'&&j.elr==='not labelled remote'){j.el=true;j.elr='remote (enrichment)'}}}}const c=st.companies[j.k.split('#')[0]];if(c){j.co_=c;if(c.name&&c.name!==j.c){j.c=c.name;delete j.searchText}}}}
 $('#enrichbtn').onclick=()=>enrichTop(300);$('#enrichbtn').addEventListener('mouseenter',loadBudget,{once:true});
 // ---- facets
@@ -463,6 +470,8 @@ st.exclGroups=st.exclGroups||[];const exclG=new Set(st.exclGroups);st.kw=st.kw||
 if(st.eligOnly===undefined)st.eligOnly=!!PREF;
 function termRe(t){return new RegExp('(^|[^a-z0-9+#.])'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![a-z0-9+#])','i')}
 const kwCache=new Map();function hasTerm(text,t){let r=kwCache.get(t);if(!r){r=termRe(t);kwCache.set(t,r)}return r.test(text)}
+if(!st.hostedFreshInitialized){if(JOBS.some(j=>j.el!==false&&freshness(j)==='🌱 fresh'))sel.fr.add('🌱 fresh');st.hostedFreshInitialized=true;st.hostedFilters=Object.fromEntries(FACETS.map(f=>[f,[...sel[f]]]));save()}
+for(const [f,values] of Object.entries(st.hostedFilters||{}))if(sel[f])sel[f]=new Set(values);
 const boardOf=j=>j.k.split('#')[0];
 function coHidden(j){return !!(st.hideCo&&st.hideCo[boardOf(j)])}
 function kwHidden(j){if(coHidden(j))return true;for(const [t,v] of Object.entries(st.kw.t))if(v<0&&hasTerm(j.t,t))return true;for(const [t,v] of Object.entries(st.kw.b))if(v<0&&hasTerm(j.jd||'',t))return true;return false}
@@ -480,7 +489,7 @@ function ageBucket(j){if(!j.p)return 'unknown';const d=effAge(j);return d<=7?'th
 const keysOf={fr:j=>[freshness(j)],ag:j=>[ageBucket(j)],el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
 function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
 const facetShow={};
-function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
+function renderFacets(){st.hostedFilters=Object.fromEntries(FACETS.map(f=>[f,[...sel[f]]]));save();for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
     entries.slice(0,cap).forEach(([k,n])=>{const l=document.createElement('label');l.className='facet';const est=/\(est\.\)$/.test(k);const cls=est?'est':f==='el'&&k==='ineligible'?'no':f==='el'&&k==='eligible'?'ok':'';
       l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
       l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
@@ -505,7 +514,7 @@ function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.searchTe
 function fscore(j){return j.score+kwBoost(j)}
 function nc0(){return (st.compares||[]).length}
 const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};
-function render(reset=true,reason=null){const _y=window.scrollY;const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;  // Show similar is pure raw cosine to that job: no taste model, no boosts, no centering
+function render(reset=true,reason=null){if(hoverGuard?.defer(reset,reason))return;const _y=window.scrollY;const sort=$('#sort').value,show=$('#show').value;const ref=st.simTo&&byKey[st.simTo];const simv=ref?Object.fromEntries(JOBS.map(j=>[j.k,dot(j.vec,ref.vec)])):null;  // Show similar is pure raw cosine to that job: no taste model, no boosts, no centering
   const fitScores=new Map();const cachedFit=j=>{if(!fitScores.has(j.k))fitScores.set(j.k,fscore(j));return fitScores.get(j.k)};
   const cmp=(a,b)=>simv?simv[b.k]-simv[a.k]:sort==='sim'?b.sim-a.sim:sort==='date'?b.s-a.s:sort==='company'?(a.c||'').localeCompare(b.c||''):cachedFit(b)-cachedFit(a);
   CHIP=simv?j=>[simv[j.k],'Cosine similarity to “'+byKey[st.simTo].t.slice(0,40)+'”']:sort==='sim'?j=>[j.sim,'Cosine similarity to your ideal JD']:j=>[fscore(j),'Model score'];
@@ -564,7 +573,7 @@ function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k]
   <div class="jactions"><input class="note" type="text" placeholder="Note to self…" value="${esc(st.notes[j.k]||'')}"><button class="btn ghost sm hideco" title="Hide every posting from this company; kept across re-compiles">✖ Never show ${esc((j.c||'').slice(0,22))} again</button></div></div>`:''}`;
   d.onclick=e=>{if(e.target.closest('a')){event({type:'open',key:j.k});return}if(e.target.closest('input,button'))return;cur=i;toggle(j,d)};
   const sb=d.querySelector('.simbtn');if(sb)sb.onclick=e=>{e.stopPropagation();st.simTo=st.simTo===j.k?null:j.k;save();event({type:'similar',key:j.k,title:j.t,on:!!st.simTo});renderChips();render(true,'similar');if(st.simTo)toast(`Ranked section now ordered by similarity to “${j.t.slice(0,40)}”`)};
-  d.querySelector('.y').onclick=e=>{e.stopPropagation();cur=i;label(l===1?undefined:1,false)};d.querySelector('.n').onclick=e=>{e.stopPropagation();cur=i;label(l===0?undefined:0,false)};
+  d.querySelector('.y').onclick=e=>{e.stopPropagation();cur=i;label(st.labels[j.k]===1?undefined:1,false)};d.querySelector('.n').onclick=e=>{e.stopPropagation();cur=i;label(st.labels[j.k]===0?undefined:0,false)};
   if(st.opened[j.k]){d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};d.querySelector('.note').onkeydown=e=>e.stopPropagation();
   d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render(true,'filter');toast(`Hidden ${j.c}. Undo from the ✖ chip in the toolbar.`)}};return d}
 function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.replaceWith(jobEl(j,Number(d.dataset.i)));if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi(true)}
@@ -579,18 +588,105 @@ document.addEventListener('keydown',e=>{
     if(vis('#scope')){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')toWhat();return}
     if(vis('#what')){if(e.key==='Escape')$('#cmp').classList.remove('on');else if(e.key==='Enter')beginPairs();return}
     if(e.key==='ArrowLeft')pick('a');else if(e.key==='ArrowRight')pick('b');else if(e.key==='s'||e.key==='S')showPair();else if(e.key==='Escape')stopCmp();return}
-  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'){if(e.key==='Escape')e.target.blur();return}const j=ranked[cur];
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA'){if(e.key==='Escape')e.target.blur();return}const j=ranked[cur];
   if(e.key==='j'||e.key==='J')label(1);else if(e.key==='k'||e.key==='K')label(0);else if(e.key===' '){e.preventDefault();if(j)toggle(j,document.querySelector(`.job[data-i="${cur}"]`))}
   else if(e.key==='ArrowDown'){e.preventDefault();cur=Math.min(cur+1,ranked.length-1);hi(true)}else if(e.key==='ArrowUp'){e.preventDefault();cur=Math.max(0,cur-1);hi(true)}else if((e.key==='o'||e.key==='O')&&j){window.open(j.u,'_blank');event({type:'open',key:j.k})}
   else if(e.key==='/'){e.preventDefault();$('#q').focus()}else if(e.key==='?'){$('#help').classList.add('on')}});
 let qt;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>{event({type:'search',q:$('#q').value});render(true,'search')},250)};
 $('#sort').onchange=()=>{event({type:'sort',value:$('#sort').value});render(true,'order')};$('#show').onchange=()=>render(true,'filter');
 $('#toggleIdeal').onclick=()=>{const el=$('#ideal');el.textContent=IDEAL_TEXT||'(ideal JD text not available)';el.style.display=el.style.display==='block'?'none':'block'};
-$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,space:'centered',mean:Array.from(MEAN,x=>+x.toFixed(6)),w:Array.from(u,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),knn:{lambda:KNN_L,yes:Object.keys(st.labels).filter(k=>st.labels[k]===1),no:Object.keys(st.labels).filter(k=>st.labels[k]===0)},loo_accuracy:looAcc,labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);navigator.clipboard?.writeText(s);event({type:'export',labels:Object.keys(st.labels).length});toast('Model, labels and comparisons copied to the clipboard as JSON')};
+$('#export').onclick=()=>{const m={recipe:IDEAL.recipe,space:'centered',mean:Array.from(MEAN,x=>+x.toFixed(6)),w:Array.from(u,x=>+x.toFixed(5)),b:+b.toFixed(5),taste:Array.from(u,x=>+x.toFixed(5)),knn:{lambda:KNN_L,yes:Object.keys(st.labels).filter(k=>st.labels[k]===1),no:Object.keys(st.labels).filter(k=>st.labels[k]===0)},loo_accuracy:looAcc,labels:st.labels,notes:st.notes,compares:st.compares,exported_at:Date.now()};const s=JSON.stringify(m);const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([s],{type:'application/json'}));link.download='open-jobs-search.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);event({type:'export',labels:Object.keys(st.labels).length});toast('Search model, labels and notes exported')};
 $('#reset').onclick=()=>{if(!confirm('Wipe labels, comparisons and notes for this search? Enrichment is kept.'))return;location.search='?reset=1'};
 $('#helpbtn').onclick=()=>$('#help').classList.add('on');$('#helpclose').onclick=$('#helpok').onclick=()=>$('#help').classList.remove('on');
 $('#filtersbtn').onclick=()=>document.body.classList.toggle('filters');$('#closef').onclick=()=>document.body.classList.remove('filters');
 for(const m of ['#cmp','#help'])$(m).addEventListener('click',e=>{if(e.target===$(m)){$(m).classList.remove('on')}});
+// Included before the search's first render. The guard never changes saved ranking evidence.
+hoverGuard=createRenderGuard({
+ protectedNow:()=>!!document.querySelector('#list .job:hover, #list .job input:focus, #list .job textarea:focus'),
+ render:(reset,reason)=>render(reset,reason),
+ onDefer:()=>{
+  // A yes/no reacts immediately without moving the card out from under the pointer.
+  for(const card of document.querySelectorAll('#list .job')){
+   const j=ranked[Number(card.dataset.i)];if(!j)continue;
+   const value=st.labels[j.k];card.classList.toggle('pos',value===1);card.classList.toggle('neg',value===0);
+   card.querySelector('.y').textContent=value===1?'✓ yes':'✓';
+   card.querySelector('.n').textContent=value===0?'✗ no':'✗';
+  }
+ }
+});
+for(const type of ['pointerout','focusout'])document.querySelector('#list').addEventListener(type,()=>hoverGuard.resume(),{passive:true});
+
 $('#brand-title').textContent=IDEAL.title?'· '+IDEAL.title:'';
 st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();if(TW){for(const j of JOBS)j.score=j.pre;refit()}else{fitAll()};rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
-</script></body></html>
+// Included in the generated search module so incoming jobs use its existing taste model.
+let incomingSearch = null, applyingSearch = false;
+async function applyIncomingSearch() {
+  if (!incomingSearch || applyingSearch || twBusy || document.querySelector('.modal.on') || document.querySelector('#list .job:hover, #list .job input:focus, #list .job textarea:focus') ||
+      document.activeElement?.matches('input,textarea,select')) return;
+  applyingSearch = true;
+  try {
+    const snapshot = incomingSearch;
+    incomingSearch = null;
+    if (snapshot.id !== hosted.id || snapshot.ideal.recipe !== IDEAL.recipe) return;
+    const added = snapshot.jobs.filter(j => !byKey[j.k]);
+    if (!added.length) return;
+    const selected = ranked[cur]?.k;
+    for (const j of added) {
+      j.vec = b64f32(j.v); delete j.v;
+      j.pre = j.sim + titleFit(j); j.score = j.pre;
+      // Keep the original centering space: learned weights and comparisons remain valid.
+      j.cvec = centered(j.vec);
+      JOBS.push(j); byKey[j.k] = j;
+    }
+    Object.assign(GROUPS, snapshot.groups);
+    Object.assign(GROUPS3, snapshot.groups);
+    if (TW) {
+      const cv = new Float32Array(added.length * MEAN.length);
+      added.forEach((j, i) => cv.set(j.cvec, i * MEAN.length));
+      TW.postMessage({type:'append',cv:cv.buffer,n:added.length},[cv.buffer]);
+    }
+    applyEnrich(); rebuildFacets(); renderFacets(); refit(); render(false);
+    const index = ranked.findIndex(j => j.k === selected);
+    if (index >= 0) {cur = index; hi()}
+    toast(`${added.length.toLocaleString()} new matches added`);
+  } finally {applyingSearch = false}
+}
+window.addEventListener('message', async e => {
+  if (e.origin !== location.origin || e.source !== parent || e.data?.type !== 'matches-updated') return;
+  const snapshot=e.data.snapshot||await getSearch();
+  // Merge coalesced deltas so a hovered card can hold multiple arriving batches safely.
+  if(incomingSearch&&incomingSearch.id===snapshot.id){
+   const jobs=new Map(incomingSearch.jobs.map(j=>[j.k,j]));for(const j of snapshot.jobs)jobs.set(j.k,j);
+   incomingSearch={...snapshot,jobs:[...jobs.values()],groups:{...incomingSearch.groups,...snapshot.groups}};
+  }else incomingSearch=snapshot;
+  scheduleIncomingSearch();
+});
+// Updates wait for typing/comparisons to finish, then appear without a reload or confirmation.
+let incomingTimer;
+function scheduleIncomingSearch(){clearTimeout(incomingTimer);incomingTimer=setTimeout(applyIncomingSearch,140)}
+for(const type of ['pointerout','focusout'])document.querySelector('#list').addEventListener(type,scheduleIncomingSearch,{passive:true});
+window.onHostedTasteIdle=scheduleIncomingSearch;
+for(const modal of document.querySelectorAll('.modal'))new MutationObserver(scheduleIncomingSearch).observe(modal,{attributes:true,attributeFilter:['class']});
+
+// Reveal cached results as you approach the bottom, then fetch the next neighbourhood.
+let observedEnd = null, lastExpansionView = null;
+const moreObserver = new IntersectionObserver(entries => {
+  if (!entries.some(e => e.isIntersecting) || document.querySelector('.modal.on') || document.activeElement?.matches('input,textarea,select')) return;
+  const more = document.querySelector('#more');
+  if (more) {more.click(); return}
+  const view = JSON.stringify([Math.round(scrollY / 100), $('#q').value, $('#show').value,
+    Object.fromEntries(FACETS.map(f => [f,[...sel[f]]]))]);
+  if (view === lastExpansionView) return;
+  lastExpansionView = view;
+  parent.postMessage({type:'expand-more'}, location.origin);
+}, {rootMargin:'0px 0px 600px 0px'});
+function observeEnd() {
+  const end = document.querySelector('#more') || document.querySelector('#list')?.lastElementChild;
+  if (end === observedEnd) return;
+  moreObserver.disconnect(); observedEnd = end;
+  if (end) moreObserver.observe(end);
+}
+new MutationObserver(observeEnd).observe(document.querySelector('#list'), {childList:true});
+observeEnd();
+
+</script><script type="module" src="/search-accessibility.js"></script></body></html>

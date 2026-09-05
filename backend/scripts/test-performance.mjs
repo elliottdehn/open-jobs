@@ -1,0 +1,57 @@
+import {strict as assert} from 'node:assert';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import {createDataCache,chooseGroups} from '../web/data-cache.js';
+import {createRenderGuard} from '../web/render-guard.js';
+const entries=new Map();let downloads=0;
+const storage={open:async()=>({match:async key=>entries.get(key)?.clone(),put:async(key,value)=>{entries.set(key,new Response(await value.arrayBuffer(),{headers:value.headers}))}})};
+const fetcher=async()=>{downloads++;await new Promise(r=>setTimeout(r,5));return Response.json({jobs:[1,2,3]})};
+const options={storage,fetcher,origin:'https://example.test'};
+let cache=createDataCache(options);
+const [a,b]=await Promise.all([cache('/data/groups/1.json',100),cache('/data/groups/1.json',100)]);
+assert.equal(downloads,1,'coalesce concurrent group downloads');assert.deepEqual(await a.json(),await b.json());
+await cache('/data/groups/1.json',100);assert.equal(downloads,1,'reuse a downloaded group');
+cache=createDataCache(options);await cache('/data/groups/1.json',100);assert.equal(downloads,1,'reuse across page reloads');
+await cache('/data/groups/1.json',200);assert.equal(downloads,2,'new build reuses IDs but not old group data');
+let attempts=0;const recovering=createDataCache({...options,fetcher:async()=>++attempts===1?new Response('busy',{status:503}):Response.json({ok:true})});
+await assert.rejects(recovering('/data/groups/2.json',100));assert.equal((await recovering('/data/groups/2.json',100)).status,200);assert.equal(attempts,2,'failed downloads can retry');
+await assert.rejects(cache('/data/groups/invalid.json',100,{validate:async()=>{throw Error('invalid')}}));
+assert.ok(!entries.has('https://example.test/data/groups/invalid.json?v=100'),'never cache invalid data');
+const ranked=Array.from({length:30},(_,id)=>({id}));const loaded=ranked.slice(0,12).map(n=>n.id);
+assert.deepEqual(chooseGroups(ranked,loaded),[],'saving the same neighbourhood does not fetch another 12');
+assert.deepEqual(chooseGroups(ranked,loaded.slice(0,10)).map(n=>n.id),[10,11],'fetch only missing nearest groups');
+assert.deepEqual(chooseGroups(ranked,loaded,{advance:true}).map(n=>n.id),Array.from({length:12},(_,i)=>i+12),'scroll advances intentionally');
+let protectedNow=true,immediate=0,renders=[];
+const guard=createRenderGuard({protectedNow:()=>protectedNow,render:(...args)=>renders.push(args),onDefer:()=>immediate++});
+assert.equal(guard.defer(false,'refit'),true);assert.equal(guard.defer(false,'label'),true);assert.equal(immediate,2);
+guard.flush();assert.equal(renders.length,0,'hovered or edited job remains in place');
+protectedNow=false;guard.flush();assert.equal(renders.length,1,'one coalesced reorder after pointer leaves');
+assert.deepEqual(renders[0],[false,'label']);guard.flush();assert.equal(renders.length,1);
+protectedNow=true;assert.equal(guard.defer(true,'search'),false,'explicit search stays responsive');
+// Real worker code: appending vectors must produce the same scores as a fresh initialization.
+const html=readFileSync(new URL('../../tools/search.html',import.meta.url),'utf8');
+const workerCode=html.slice(html.indexOf('function tasteWorkerMain(){'),html.indexOf('let TW=null'));
+const run=(append)=>{let reply;const c=vm.createContext({Float32Array,Math,postMessage:m=>reply=m});vm.runInContext(workerCode+';tasteWorkerMain();',c);const all=new Float32Array([1,0,0,1,.7,.7]);c.onmessage({data:{type:'init',cv:append?all.slice(0,4).buffer:all.buffer,n:append?2:3,dims:2,cideal:[1,0]}});if(append)c.onmessage({data:{type:'append',cv:all.slice(4).buffer,n:1}});c.onmessage({data:{seq:1,L:[[0,1],[1,0]],C:[],K:0}});return [...new Float32Array(reply.scores)]};
+assert.deepEqual(run(true),run(false),'incremental taste-worker updates preserve ranking scores');
+console.log('PASS: persistent cache, concurrent deduplication, rebuild isolation, failed-download retry, nearest-group reuse, hover stability and incremental ranking equivalence.');
+// Collapsed cards should not construct hidden descriptions; opening keeps all detail actions.
+const jobElCode=html.slice(html.indexOf('function jobEl(j,i){'),html.indexOf('function label(v,scroll=true)'));
+const state={labels:{},opened:{},notes:{}};let replacement;
+const elements=()=>({dataset:{},classList:{toggle:()=>{}},querySelector:selector=>selector==='.simbtn'?null:{},replaceWith:next=>replacement=next});
+const cardContext=vm.createContext({document:{createElement:elements},st:state,Date,Number,String,
+ jdText:x=>String(x||''),esc:x=>String(x||''),badges:()=>'',CHIP:()=>[.7,'fit'],fscore:()=>.7,kwBoost:()=>0,save:()=>{},event:()=>{},hi:()=>{}});
+vm.runInContext(jobElCode,cardContext);
+const posting={k:'ats/company#1',t:'Engineer',c:'Company',l:'Remote',sim:.7,jd:'DISTINCT_DESCRIPTION '.repeat(2000),u:'https://example.test/job'};
+const closed=cardContext.jobEl(posting,0);assert.ok(!closed.innerHTML.includes('DISTINCT_DESCRIPTION'));assert.ok(!closed.innerHTML.includes('class="note"'));
+cardContext.toggle(posting,closed);assert.ok(replacement.innerHTML.includes('DISTINCT_DESCRIPTION'));assert.ok(replacement.innerHTML.includes('class="note"'));assert.ok(replacement.innerHTML.includes('hideco'));
+const openBytes=replacement.innerHTML.length,closedBytes=closed.innerHTML.length;
+console.log(`PASS: lazy job details and notes; test card HTML drops from ${openBytes.toLocaleString()} to ${closedBytes.toLocaleString()} characters while collapsed.`);
+// The index worker ranks off-thread using the same float16 centroids and cosine calculation.
+const {half,dot}=await import('../web/search-data.js');
+const indexCode=readFileSync(new URL('../web/index-worker.js',import.meta.url),'utf8').replace(/^import[^\n]+\n/,'');
+let indexReply;const indexSelf={postMessage:m=>indexReply=m};
+const indexContext=vm.createContext({self:indexSelf,Float32Array,Uint16Array,half,dot});vm.runInContext(indexCode,indexContext);
+indexSelf.onmessage({data:{id:1,type:'init',dims:2,leaves:[{id:0},{id:1},{id:2}],bytes:new Uint16Array([0x3c00,0,0,0x3c00,0x3800,0]).buffer}});
+assert.equal(indexReply.ready,true);indexSelf.onmessage({data:{id:2,type:'rank',vector:[1,0]}});
+assert.deepEqual(Array.from(indexReply.ranked),[0,2,1]);
+console.log('PASS: off-thread index ranking matches expected centroid order.');

@@ -1,154 +1,135 @@
-// JobScream local-first client: résumé -> /embed -> tree descent over the manifest -> Maybe/No on
-// groups (downloads only those) -> live logistic regression over the downloaded pool -> export weights.
-const API = location.origin;
-const $ = (s) => document.querySelector(s);
-const state = { vec: null, manifest: null, cent: null, cards: [], decided: new Map(), pool: [], labels: new Map(), w: null, b: 0, shown: 0, dl: { done: 0, total: 0 } };
-
-function show(step) { document.querySelectorAll(".step").forEach((e) => e.classList.remove("active")); $(step).classList.add("active"); }
-function norm(v) { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s) || 1; return Float32Array.from(v, (x) => x / s); }
-// exact float32 vector from base64 (little-endian)
-function vec(j) { const s = atob(j.v); const buf = new ArrayBuffer(s.length); const u = new Uint8Array(buf); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Float32Array(buf); }
-function dot(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
-
-// ---------- manifest ----------
-async function loadManifest() {
-  if (state.manifest) return;
-  $("#st1").textContent = "loading manifest…";
-  const [mr, cr] = await Promise.all([fetch(`${API}/data/manifest.json`), fetch(`${API}/data/centroids.bin`)]);
-  if (!mr.ok || !cr.ok) throw new Error(mr.status === 404 ? "the job index hasn't been published yet — check back shortly" : `couldn't load the job index (HTTP ${mr.status})`);
-  const [m, c] = await Promise.all([mr.json(), cr.arrayBuffer()]);
-  state.manifest = m;
-  // float16 -> float32
-  const u16 = new Uint16Array(c), f = new Float32Array(u16.length);
-  for (let i = 0; i < u16.length; i++) f[i] = f16(u16[i]);
-  state.cent = f;
-  $("#corpus").textContent = `${m.jobs.toLocaleString()} jobs · ${m.leaves.toLocaleString()} groups · ${m.recipe}`;
-}
-function f16(h) { const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff; if (e === 0) return s * m * 2 ** -24; if (e === 31) return m ? NaN : s * Infinity; return s * (1 + m / 1024) * 2 ** (e - 15); }
-function centroid(i) { const d = state.manifest.dims; return state.cent.subarray(i * d, (i + 1) * d); }
-
-// rank every leaf by centroid similarity: all centroids are local, and ball bounds are far too loose
-// in 1536-d to prune anything (radii ~0.3-0.5 vs. neighbour gaps ~0.08)
-function nearestNodes(q, want) {
-  const T = state.manifest.tree;
-  const leaves = [];
-  for (const n of T) if (!n.children.length) leaves.push([dot(q, centroid(n.id)), n]);
-  leaves.sort((a, b) => b[0] - a[0]);
-  return leaves.slice(0, want).map(([, n]) => n);
-}
-function leavesUnder(n) { const T = state.manifest.tree; const out = []; const st = [n]; while (st.length) { const x = st.pop(); if (!x.children.length) out.push(x); else for (const c of x.children) st.push(T[c]); } return out; }
-
-// ---------- step 1 ----------
-$("#go").onclick = async () => {
-  const text = $("#resume").value.trim();
-  if (text.length < 20) { $("#st1").textContent = "paste a bit more text"; return; }
-  $("#go").disabled = true;
-  try {
-    await loadManifest();
-    $("#st1").textContent = "embedding…";
-    const r = await fetch(`${API}/embed`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, title: $("#title").value, location: $("#loc").value }) });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error ? `${e.error}${e.retryAfterSeconds ? ` (retry in ${e.retryAfterSeconds}s)` : ""}` : `HTTP ${r.status}`); }
-    const { vector, recipe } = await r.json();
-    if (recipe !== state.manifest.recipe) $("#st1").textContent = `warning: embedding recipe ${recipe} ≠ manifest ${state.manifest.recipe}`;
-    state.vec = norm(vector);
-    renderCards(24); show("#s2");
-  } catch (e) { $("#st1").textContent = String(e.message || e); }
-  $("#go").disabled = false;
+import {getSearch,setSearch} from './storage.js';
+import {decode,dot,norm,jsonFetch} from './search-data.js';
+import {cachedData,chooseGroups} from './data-cache.js';
+import {workerClient} from './worker-client.js';
+const $=s=>document.querySelector(s), draftKey='open-jobs:conversation:v1';
+let conversation={messages:[],title:'',location:'',jd:'',versions:[],id:crypto.randomUUID()},current=null,busy=false,expanding=false,chatBusy=false,manifest=null,indexClient=null,indexBuild=null,indexChecked=0,models=null,parser=null,parserModels=null,sequence=0;
+try{const saved=JSON.parse(localStorage.getItem(draftKey));if(saved?.id)conversation={...conversation,...saved}}catch{}
+function persist(){try{localStorage.setItem(draftKey,JSON.stringify(conversation))}catch{$('#chat-status').textContent='Your browser could not save the draft. Keep this tab open.'}}
+function syncDraft(){conversation.title=$('#title').value.trim();conversation.location=$('#loc').value.trim();conversation.jd=$('#draft').value;clearTimeout(syncDraft.timer);syncDraft.timer=setTimeout(persist,250);$('#find').disabled=busy||chatBusy||expanding||conversation.jd.trim().length<40||!conversation.title||!conversation.location}
+function populate(){for(const [id,key] of [['title','title'],['loc','location'],['draft','jd']])$('#'+id).value=conversation[key]||'';syncDraft()}
+function appendMessage(m){const a=document.createElement('article');a.className='message '+m.role;const d=document.createElement('div'),b=document.createElement('b'),p=document.createElement('p');b.textContent=m.role==='user'?'You':'Your job assistant';p.textContent=m.content;d.append(b,p);if(m.role==='assistant'){const icon=document.createElement('span');icon.className='avatar';icon.textContent='↗';a.append(icon)}a.append(d);$('#messages').append(a);$('#messages').scrollTop=$('#messages').scrollHeight}
+conversation.messages.forEach(appendMessage);populate();if(conversation.messages.length)$('#suggestions').hidden=true;
+for(const id of ['title','loc','draft'])$('#'+id).oninput=syncDraft;
+const starts=['I want to build things. Help me figure out what kind of role fits.','I’m changing careers. Help me describe the work I want to move into.','I know my next role. Help me turn it into a great job description.'];
+$('#suggestions').querySelectorAll('button').forEach((b,i)=>b.onclick=()=>{$('#message').value=starts[i];$('#message').focus()});
+$('#message').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#chat-form').requestSubmit()}};
+$('#chat-form').onsubmit=async e=>{
+ e.preventDefault();if(chatBusy||busy)return;const content=$('#message').value.trim();if(!content)return;
+ chatBusy=true;$('#send').disabled=true;syncDraft();const messages=[...conversation.messages,{role:'user',content}];appendMessage(messages.at(-1));$('#message').value='';$('#suggestions').hidden=true;$('#chat-status').textContent='Thinking about your next role…';
+ for(const id of ['title','loc','draft'])$('#'+id).readOnly=true;
+ try{
+  const reply=await jsonFetch('/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({messages:messages.slice(-29),draft:`Target role: ${conversation.title}\nLocation: ${conversation.location}\n\n${conversation.jd}`})});
+  if(typeof reply.message!=='string'||typeof reply.jd!=='string')throw Error('The assistant returned an incomplete draft. Please retry.');
+  if(conversation.jd)conversation.versions.push({jd:conversation.jd,title:conversation.title,location:conversation.location,at:Date.now()});
+  conversation.messages=[...messages,{role:'assistant',content:reply.message}];Object.assign(conversation,{title:reply.title,location:reply.location,jd:reply.jd});appendMessage(conversation.messages.at(-1));populate();$('#draft-state').textContent=reply.ready?'Ready for your review':'Draft in progress';$('#chat-status').textContent='';
+ }catch(e){$('#messages').lastElementChild?.remove();$('#message').value=content;$('#chat-status').textContent=e.message}
+ finally{chatBusy=false;$('#send').disabled=false;for(const id of ['title','loc','draft'])$('#'+id).readOnly=false;syncDraft();if(expansionQueue.length)expand(expansionQueue.shift())}
 };
-
-// ---------- step 2 ----------
-function renderCards(want) {
-  state.cards = nearestNodes(state.vec, want);
-  const el = $("#cards"); el.innerHTML = "";
-  for (const n of state.cards) {
-    const sim = dot(state.vec, centroid(n.id));
-    const d = document.createElement("div"); d.className = "card " + (state.decided.get(n.id) || ""); d.dataset.id = n.id;
-    d.innerHTML = `<div class="lbl">${esc(n.label || n.medoid)}</div><div class="meta">${n.size.toLocaleString()} jobs${n.distinct_titles ? ` (${n.distinct_titles} distinct titles)` : ""} · similarity ${sim.toFixed(2)} · spread ${n.radius.toFixed(2)}</div>
-      <ul>${n.exemplars.map((e) => `<li>${esc(e.title)} <span>${/^[0-9a-f-]{20,}$/i.test(e.company || "") ? "" : "· " + esc(e.company)}${e.location ? " · " + esc(e.location) : ""}</span></li>`).join("")}</ul>
-      <div class="btns"><button class="btn-yes">Maybe</button><button class="btn-no">No</button></div>`;
-    d.querySelector(".btn-yes").onclick = () => decide(n, "maybe", d);
-    d.querySelector(".btn-no").onclick = () => decide(n, "no", d);
-    el.appendChild(d);
-  }
+async function loadIndex(){
+ // A HEAD request detects a new daily build without downloading the large manifest again.
+ if(manifest&&indexBuild===manifest.built_at&&Date.now()-indexChecked<60000)return manifest;
+ let m=manifest;
+ if(manifest){
+  const head=await fetch('/data/manifest.json',{method:'HEAD',cache:'no-cache',signal:AbortSignal.timeout(30000)});
+  if(!head.ok||!manifest.etag||head.headers.get('etag')!==manifest.etag)m=null;
+ }
+ if(!m){
+  const r=await fetch('/data/manifest.json',{cache:'no-cache',signal:AbortSignal.timeout(90000)});
+  if(!r.ok)throw Error('The job index is unavailable. Please retry.');
+  m=await r.json();m.etag=r.headers.get('etag');
+ }
+ if(!m.tree?.length||!m.dims)throw Error('The job index is being prepared. Please try again shortly.');
+ if(indexBuild!==m.built_at){
+  const r=await cachedData('/data/centroids.bin',m.built_at,{validate:async r=>{if((await r.arrayBuffer()).byteLength!==m.nodes*m.dims*2)throw Error('The index is updating. Please retry.')}});
+  const bytes=await r.arrayBuffer();
+  if(bytes.byteLength!==m.nodes*m.dims*2)throw Error('The index is updating. Please retry.');
+  if(indexClient)indexClient.terminate();indexClient=workerClient('/index-worker.js');
+  await indexClient.request({type:'init',bytes,dims:m.dims,leaves:m.tree.filter(n=>!n.children.length).map(n=>({id:n.id}))},[bytes]);
+  indexBuild=m.built_at;models=null;
+ }
+ manifest=m;indexChecked=Date.now();
+ $('#corpus').textContent=`${m.jobs.toLocaleString()} open jobs · Updated ${new Date(m.built_at).toLocaleDateString()}`;
+ if(!models){
+  const entries=await Promise.all(['salary','arrangement','seniority','age','location'].map(async name=>{
+   try{return[name,await(await cachedData('/data/'+(name==='location'?'location-countries':name+'-model')+'.json',m.built_at)).json()]}catch{return[name,null]}
+  }));
+  models=Object.fromEntries(entries.map(([name,model])=>[name,model?.recipe&&model.recipe!==m.recipe?null:model]));
+ }
+ return m;
 }
-$("#more").onclick = () => renderCards(state.cards.length + 24);
-function decide(n, v, el) {
-  state.decided.set(n.id, v); el.className = "card " + v;
-  if (v === "maybe") for (const leaf of leavesUnder(n)) fetchGroup(leaf);
-  $("#next2").disabled = ![...state.decided.values()].includes("maybe");
+async function nearest(vector,excluded=[],advance=false){
+ const {ranked}=await indexClient.request({type:'rank',vector});
+ return chooseGroups(ranked.map(id=>manifest.tree[id]),excluded,{advance});
 }
-const groups = new Map();
-async function fetchGroup(leaf) {
-  if (groups.has(leaf.id)) return;
-  groups.set(leaf.id, null); state.dl.total++; updDl();
-  const gr = await fetch(`${API}/data/groups/${leaf.id}.json`);
-  if (!gr.ok) { groups.delete(leaf.id); state.dl.total--; updDl(); return; }
-  const g = await gr.json();
-  for (const j of g.jobs) {
-    j.v = vec(j); j.leaf = leaf.id; j.sim = dot(state.vec, j.v); state.pool.push(j);
-  }
-  groups.set(leaf.id, g); state.dl.done++; updDl();
+async function parseJobs(jobs,pref,anchor){
+ if(!parser)parser=new Worker('/prepare-worker.js',{type:'module'});const worker=parser,id=++sequence;
+ return new Promise((resolve,reject)=>{const cleanup=()=>{clearTimeout(timer);worker.removeEventListener('message',receive);worker.removeEventListener('error',fail)};const fail=e=>{cleanup();worker.terminate();if(parser===worker)parser=null;parserModels=null;reject(Error(e.message||'Search preparation could not load. Check your connection and retry.'))};const receive=({data})=>{if(data.id!==id)return;cleanup();data.error?reject(Error(data.error)):resolve(data)};const timer=setTimeout(()=>fail({message:'Search preparation timed out. Please retry.'}),180000);worker.addEventListener('message',receive);worker.addEventListener('error',fail);worker.postMessage({id,jobs,pref,anchor,...(parserModels===models?{}:{models})});parserModels=models});
 }
-function updDl() { $("#dl").textContent = `${state.dl.done}/${state.dl.total} groups downloaded · ${state.pool.length.toLocaleString()} jobs local`; $("#dlbar").style.width = state.dl.total ? `${(100 * state.dl.done) / state.dl.total}%` : "0"; }
-$("#next2").onclick = () => { seedNegatives(); refit(); renderJobs(true); show("#s3"); };
-
-// ---------- step 3: labeling + logistic regression ----------
-function seedNegatives() {
-  // a few jobs from each "No" group as hard negatives (fetched lazily, small)
-  for (const [id, v] of state.decided) if (v === "no") {
-    const n = state.manifest.tree[id];
-    for (const leaf of leavesUnder(n).slice(0, 2)) fetch(`${API}/data/groups/${leaf.id}.json`).then((r) => r.json()).then((g) => {
-      for (const j of g.jobs.slice(0, 5)) { j.v = vec(j); j.neg = true; j.sim = dot(state.vec, j.v); state.pool.push(j); state.labels.set(key(j), 0); }
-      refit(); renderJobs(false);
-    });
-  }
+async function fetchSlice(vector,ideal,previous,progress,text=conversation.jd,advance=false){
+ const sameBuild=previous?.builtAt===manifest.built_at;
+ const nodes=await nearest(vector,sameBuild?(previous.fetched||[]):[],advance),raw=[],fetched=[];let completed=0;
+ // Bounded downloads keep both the network and memory usable on small devices.
+ const queue=[...nodes];const failures=[];const anchor=norm(ideal.vector);
+ const sameIdeal=previous&&JSON.stringify(previous.ideal.vector)===JSON.stringify(ideal.vector);
+ if(!nodes.length&&previous&&sameIdeal&&previous.ideal.location===ideal.location)return previous;
+ await Promise.all(Array.from({length:3},async()=>{while(queue.length){const n=queue.shift();try{const g=await(await cachedData(`/data/groups/${n.id}.json`,manifest.built_at,{validate:async r=>{const g=await r.json();if(!Array.isArray(g.jobs)||g.leaf!==n.id||g.jobs.some(j=>typeof j.v!=='string'||j.v.length!==4*Math.ceil(manifest.dims*4/3)))throw Error('The group is incomplete. Please retry.')}})).json();if(g.leaf!==undefined&&g.leaf!==n.id)throw Error('Index changed');for(const j of g.jobs)raw.push({...j,leaf:n.id});fetched.push(n.id)}catch(e){failures.push(n.id)}progress(++completed,nodes.length)}}));
+ if(!raw.length&&nodes.length)throw Error('Could not download matching jobs. Please retry; your previous search is safe.');
+ if(nodes.length&&manifest.etag){const check=await fetch('/data/manifest.json',{method:'HEAD',cache:'no-cache'});if(!check.ok||check.headers.get('etag')!==manifest.etag){indexChecked=0;throw Error('The daily index was updated during your search. Please retry.')}}
+ progress(nodes.length,nodes.length,'Preparing location, salary and freshness filters…');
+ const prepared=raw.length?await parseJobs(raw,ideal.location,anchor):{jobs:[],remoteOnly:previous?.remoteOnly||false};
+ const union=new Map((previous?.jobs||[]).map(j=>[j.k,j]));
+ // Re-apply eligibility to the old slice when the person revises their location preference.
+ if(previous&&previous.ideal.location!==ideal.location){const oldRaw=previous.jobs.map(j=>{const [ats,rest]=j.k.split(/\/(.+)/),[slug,id]=rest.split(/#(.+)/);return{ats,slug,id,title:j.t,company:j.c,location:j.l,url:j.u,seen:j.s,pub:j.p,jd:j.jd,leaf:j.g,v:j.v,sim:sameIdeal?j.sim:dot(anchor,decode(j.v))}});const old=await parseJobs(oldRaw,ideal.location,anchor);for(const j of old.jobs)union.set(j.k,j)}
+ for(const j of prepared.jobs)union.set(j.k,j);
+ if(previous&&!sameIdeal)for(const j of union.values())j.sim=dot(anchor,decode(j.v));
+ const groups={...(previous?.groups||{})};for(const n of nodes)groups[n.id]={label:n.label,medoid:n.medoid,size:n.size,exemplars:n.exemplars};
+ return{id:conversation.id,ideal,text,jobs:[...union.values()],groups,remoteOnly:prepared.remoteOnly,builtAt:manifest.built_at,fetched:[...new Set([...(sameBuild?previous.fetched:[]),...fetched])],failures};
 }
-const key = (j) => `${j.ats}/${j.slug}#${j.id}`;
-function refit() {
-  const D = state.manifest.dims; const items = state.pool.filter((j) => state.labels.has(key(j)));
-  const pos = items.filter((j) => state.labels.get(key(j)) === 1).length, neg = items.length - pos;
-  if (pos === 0 || neg === 0) { state.w = null; $("#st3").textContent = `label at least one yes and one no (have ${pos} yes / ${neg} no) — ranked by résumé similarity meanwhile`; return; }
-  // logistic regression on top of the résumé similarity: init w = résumé vector, few epochs of SGD with L2
-  const w = Float32Array.from(state.vec); let b = 0; const lr = 0.5, l2 = 0.01;
-  for (let ep = 0; ep < 30; ep++) for (const j of items) {
-    const y = state.labels.get(key(j)), p = 1 / (1 + Math.exp(-(dot(w, j.v) + b))), g = p - y;
-    for (let i = 0; i < D; i++) w[i] -= lr * (g * j.v[i] + l2 * (w[i] - state.vec[i]));
-    b -= lr * g;
-  }
-  state.w = w; state.b = b;
-  $("#st3").textContent = `model: ${pos} yes / ${neg} no · ${state.pool.length.toLocaleString()} jobs ranked locally`;
+function showResults(reload=true){document.body.classList.add('results-mode');$('#workspace').hidden=true;$('#results').hidden=false;$('#resume-search').hidden=false;document.querySelectorAll('.nav-step').forEach((e,i)=>e.classList.toggle('active',i===1));if(reload)$('#search-frame').src='/search';history.replaceState(null,'','#matches')}
+$('#edit-search').onclick=()=>{document.body.classList.remove('results-mode');$('#workspace').hidden=false;$('#results').hidden=true;document.querySelectorAll('.nav-step').forEach((e,i)=>e.classList.toggle('active',i===0));history.replaceState(null,'','#draft')};
+$('#resume-search').onclick=()=>showResults(false);
+$('#find').onclick=async()=>{
+ if(busy||chatBusy||expanding)return;syncDraft();busy=true;$('#send').disabled=true;for(const id of ['title','loc','draft'])$('#'+id).readOnly=true;syncDraft();$('#progress').hidden=false;$('#search-status').textContent='Finding the right corner of the job market…';
+ try{
+  conversation.versions.push({jd:conversation.jd,title:conversation.title,location:conversation.location,at:Date.now()});persist();
+  await loadIndex();const signature=JSON.stringify([conversation.jd,conversation.title,conversation.location,manifest.recipe]);let ideal;
+  if(conversation.embedding?.signature===signature)ideal=conversation.embedding.ideal;
+  else{const e=await jsonFetch('/embed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:conversation.jd,title:conversation.title,location:conversation.location})});if(e.recipe!==manifest.recipe||e.vector?.length!==manifest.dims)throw Error('The search index is updating. Please try again shortly.');ideal={...e,title:conversation.title,location:conversation.location};conversation.embedding={signature,ideal};persist()}
+  const next=await fetchSlice(norm(ideal.vector),ideal,current,(done,total,msg)=>{$('#progress').max=total||12;$('#progress').value=done;$('#search-status').textContent=msg||`Gathering your matches · ${done} of ${total}`});
+  if(!next.jobs.length)throw Error('No matching jobs were available. Try a broader description.');
+  await setSearch(next);current=next;showResults();$('#expand-status').textContent=next.failures.length?'Some matches could not load. The search will try again as you browse.':'';
+ }catch(e){$('#search-status').textContent=e.message}
+ finally{busy=false;$('#send').disabled=false;for(const id of ['title','loc','draft'])$('#'+id).readOnly=false;$('#progress').hidden=true;syncDraft();if(expansionQueue.length)expand(expansionQueue.shift())}
+};
+let expansionQueue=[];
+async function expand(key=null){
+ if(!current)return;
+ if(busy||chatBusy||expanding){if(!expansionQueue.includes(key))expansionQueue.push(key);return}
+ expanding=true;syncDraft();$('#expand-status').textContent=key?'Finding more jobs like the one you saved…':'Finding more matches…';
+ try {
+  await loadIndex();
+  if(manifest.recipe!==current.ideal.recipe)throw Error('The search index has changed. Refine your ideal role to update your search.');
+  const j=current.jobs.find(j=>j.k===key);
+  const next=await fetchSlice(j?norm(decode(j.v)):norm(current.ideal.vector),current.ideal,current,
+   (d,t,msg)=>{$('#expand-status').textContent=msg||`Finding more matches · ${d} of ${t}`},current.text,key===null);
+  const known=new Set(current.jobs.map(j=>j.k));
+  const addedJobs=next.jobs.filter(j=>!known.has(j.k));
+  const added=addedJobs.length;
+  if(next!==current)await setSearch(next);current=next;
+  $('#expand-status').textContent=added?`${added.toLocaleString()} new matches added`:'';
+  if(added)$('#search-frame').contentWindow.postMessage({type:'matches-updated',snapshot:{id:next.id,ideal:{recipe:next.ideal.recipe},jobs:addedJobs,groups:next.groups}},location.origin);
+ } catch(e){$('#expand-status').textContent=e.message}
+ finally {
+  expanding=false;syncDraft();
+  if(expansionQueue.length)expand(expansionQueue.shift());
+ }
 }
-function score(j) { return state.w ? 1 / (1 + Math.exp(-(dot(state.w, j.v) + state.b))) : j.sim; }
-let ranked = [];
-function renderJobs(reset) {
-  ranked = state.pool.filter((j) => !j.neg).sort((a, b) => score(b) - score(a));
-  if (reset) state.shown = 0;
-  const el = $("#jobs"); el.innerHTML = "";
-  const N = Math.min(ranked.length, state.shown + 40);
-  for (let i = 0; i < N; i++) el.appendChild(jobEl(ranked[i], i));
-  state.shown = N; cur = Math.min(cur, N - 1); hi();
-}
-$("#morejobs").onclick = () => renderJobs(false);
-function jobEl(j, i) {
-  const d = document.createElement("div"); const l = state.labels.get(key(j)); d.className = "job " + (l === 1 ? "pos" : l === 0 ? "neg" : ""); d.dataset.i = i;
-  d.innerHTML = `<div class="t"><b>${esc(j.title)}</b><div>${esc(j.company)}${j.location ? " · " + esc(j.location) : ""} · <a href="${esc(j.url)}" target="_blank" rel="noopener">open ↗</a></div><div class="jd" style="display:none;margin-top:8px;color:#c9c9d0;font-size:13px;white-space:pre-wrap">${esc(j.jd || "(no description)")}</div></div><div class="s">${score(j).toFixed(2)}</div>`;
-  d.onclick = () => { cur = i; hi(); const x = d.querySelector(".jd"); x.style.display = x.style.display === "none" ? "block" : "none"; };
-  return d;
-}
-let cur = 0;
-function hi() { document.querySelectorAll(".job").forEach((e, i) => (e.style.outline = i === cur ? "2px solid var(--acc)" : "")); const e = document.querySelector(`.job[data-i="${cur}"]`); e && e.scrollIntoView({ block: "nearest" }); }
-document.addEventListener("keydown", (ev) => {
-  if (!$("#s3").classList.contains("active") || ev.target.tagName === "TEXTAREA" || ev.target.tagName === "INPUT") return;
-  const j = ranked[cur]; if (!j) return;
-  if (ev.key === "j" || ev.key === "J") { state.labels.set(key(j), 1); refit(); renderJobs(false); cur++; hi(); }
-  else if (ev.key === "k" || ev.key === "K") { state.labels.set(key(j), 0); refit(); renderJobs(false); cur++; hi(); }
-  else if (ev.key === " ") { ev.preventDefault(); cur++; hi(); }
-  else if (ev.key === "ArrowUp") { cur = Math.max(0, cur - 1); hi(); } else if (ev.key === "ArrowDown") { cur++; hi(); }
+window.addEventListener('message',e=>{
+ if(e.origin!==location.origin||e.source!==$('#search-frame').contentWindow)return;
+ if(e.data?.type==='expand'&&typeof e.data.key==='string')expand(e.data.key);
+ else if(e.data?.type==='expand-more')expand();
 });
-$("#export").onclick = () => {
-  const m = { recipe: state.manifest.recipe, dims: state.manifest.dims, w: state.w ? Array.from(state.w, (x) => +x.toFixed(5)) : Array.from(state.vec, (x) => +x.toFixed(5)), b: +state.b.toFixed(5),
-    groups_maybe: [...state.decided].filter(([, v]) => v === "maybe").map(([id]) => id), labels: [...state.labels].map(([k, v]) => [k, v]), exported_at: Date.now() };
-  const el = $("#exp"); el.style.display = "block"; el.textContent = JSON.stringify(m); navigator.clipboard?.writeText(JSON.stringify(m));
-  $("#st3").textContent += " · search JSON copied to clipboard";
-};
-function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+getSearch().then(s=>{if(s?.jobs?.length){current=s;conversation.id=s.id;persist();$('#resume-search').hidden=false;$('#search-frame').src='/search';if(location.hash!=='#draft')showResults(false)}}).catch(e=>{$('#search-status').textContent=e.message});
+
+window.addEventListener('pagehide',persist);

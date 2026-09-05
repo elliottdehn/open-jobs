@@ -1,0 +1,4 @@
+let db;
+async function database(){return db||=await new Promise((resolve,reject)=>{const r=indexedDB.open('open-jobs-hosted',1);r.onupgradeneeded=()=>r.result.createObjectStore('search');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('Browser storage is unavailable. Enable site storage to save your search.'))})}
+export async function getSearch(){const d=await database();return new Promise((resolve,reject)=>{const r=d.transaction('search').objectStore('search').get('current');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+export async function setSearch(value){const d=await database();return new Promise((resolve,reject)=>{const t=d.transaction('search','readwrite');t.objectStore('search').put(value,'current');t.oncomplete=resolve;t.onerror=()=>reject(Error('Your browser could not save this search. Free some site storage and retry.'))})}

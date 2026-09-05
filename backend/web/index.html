@@ -1,66 +1,14 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JobScream — the local AI job board</title>
-<style>
-  :root { --bg:#0b0c10; --fg:#e8e8ea; --mut:#9a9aa3; --card:#15161c; --line:#2a2b33; --acc:#7c5cff; --ok:#2ecc71; --no:#e74c3c; }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
-  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px }
-  header h1 { margin:0; font-size:20px; letter-spacing:.5px } header span { color:var(--mut); font-size:13px }
-  main { max-width:1100px; margin:0 auto; padding:20px 24px }
-  .step { display:none } .step.active { display:block }
-  textarea { width:100%; min-height:220px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:12px; font:14px/1.4 ui-monospace,Menlo,monospace }
-  input[type=text] { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14px; width:100% }
-  .row { display:flex; gap:10px; margin:10px 0 } .row > * { flex:1 }
-  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:14px; cursor:pointer } button:disabled { opacity:.5; cursor:default }
-  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg) }
-  .status { color:var(--mut); font-size:13px; margin:8px 0; min-height:18px }
-  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; margin-top:12px }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:6px }
-  .card.maybe { border-color:var(--ok) } .card.no { opacity:.35 }
-  .card .lbl { font-weight:600 } .card .meta { color:var(--mut); font-size:12px } .card ul { margin:4px 0 0 16px; padding:0; font-size:13px; color:#c9c9d0 } .card li span { color:var(--mut) }
-  .card .btns { display:flex; gap:8px; margin-top:auto } .card .btns button { flex:1; padding:7px }
-  .btn-yes { background:var(--ok) } .btn-no { background:var(--no) }
-  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden } .bar i { display:block; height:100%; background:var(--acc); width:0 }
-  .job { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:8px 0; display:flex; gap:12px; align-items:center }
-  .job.pos { border-color:var(--ok) } .job.neg { border-color:var(--no); opacity:.55 }
-  .job .t { flex:1 } .job .t b { font-size:15px } .job .t div { color:var(--mut); font-size:13px } .job .s { font:12px ui-monospace,Menlo,monospace; color:var(--mut); width:60px; text-align:right }
-  .job a { color:var(--acc); text-decoration:none }
-  kbd { background:var(--line); border-radius:4px; padding:1px 6px; font:12px ui-monospace,Menlo,monospace }
-  .hint { color:var(--mut); font-size:13px }
-  .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap }
-  pre.export { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:160px }
-</style>
-</head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>open-jobs — Find work that fits you</title><meta name="description" content="Describe the work you want. Build your ideal job description with AI, then explore real openings with a search that learns your taste."><link rel="stylesheet" href="/style.css"></head>
 <body>
-<header><h1>JobScream</h1><span>the local AI job board · it's literally local</span><span id="corpus"></span></header>
-<main>
-  <section id="s1" class="step active">
-    <h2>1. Who are you looking for work as?</h2>
-    <p class="hint">Paste your résumé or a paragraph about the work you want. It's embedded once (rate-limited per IP) and the vector stays in this tab; nothing else leaves your machine.</p>
-    <div class="row"><input id="title" type="text" placeholder="Target title (optional), e.g. Senior Backend Engineer"><input id="loc" type="text" placeholder="Location preference (optional), e.g. Berlin / Remote US"></div>
-    <textarea id="resume" placeholder="Résumé text or a description of what you want…"></textarea>
-    <div class="row"><button id="go">Find my neighbourhood</button></div>
-    <div class="status" id="st1"></div>
-  </section>
-
-  <section id="s2" class="step">
-    <div class="top"><h2>2. Your neighbourhood</h2><div><button class="ghost" id="more">Show more groups</button> <button id="next2" disabled>Next: teach the model →</button></div></div>
-    <p class="hint">Groups of similar jobs, nearest first. <b>Maybe</b> downloads the group; <b>No</b> skips it (and teaches the model what you don't want). <span id="dl"></span></p>
-    <div class="bar"><i id="dlbar"></i></div>
-    <div class="cards" id="cards"></div>
-  </section>
-
-  <section id="s3" class="step">
-    <div class="top"><h2>3. Teach it</h2><div class="hint"><kbd>J</kbd> yes · <kbd>K</kbd> no · <kbd>Space</kbd> skip · model refits live</div></div>
-    <div class="status" id="st3"></div>
-    <div id="jobs"></div>
-    <div class="row"><button class="ghost" id="morejobs">Show more</button><button id="export">Export search (weights) →</button></div>
-    <pre class="export" id="exp" style="display:none"></pre>
-  </section>
+<header class="site-header"><a class="wordmark" href="/" aria-label="open-jobs home"><span class="mark">↗</span>open-jobs<span class="wordmark-dot">.</span></a><nav aria-label="Your search"><span class="nav-step active">01 <b>Your next role</b></span><span class="nav-line"></span><span class="nav-step">02 <b>Your matches</b></span></nav><button class="quiet" id="resume-search" hidden>Back to matches ↗</button></header>
+<main class="workspace" id="workspace">
+<section class="conversation"><div class="eyebrow"><span class="live-dot"></span> A JOB SEARCH THAT STARTS WITH YOU</div><h1>What would you<br>love to work on<span>?</span></h1><p class="intro">Let’s write the job you wish existed.<br>Then find the companies hiring for it.</p>
+<div id="messages" role="log" aria-label="Conversation with your job assistant" aria-live="polite"><article class="message assistant"><span class="avatar">↗</span><div><b>Your job assistant</b><p>Tell me about the work you want to do next, and where you’d like to work. A few sentences is plenty to start.</p></div></article></div>
+<div class="suggestions" id="suggestions"><button type="button">I want to build things</button><button type="button">I’m changing careers</button><button type="button">I know my next role</button></div>
+<form id="chat-form"><label class="sr-only" for="message">Describe your ideal work</label><textarea id="message" rows="3" maxlength="6000" placeholder="I’m looking for a role where I can…" required></textarea><div class="composer-footer"><span>Enter to send · Shift + Enter for a new line</span><button class="send" id="send" type="submit" aria-label="Send message">↑</button></div></form>
+<p id="chat-status" class="status" role="status"></p><p class="privacy">Chat messages and your draft are sent to OpenAI to help write your JD. Please leave out résumés and personal details. Your saved jobs and notes stay in this browser.</p></section>
+<section class="draft-panel" aria-label="Your ideal job description"><div class="draft-heading"><span class="eyebrow">YOUR NEXT CHAPTER</span><span class="draft-state" id="draft-state">Draft in progress</span></div><div class="document"><div class="document-heading"><span class="document-icon">≡</span><span>THE ROLE YOU’RE LOOKING FOR</span></div><label for="title">Target role</label><input id="title" maxlength="200" placeholder="Your ideal job title"><label for="loc">Location & remote policy</label><input id="loc" maxlength="200" placeholder="e.g. Austin, TX or Remote, US"><label for="draft">Your ideal job description</label><textarea id="draft" maxlength="16000" placeholder="Your draft will take shape here as we talk.&#10;&#10;The work you’ll do.&#10;The skills you want to use.&#10;The things that matter to you.&#10;&#10;You can also write or edit it directly."></textarea></div><div class="draft-footer"><p>Make it yours. Every field is editable.<br>We’ll search when you say it reads right.</p><button class="primary" id="find" disabled>This is my kind of job <span>→</span></button><p id="search-status" class="status" role="status"></p><progress id="progress" max="12" value="0" hidden aria-label="Preparing your matches"></progress></div></section>
 </main>
-<script src="app.js"></script>
-</body>
-</html>
+<section id="results" hidden><div class="results-heading"><div><span class="eyebrow">YOUR SEARCH, SHAPED BY YOU</span><h2>Find your next chapter.</h2></div><button class="quiet" id="edit-search">← Refine my ideal role</button></div><p class="search-tip">Save with J, pass with K, open descriptions with Space, and open postings with O. Try the rainbow Sort button to teach your search what you like.</p><p id="expand-status" class="status" role="status"></p><iframe id="search-frame" title="Your job matches and search tools"></iframe></section>
+<footer class="site-footer"><span>open-jobs · A little more possibility.</span><span id="corpus">Real jobs. A search that learns you.</span></footer><script type="module" src="/app.js"></script></body></html>

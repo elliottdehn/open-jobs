@@ -1,3 +1,4 @@
+import { chat } from './chat';
 import { enabledAts, boardName, slugsFor, fetchers } from "./ats";
 import { resolveJobUrl } from "./probe";
 export { Board } from "./board";
@@ -67,13 +68,14 @@ export default {
 		const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
 		const cors = {
 			"access-control-allow-origin": "*",
-			"access-control-allow-methods": "GET, POST, OPTIONS",
+			"access-control-allow-methods": "GET, HEAD, POST, OPTIONS",
 			"access-control-allow-headers": "content-type, authorization",
-			"access-control-expose-headers": "content-range, content-length, accept-ranges, x-ratelimit-remaining",
+			"access-control-expose-headers": "content-range, content-length, accept-ranges, etag, x-ratelimit-remaining",
 		};
 		if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
 		// ---- public endpoints (no admin token) ----
+		if (url.pathname === '/chat' && request.method === 'POST') return chat(request, env);
 
 		// GET /probe?url=<job url>[&board=ats/slug] -> is this posting in the corpus, and how fresh is its board?
 		//   {resolved:{ats,slug,id,hint}, crawled, board:{lastOkAt,lastStatus,jobCount,nextFetchAt,slotMs}|null,
@@ -233,25 +235,28 @@ export default {
 		}
 
 		// GET /data/<key>  -> object from the DATA R2 bucket (manifest, group files, parquet) with Range support
-		if (parts[0] === "data" && parts.length >= 2 && request.method === "GET") {
+		if (parts[0] === "data" && (parts.length >= 2) && (request.method === "GET" || request.method === "HEAD")) {
 			const key = parts.slice(1).join("/");
 			const range = request.headers.get("range");
-			const obj = await env.DATA.get(key, { range: range ? request.headers : undefined });
+			const obj = request.method === "HEAD" ? await env.DATA.head(key) : await env.DATA.get(key, { range: range ? request.headers : undefined });
 			if (!obj) return new Response("not found", { status: 404, headers: cors });
 			const headers = new Headers(cors);
 			obj.writeHttpMetadata(headers);
 			headers.set("etag", obj.httpEtag);
 			headers.set("accept-ranges", "bytes");
 			headers.set("cache-control", "public, max-age=3600");
+			if (request.headers.get("if-none-match") === obj.httpEtag) return new Response(null, { status: 304, headers });
+			const body = (obj as R2ObjectBody).body;
+			if (!body) return new Response(null, { headers });
 			if (range && obj.range && "offset" in obj.range && obj.range.offset !== undefined) {
 				const offset = obj.range.offset;
 				const end = offset + (obj.range.length ?? obj.size - offset) - 1;
 				headers.set("content-range", `bytes ${offset}-${end}/${obj.size}`);
 				headers.set("content-length", String(end - offset + 1));
-				return new Response(obj.body, { status: 206, headers });
+				return new Response(body, { status: 206, headers });
 			}
 			headers.set("content-length", String(obj.size));
-			return new Response(obj.body, { headers });
+			return new Response(body, { headers });
 		}
 
 		// ---- admin endpoints ----
