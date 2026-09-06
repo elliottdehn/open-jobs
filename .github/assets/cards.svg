@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="128" viewBox="0 0 880 128" role="img" aria-label="Four listings graded fresh, stale, re-stamped, ghost">
+<g transform="translate(0,4)">
+  <rect width="208" height="118" rx="12" fill="#FFFFFF" stroke="#DDE4DD"/>
+  <text x="16" y="32" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="13.5" font-weight="600" fill="#152019">Senior Platform Engineer</text>
+  <text x="16" y="52" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="11.5" fill="#5C6B61">Remote, US</text>
+  <rect x="14" y="66" width="58" height="22" rx="11" fill="#E4F2E8"/>
+  <text x="43.0" y="81" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#177A45">🌱 Fresh</text>
+  <text x="16" y="106" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" fill="#5C6B61">posted 6 days ago</text>
+</g>
+<g transform="translate(224,4)">
+  <rect width="208" height="118" rx="12" fill="#FFFFFF" stroke="#DDE4DD"/>
+  <text x="16" y="32" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="13.5" font-weight="600" fill="#152019">Leasing Specialist</text>
+  <text x="16" y="52" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="11.5" fill="#5C6B61">Denver, CO</text>
+  <rect x="14" y="66" width="58" height="22" rx="11" fill="#F6ECDC"/>
+  <text x="43.0" y="81" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#A2691F">🥀 Stale</text>
+  <text x="16" y="106" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" fill="#5C6B61">open 231 days</text>
+</g>
+<g transform="translate(448,4)">
+  <rect width="208" height="118" rx="12" fill="#FFFFFF" stroke="#DDE4DD"/>
+  <text x="16" y="32" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="13.5" font-weight="600" fill="#152019">CDL-A Truck Driver</text>
+  <text x="16" y="52" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="11.5" fill="#5C6B61">48 states</text>
+  <rect x="14" y="66" width="93" height="22" rx="11" fill="#F7E5E4"/>
+  <text x="60.5" y="81" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#B34A45">🔁 Re-stamped</text>
+  <text x="16" y="106" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" fill="#5C6B61">first seen 6 weeks ago</text>
+</g>
+<g transform="translate(672,4)">
+  <rect width="208" height="118" rx="12" fill="#FFFFFF" stroke="#DDE4DD"/>
+  <text x="16" y="32" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="13.5" font-weight="600" fill="#152019">Psychiatrist, req OH234</text>
+  <text x="16" y="52" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="11.5" fill="#5C6B61">staffing firm</text>
+  <rect x="14" y="66" width="58" height="22" rx="11" fill="#ECE7F7"/>
+  <text x="43.0" y="81" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#6E5BAF">👻 Ghost</text>
+  <text x="16" y="106" font-family="-apple-system, 'Segoe UI', Helvetica, sans-serif" font-size="10.5" fill="#5C6B61">accepting since 2015</text>
+</g>
+</svg>
