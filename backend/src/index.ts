@@ -7,12 +7,13 @@ import type { BoardState, EnrichJobsResult, JobQuery, StoredJob } from "./board"
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
 import { EMBED_TAG, embedQueryText } from "./openai";
+import { JD_ESTIMATE_USD, JD_MODELS, expandJd, type JdModel } from "./jd";
 export { Registry } from "./registry";
 
 const EXPORT_CONCURRENCY = 20;
 
 function unauthorized(): Response {
-	return new Response("unauthorized", { status: 401 });
+	return new Response("unauthorized", { status: 401, headers: { "access-control-allow-origin": "*" } });
 }
 
 const norm = (s: string) => (s ?? "").toLowerCase().replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/, "");
@@ -169,6 +170,40 @@ export default {
 				const msg = e instanceof Error ? e.message : String(e);
 				const busy = /429|rate limit/i.test(msg);
 				return Response.json({ error: busy ? "embedding service busy, try again in a moment" : msg }, { status: busy ? 503 : 500, headers: { ...cors, "retry-after": "5" } });
+			}
+		}
+
+		// POST /jd  {"title","location","blurb","model"?: "luna"|"astra"} -> the ideal JD for that person, shaped like a
+		//   real posting: {jd (plain text, embed-ready), sections, model, usage, costUsd, budget}. Public. 20 per 10 min per IP,
+		//   and metered against the same per-IP USD windows as /enrich (astra is ~40x luna; hold JD_ESTIMATE_USD, settle actual).
+		if (parts[0] === "jd" && parts.length === 1 && request.method === "POST") {
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			const rl = await env.RATELIMIT.getByName(`jd:${ip}`).hit(20, 600_000);
+			if (!rl.ok) return Response.json({ error: "rate limited", retryAfterSeconds: Math.ceil(rl.resetMs / 1000) }, { status: 429, headers: { ...cors, "retry-after": String(Math.ceil(rl.resetMs / 1000)), "x-ratelimit-remaining": "0" } });
+			const body = (await request.json().catch(() => null)) as { title?: unknown; location?: unknown; blurb?: unknown; model?: unknown } | null;
+			const title = typeof body?.title === "string" ? body.title.trim().slice(0, 200) : "";
+			const location = typeof body?.location === "string" ? body.location.trim().slice(0, 200) : "";
+			const blurb = typeof body?.blurb === "string" ? body.blurb.trim().slice(0, 8000) : "";
+			const model = (body?.model ?? "luna") as JdModel;
+			if (!title || !location || blurb.length < 20) return Response.json({ error: "title, location, and blurb (>= 20 chars) required" }, { status: 400, headers: cors });
+			if (!(model in JD_MODELS)) return Response.json({ error: `model must be one of ${Object.keys(JD_MODELS).join(", ")}` }, { status: 400, headers: cors });
+			const hourLimit = Number(env.ENRICH_HOUR_USD || 5), dayLimit = Number(env.ENRICH_DAY_USD || 50);
+			const budget = env.BUDGET.getByName(`ip:${ip}`);
+			const reserved = JD_ESTIMATE_USD[model];
+			const res = await budget.reserve(reserved, hourLimit, dayLimit);
+			if (!res.ok) return Response.json({ error: "spend limit reached", retryAfterSeconds: Math.ceil(res.retryAfterMs / 1000), spent: { hourUsd: res.hourUsd, dayUsd: res.dayUsd, hourLimit, dayLimit } },
+				{ status: 429, headers: { ...cors, "retry-after": String(Math.ceil(res.retryAfterMs / 1000)) } });
+			try {
+				const r = await expandJd(env, { title, location, blurb, model });
+				await budget.settle(reserved, r.costUsd);
+				const st = await budget.status(hourLimit, dayLimit);
+				return Response.json({ ...r, costUsd: +r.costUsd.toFixed(5), budget: { hourUsd: +st.hourUsd.toFixed(4), dayUsd: +st.dayUsd.toFixed(4), hourLimit, dayLimit } },
+					{ headers: { ...cors, "x-ratelimit-remaining": String(rl.remaining) } });
+			} catch (e) {
+				await budget.settle(reserved, 0);
+				const msg = e instanceof Error ? e.message : String(e);
+				const busy = /429|rate limit/i.test(msg);
+				return Response.json({ error: busy ? "model busy, try again in a moment" : msg }, { status: busy ? 503 : 500, headers: { ...cors, "retry-after": "5" } });
 			}
 		}
 
@@ -504,6 +539,6 @@ export default {
 			});
 		}
 
-		return new Response("not found", { status: 404 });
+		return new Response("not found", { status: 404, headers: cors });
 	},
 } satisfies ExportedHandler<Env>;
