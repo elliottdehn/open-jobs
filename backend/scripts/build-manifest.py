@@ -48,7 +48,10 @@ import zstandard
 _zc = zstandard.ZstdCompressor(level=3); _zd = zstandard.ZstdDecompressor()
 N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
 D = 1536
-X = np.empty((N, D), dtype=np.float16)  # storage only; every consumer computes in f32/f64 per block
+_xpath = os.path.join(root, ".vectors.f16.npy")
+if os.path.exists(_xpath): os.remove(_xpath)
+# file-backed so memory pressure evicts pages instead of killing the build (two jetsam deaths on 2026-09-05)
+X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
 small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "published_ms")}
 jd_z = []; enr_z = []
 pos_ = 0
@@ -225,5 +228,8 @@ for n in leaves:
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
                      "v": base64.b64encode(V[i].tobytes()).decode()})
     with open(os.path.join(out, "groups", f"{n['id']}.json"), "w") as f: json.dump({"leaf": n["id"], "lo": n["lo"], "hi": n["hi"], "jobs": jobs}, f)
+del X
+try: os.remove(_xpath)
+except OSError: pass
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
 print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")
