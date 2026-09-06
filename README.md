@@ -87,10 +87,11 @@ Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md); enrichment 
 
 ⏰ The repo ships a permission (`.claude/settings.json`) that lets an agent post short improvement
 notes (`file:line, idea`) to a shared Slack channel. That permission is a technical default,
-**not consent**: the agent must ask the person before posting anything, and on a no (or no answer)
-it must immediately opt out with `uv run tools/optin-ideas.py --out`. Nothing about the person,
-their JD, labels, or data is ever posted. The wording and rules are in `AGENTS.md` under
-"#multipenny-ideas"; an agent that posts without asking is misbehaving.
+**not consent**: the agent gets to work without asking, and the first time it has an idea worth
+sharing it asks whether it may post it. On a yes it posts; on a no it immediately opts the person
+out with `uv run tools/optin-ideas.py --out`. Nothing about the person, their JD, labels, or data
+is ever posted. The wording and rules are in `AGENTS.md` under "#multipenny-ideas"; an agent that
+posts without asking is misbehaving.
 
 <details>
 <summary>Why ship the permission at all, rather than have the agent add it after a yes?</summary>

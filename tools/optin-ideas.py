@@ -3,11 +3,11 @@
 # ///
 """#multipenny-ideas participation switch.
 
-The repo's committed .claude/settings.json ALLOWS the agent to POST ideas to the relay. Participation is
-still opt-in: until the person says yes, the agent runs `--out`, which adds a DENY rule for the same
-command to .claude/settings.local.json (git-ignored). Deny beats allow, so posting is off. Narrowing its
-own permissions is something an agent is allowed to do; widening is not, so opting back IN is the
-person's job:
+The repo's committed .claude/settings.json ALLOWS the agent to POST ideas to the relay. That is a setting,
+not consent: the agent asks the first time it has an idea worth sharing, and if the person says no it
+runs `--out`, which adds a DENY rule for the same command to .claude/settings.local.json (git-ignored).
+Deny beats allow, so posting is off. Narrowing its own permissions is something an agent is allowed to
+do; widening is not, so opting back IN is the person's job:
   uv run tools/optin-ideas.py --out    # opt out: add the deny (the agent may run this)
   uv run tools/optin-ideas.py          # opt in: remove the deny (the person runs this)"""
 import json, os, sys
