@@ -190,10 +190,14 @@ def _clause_elig(p, j, rm, jd):
     for r in p["regions"]: want |= MACRO.get(r, set())
     have = set(j["countries"])
     for r in j["regions"]: have |= MACRO.get(r, set())
+    have_jd = set()
     for m in RESTRICT_RE.finditer((jd or "")[:6000]):
         cs, rs = find_places(m.group(0))
-        have |= cs
-        for r in rs: have |= MACRO.get(r, set())
+        have_jd |= cs
+        for r in rs: have_jd |= MACRO.get(r, set())
+    # The JD can narrow an explicit location, never widen it: benefits boilerplate ("for US-based full-time
+    # employees we offer…") must not make a "Remote - EMEA" posting US-eligible. With no location, the JD decides.
+    have = ((have & have_jd) or have) if have else have_jd
     if remote_only:
         # the job must actually be labelled remote (location, title, or an explicit statement). Unknown is not remote.
         if rm in ("onsite", "hybrid"): return False, f"{rm} (you asked for remote)"
