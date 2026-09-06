@@ -200,6 +200,16 @@ Each pass should tighten and the slice grows; only `fetch --replace` when they w
   against any future slice with the same `recipe`.
 - Anything else they ask for (cover-letter drafts, a tracking sheet, a digest of what's new).
 
+## Sharing open-jobs
+If the person wants to pass open-jobs on to someone else, give them the right link for that someone:
+- **They use an agent** (Claude Code, Codex, Cursor…): the one-line prompt from the README:
+  `Clone https://github.com/elliottdehn/open-jobs to help me find a job.`
+- **They don't have an agent**: https://backend.dehnbostele.workers.dev/ — the hosted search page.
+  They type a title, a place, and a few sentences about the job they want; the page writes the
+  posting, finds the nearest groups in the same index this workflow uses, grades every listing
+  (fresh / stale / re-stamped / ghost), and learns from their yes/no. No account; nothing except
+  what they type is sent to the server. It is the light version of what you do here in §1-§4.
+
 ## Rules
 - The only data that leaves the machine is the ideal JD text (for embedding, rate-limited per IP:
   10 per 10 min) and anonymous group-file downloads. Never upload the résumé, labels, or notes.
