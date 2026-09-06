@@ -300,7 +300,7 @@ export default {
 		// GET /ats -> providers fetched by the Worker fleet and their slug counts; ?all=1 adds local-only ones
 		if (parts[0] === "ats" && parts.length === 1) {
 			const list = url.searchParams.get("all") ? Object.keys(fetchers) : enabledAts;
-			return Response.json(Object.fromEntries(list.map((a) => [a, slugsFor(a).length])));
+			return Response.json(Object.fromEntries(list.map((a) => [a, slugsFor(a).length])), { headers: cors });
 		}
 
 		// POST /sync            -> start registry sweep (arm only) for all enabled ATSes
