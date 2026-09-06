@@ -77,6 +77,41 @@ export default {
 		// ---- public endpoints (no admin token) ----
 		if (url.pathname === '/chat' && request.method === 'POST') return chat(request, env);
 
+		// POST /status {keys:["ats/slug#id",...]} -> per-key open/removed status straight from the board
+		// DOs (the source of truth for removed_at). Public, rate-limited. Caps: 1000 keys, 150 boards.
+		// Lets local tooling split "gone from my slice" into closed vs merely-drifted after a rebuild.
+		if (url.pathname === "/status" && request.method === "POST") {
+			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+			const rl = await env.RATELIMIT.getByName(`status:${ip}`).hit(60, 600_000);
+			if (!rl.ok) return Response.json({ error: "rate limited" }, { status: 429, headers: { ...cors, "retry-after": String(Math.ceil(rl.resetMs / 1000)) } });
+			let keys: unknown;
+			try { keys = ((await request.json()) as { keys?: unknown }).keys; } catch { keys = null; }
+			if (!Array.isArray(keys) || keys.length === 0 || keys.length > 1000 || keys.some((k) => typeof k !== "string"))
+				return Response.json({ error: "body must be {keys: string[]} with 1-1000 'ats/slug#id' keys" }, { status: 400, headers: cors });
+			const byBoard = new Map<string, { ats: string; slug: string; ids: string[] }>();
+			for (const k of keys as string[]) {
+				const hash = k.indexOf("#"), slash = k.indexOf("/");
+				if (slash <= 0 || hash <= slash) continue;
+				const ats = k.slice(0, slash), slug = k.slice(slash + 1, hash), id = k.slice(hash + 1);
+				if (!enabledAts.includes(ats)) continue;
+				const bk = `${ats}/${slug}`;
+				if (!byBoard.has(bk)) byBoard.set(bk, { ats, slug, ids: [] });
+				byBoard.get(bk)!.ids.push(id);
+			}
+			if (byBoard.size > 150) return Response.json({ error: `keys span ${byBoard.size} boards; max 150 per request` }, { status: 400, headers: cors });
+			const statuses: Record<string, unknown> = {};
+			await Promise.all([...byBoard.values()].map(async ({ ats, slug, ids }) => {
+				try {
+					const got = await env.BOARD.getByName(boardName(ats, slug)).jobStatuses(ids);
+					for (const id of ids) statuses[`${ats}/${slug}#${id}`] = got[id] ?? { status: "unknown" };
+				} catch {
+					for (const id of ids) statuses[`${ats}/${slug}#${id}`] = { status: "unknown" };
+				}
+			}));
+			for (const k of keys as string[]) if (!(k in statuses)) statuses[k] = { status: "unknown" };
+			return Response.json({ statuses }, { headers: cors });
+		}
+
 		// GET /probe?url=<job url>[&board=ats/slug] -> is this posting in the corpus, and how fresh is its board?
 		//   {resolved:{ats,slug,id,hint}, crawled, board:{lastOkAt,lastStatus,jobCount,nextFetchAt,slotMs}|null,
 		//    job:{found,id,title,url,location,status,firstSeenAt,lastSeenAt,removedAt,detailStatus,embedStatus,embedding?}|null}

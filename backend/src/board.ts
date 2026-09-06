@@ -1073,6 +1073,17 @@ export class Board extends DurableObject<Env> {
 	}
 
 	/** Force a snapshot write now (admin/backfill). */
+	async jobStatuses(ids: string[]): Promise<Record<string, { status: "open" | "removed"; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }>> {
+		const out: Record<string, { status: "open" | "removed"; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }> = {};
+		for (let i = 0; i < ids.length; i += 100) {
+			const batch = ids.slice(i, i + 100);
+			const rows = this.ctx.storage.sql.exec<{ id: string; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }>(
+				`SELECT id, first_seen_at, removed_at, last_seen_at, json_extract(data, '$.publishedAt') AS published_at FROM jobs WHERE id IN (${batch.map(() => "?").join(",")})`, ...batch);
+			for (const r of rows) out[r.id] = { status: r.removed_at == null ? "open" : "removed", first_seen_at: r.first_seen_at, removed_at: r.removed_at, last_seen_at: r.last_seen_at, published_at: r.published_at };
+		}
+		return out;
+	}
+
 	async snapshotNow(): Promise<{ snapshotAt: number | null; error: string | null }> {
 		const meta = await this.meta();
 		if (!meta) throw new Error("board not initialized");

@@ -206,7 +206,13 @@ Each pass should tighten and the slice grows; only `fetch --replace` when they w
 - Don't re-embed on every small edit; embed when the person says the JD reads right.
 - Respect the rate limit: if `embed` returns 429, wait for the `retry-after` and say so.
 - `work/` is theirs; don't delete anything in it. Version the JD instead of overwriting.
-- The index is rebuilt daily; group ids change between builds. Re-run `groups` after a rebuild
+- **Checking whether specific jobs are still open:** `POST /status` with `{"keys": ["ats/slug#id", ...]}`
+(up to 1000 keys / 150 distinct boards, rate-limited 60/10min per IP) returns per-key
+`{status: open|removed|unknown, first_seen_at, removed_at, last_seen_at, published_at}` straight from
+the crawler's records. Use it to tell "closed" apart from "fell out of my slice after a rebuild",
+or to prune dead postings from an accumulated slice before showing them to the person.
+
+The index is rebuilt daily; group ids change between builds. Re-run `groups` after a rebuild
   (`status` shows the manifest date) before fetching new groups.
 
 ## #multipenny-ideas (opt-in idea collection)
