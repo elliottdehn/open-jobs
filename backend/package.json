@@ -8,15 +8,10 @@
     "start": "wrangler dev",
     "cf-typegen": "wrangler types",
     "build:boards": "node scripts/build-boards.mjs",
-    "export": "node scripts/export.mjs",
-    "build:web": "node scripts/build-web.mjs",
-    "predeploy": "npm run build:web",
-    "predev": "npm run build:web",
-    "test:web": "npm run build:web && node scripts/test-web.mjs && node scripts/test-search-live.mjs && node scripts/test-performance.mjs && node scripts/test-preparation.mjs && node scripts/test-startup.mjs"
+    "export": "node scripts/export.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",
-    "pyodide": "314.0.6",
     "typescript": "^5.5.2",
     "wrangler": "^4.126.0"
   },

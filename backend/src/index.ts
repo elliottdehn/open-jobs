@@ -1,4 +1,3 @@
-import { chat } from './chat';
 import { enabledAts, boardName, slugsFor, fetchers } from "./ats";
 import { resolveJobUrl } from "./probe";
 export { Board } from "./board";
@@ -75,7 +74,6 @@ export default {
 		if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
 		// ---- public endpoints (no admin token) ----
-		if (url.pathname === '/chat' && request.method === 'POST') return chat(request, env);
 
 		// POST /status {keys:["ats/slug#id",...]} -> per-key open/removed status straight from the board
 		// DOs (the source of truth for removed_at). Public, rate-limited. Caps: 1000 keys, 150 boards.
