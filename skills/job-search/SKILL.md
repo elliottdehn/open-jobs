@@ -19,6 +19,12 @@ embeds the user's ideal job description (get their OK for that call before makin
    `WORK="$HOME/.open-jobs/work"` before running any command; the tools honor `WORK`.
 3. Requires `uv` (https://docs.astral.sh/uv/) and Python 3.10+. Every command is
    `uv run tools/jobs.py <cmd>`.
+4. In the Claude web or mobile app the sandbox has a network allowlist. If a call to
+   `https://backend.dehnbostele.workers.dev` is blocked, ask the person to allow that one host:
+   open https://claude.ai/new#settings/capabilities, scroll to the bottom, add
+   `https://backend.dehnbostele.workers.dev` under **Additional allowed domains**, then start a
+   fresh session. Details in the README under
+   "Get started".
 
 ## How to work
 

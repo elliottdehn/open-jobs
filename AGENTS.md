@@ -30,6 +30,22 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
   can point group/manifest downloads at a local mirror.
 - `uv run tools/jobs.py status` shows what exists in `work/`.
 
+**Network note (Claude on the web or mobile app):** cloud sessions run behind a network allowlist
+(the default level, *Trusted*, reaches package registries and GitHub only), so the first call to
+`https://backend.dehnbostele.workers.dev` (embed, manifest, groups) may be blocked. If a request to
+it fails with a connection error, a 403 from a proxy, or a "network access denied" message, don't
+retry in a loop and don't route around it. Tell the person this one host needs to be allowed, and
+give them the steps (they are also in the README under "Get started"):
+1. Open https://claude.ai/new#settings/capabilities
+2. Scroll to the bottom. Under **Additional allowed domains**, add `https://backend.dehnbostele.workers.dev`
+3. Start a fresh session and paste the prompt again.
+Only that host is needed; the tools talk to nothing else. A session picks the setting up only when
+it starts. If the session runs in a custom cloud environment with its own Allowed domains list,
+the domain goes there instead.
+
+**ChatGPT note:** a plain chat can't clone a repository or run its tools. If you are ChatGPT and
+can't clone open-jobs, tell the person to switch from **Chat** to **Work** and paste the prompt again.
+
 **Estimated fields:** salary bands, work arrangement, country, and seniority marked `est.` come from small models on
 the embedding (published with the index), applied only where the posting itself doesn't say.
 They are facet values of their own (`remote (est.)` etc.) so nobody mistakes them for stated

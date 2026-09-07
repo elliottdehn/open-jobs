@@ -40,6 +40,32 @@ shortlist. You need [`uv`](https://docs.astral.sh/uv/); everything is `uv run to
 
 **Agents: you MUST read [`AGENTS.md`](AGENTS.md) in full before doing anything else in this repo.**
 
+<details>
+<summary>Using Claude on the web or the mobile app? Allow one domain first.</summary>
+<br>
+
+Cloud sessions run behind a network allowlist that, by default, reaches package registries and
+GitHub and nothing else. The tools here make one kind of outside call, to the public index at
+`backend.dehnbostele.workers.dev`, and it will be blocked until you allow it. Once:
+
+1. Open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities).
+2. Scroll to the bottom. Under **Additional allowed domains**, add `https://backend.dehnbostele.workers.dev`.
+3. Start a fresh session and paste the line again.
+
+That is the only domain this repo needs. If your session runs in a custom cloud environment with
+its own **Allowed domains** list, add the same domain there instead.
+
+</details>
+
+<details>
+<summary>Using ChatGPT? Pick "Work", not "Chat".</summary>
+<br>
+
+In ChatGPT, a plain chat can't clone a repository or run its tools. If it says it can't clone
+open-jobs, switch the mode selector from **Chat** to **Work** and paste the same line again.
+
+</details>
+
 ## Every listing wears its verdict
 
 <p align="center">
