@@ -117,7 +117,8 @@ uv run tools/jobs.py top --n 50                       # -> work/top.html + work/
 uv run tools/jobs.py top --n 50 --notes work/top-notes.json
 ```
 `top` takes the top 50 **eligible, fresh** matches ranked by cosine to their ideal JD (ineligible
-and non-fresh are left out; `--freshness fresh,stale` widens if the fresh set is thin, and say so).
+and non-fresh are left out). If it finds fewer than 25, `fetch --top 24` (then 36) and re-run
+before reaching for `--freshness fresh,stale`; if you do widen, say so.
 Deliver `work/top.html` as a downloadable file or attachment, and summarize the top ten in chat
 with links. Skip §3b, §3c, and §4; refine the ideal JD from their reactions and re-run `top`.
 
@@ -135,9 +136,10 @@ reposted, or possibly never filled), 👻 ghost risk (open >1 year), 🔁 date-b
 than when our crawler first saw it — the re-stamp is caught because first_seen can't be forged). The
 Freshness facet sits in "Fit for you" next to eligibility. **Default to fresh only.** When someone
 just asks for help finding a job, set the Freshness facet to 🌱 Fresh (with eligibility) and put only
-fresh jobs on the shortlist; that is the product. Widen to stale / 👻 / 🔁 only when the person asks,
-or when the fresh set is too thin to be useful — and then say which ones aren't fresh and why they
-may not be real. Stale isn't always bad — a stale-but-real posting can mean thin competition and a
+fresh jobs on the shortlist; that is the product. **A shortlist has at least 25 jobs.** If fresh and
+eligible comes up short, first pull more of the corpus (`fetch --top 24`, then 36), and only then
+widen to stale / 👻 / 🔁 — and say which ones aren't fresh and why they may not be real. Widen
+earlier only when the person asks. Stale isn't always bad — a stale-but-real posting can mean thin competition and a
 motivated hiring manager; say so when it's relevant.
 
 The page ranks by a model seeded at the ideal JD, has text search, facets (group, company,
@@ -230,7 +232,7 @@ Each pass should tighten and the slice grows; only `fetch --replace` when they w
 
 ## 5. Deliverables to leave behind
 - `work/ranked.csv`: the shortlist, best first, with their labels. Fresh jobs only unless they asked
-  for more (§3). Without a browser (cloud agents), the deliverable is `work/top.html` instead.
+  for more, and at least 25 of them (§3). Without a browser (cloud agents), the deliverable is `work/top.html` instead.
 - `work/model.json`: `{recipe, w[1536], b, labels}` — the search as a weight vector; re-usable
   against any future slice with the same `recipe`.
 - Anything else they ask for (cover-letter drafts, a tracking sheet, a digest of what's new).
