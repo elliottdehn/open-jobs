@@ -12,6 +12,8 @@
   uv run tools/jobs.py serve  [--port 8765]                       -> serve work/ + record interactions to work/interactions.jsonl
   uv run tools/jobs.py enrich [--top N | --all]                   -> structured extraction + company for the slice (metered per IP: $5/h, $50/day) -> work/enrichment.json
   uv run tools/jobs.py rank   [--labels work/interactions.jsonl]  -> re-rank with a classifier trained on labels -> work/ranked.csv
+  uv run tools/jobs.py top    [--n 50] [--notes work/top-notes.json] -> work/top.html + work/top.md: the top eligible fresh matches
+                                                                  by cosine, as a static page (no browser/serve needed: cloud agents)
   uv run tools/jobs.py status                                     -> what's in work/
 
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
@@ -613,6 +615,70 @@ def cmd_rank(a):
     print(f"wrote {out} and {WORK}/model.json. Top 10:")
     for i in order[:10]: print(f"  {score[i]:.3f}  {rows[i][3][:60]} | {rows[i][4]} | {rows[i][5]}")
 
+def freshness_of(agm, r):
+    """Same grading as the pages: age is counted from the board's date or the crawler's first sighting, whichever is
+    older (the re-stamp is caught because first_seen can't be forged). Returns (verdict, typical_days)."""
+    agp = None
+    if agm is not None:
+        vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32); vec = vec / (np.linalg.norm(vec) + 1e-9)
+        agp = age_predict(agm, vec)
+    now = time.time() * 1000; p = r[12] if len(r) > 12 else None; s = r[7]
+    if not p and not s: return "unknown", agp
+    age = max((now - p) if p else 0, (now - s) if s else 0) / 864e5
+    if p and s and p - s > 7 * 864e5: return "re-stamped", agp
+    if age > 365: return "ghost", agp
+    if agp is None: return "unknown", agp
+    return ("fresh" if age <= agp else "stale"), agp
+
+def cmd_top(a):
+    """Static shortlist for agents without a browser (Claude web/mobile, ChatGPT): the top N eligible, fresh matches
+    ranked by cosine to the ideal JD. Writes work/top.html (to hand to the person) and work/top.md (full JD text,
+    for the agent to read). --notes work/top-notes.json ({key: "why it fits"}) adds a line under each job."""
+    import html as H
+    d, v = ideal(); rows = load_jobs(); agm = age_model(); pref = (d.get("location") or "").strip()
+    notes = json.load(open(a.notes, encoding="utf-8")) if a.notes and os.path.exists(a.notes) else {}
+    want = set(a.freshness.split(","))
+    picked = []; skipped = {"ineligible": 0, "freshness": 0}
+    for r in rows:  # already sorted by sim desc and deduped
+        el, elr = loc_eligibility(pref, r[5], r[8], r[3]) if pref else (None, "")
+        if el is False: skipped["ineligible"] += 1; continue
+        fr, agp = freshness_of(agm, r)
+        if fr not in want: skipped["freshness"] += 1; continue
+        picked.append((r, el, elr, fr, agp))
+        if len(picked) >= a.n: break
+    def days(ms): return f"{max(0, int((time.time()*1000 - ms) / 864e5))} d ago" if ms else "n/a"
+    title = d.get("title") or "your ideal job"; where = pref or "anywhere"
+    when = time.strftime("%Y-%m-%d")
+    chip = {"fresh": ("🌱 Fresh", "#14301F", "#4FD98A"), "stale": ("🥀 Stale", "#332512", "#E0A659"), "re-stamped": ("🔁 Re-stamped", "#361A18", "#E58680"), "ghost": ("👻 Ghost", "#251F3A", "#A995E3"), "unknown": ("age unknown", "#202C26", "#8FA396")}
+    out = [f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Top {len(picked)} matches: {H.escape(title)}</title>
+<style>body{{margin:0;background:#121915;color:#E7EFE9;font:15.5px/1.5 -apple-system,"Segoe UI",Helvetica,sans-serif}}.w{{max-width:900px;margin:0 auto;padding:32px 20px 80px}}h1{{font-family:Georgia,serif;font-weight:400;font-size:30px;margin:0 0 6px}}h1 em{{font-style:italic;color:#4FD98A}}.sub{{color:#8FA396;margin:0 0 28px}}
+.j{{background:#1A2420;border:1px solid #26312A;border-radius:12px;padding:16px 18px;margin-bottom:10px}}.j .n{{color:#5F7166;font-family:ui-monospace,Menlo,monospace;font-size:12px}}.j h2{{font-size:17px;margin:2px 0 4px}}.j h2 a{{color:#E7EFE9;text-decoration:none}}.j h2 a:hover{{text-decoration:underline;text-decoration-color:#4FD98A}}
+.m{{color:#8FA396;font-size:13.5px}}.c{{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}}.v{{font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap}}.p{{color:#8FA396;background:#202C26;font-weight:500}}
+.why{{color:#E7EFE9;margin:6px 0 0;font-size:14px}}.why b{{color:#4FD98A;font-weight:600}}.x{{color:#8FA396;font-size:13.5px;margin:6px 0 0}}.open{{display:inline-block;margin-top:10px;border:1px solid #4FD98A;color:#4FD98A;border-radius:8px;padding:5px 12px;text-decoration:none;font-size:13.5px}}
+.foot{{color:#5F7166;font-size:12.5px;margin-top:28px}}</style></head><body><div class="w">
+<h1>Top {len(picked)} matches for <em>{H.escape(title)}</em></h1>
+<p class="sub">{H.escape(where)} · fresh postings only, ranked by similarity to your ideal job description · built {when} from <a href="https://github.com/elliottdehn/open-jobs" style="color:#8FA396">open-jobs</a></p>"""]
+    for i, (r, el, elr, fr, agp) in enumerate(picked, 1):
+        key = f"{r[0]}/{r[1]}#{r[2]}"; lab, bg, fg = chip[fr]
+        tip = f"postings like this are typically ~{agp:.0f} days old" if agp else ""
+        why = notes.get(key)
+        jd = re.sub(r"\s+", " ", r[8] or "").strip()
+        out.append(f"""<div class="j"><div class="n">#{i} · match {r[10]*100:.0f}%</div><h2><a href="{H.escape(r[6])}" target="_blank" rel="noopener">{H.escape(r[3])}</a></h2>
+<div class="m">{H.escape(nice_company(r[4]))}{' · ' if nice_company(r[4]) and r[5] else ''}{H.escape(r[5] or '')}</div>
+<div class="c"><span class="v" style="background:{bg};color:{fg}" title="{H.escape(tip)}">{lab}</span>{f'<span class="v p">posted {days(r[12])}</span>' if len(r) > 12 and r[12] else ''}<span class="v p">first seen {days(r[7])}</span>{f'<span class="v p">{H.escape(elr)}</span>' if elr else ''}</div>
+{f'<p class="why"><b>Why it fits:</b> {H.escape(why)}</p>' if why else ''}
+<p class="x">{H.escape(jd[:420])}{'…' if len(jd) > 420 else ''}</p>
+<a class="open" href="{H.escape(r[6])}" target="_blank" rel="noopener">Open the posting ↗</a></div>""")
+    out.append(f"""<p class="foot">Eligible = fits "{H.escape(where)}" by location or remote policy (unclear ones kept). Fresh = younger than postings with this content typically are, on the crawler's own clock. {skipped['ineligible']} ineligible and {skipped['freshness']} not-fresh postings were left out.</p></div></body></html>""")
+    hp = a.out or os.path.join(WORK, "top.html"); open(hp, "w", encoding="utf-8").write("\n".join(out))
+    mp = os.path.splitext(hp)[0] + ".md"
+    with open(mp, "w", encoding="utf-8") as f:
+        f.write(f"# Top {len(picked)} matches for {title} ({where}), {when}\n\nRead every posting below, then write work/top-notes.json as {{\"<key>\": \"one line on why it fits\"}} and re-run `top --notes work/top-notes.json`.\n\n")
+        for i, (r, el, elr, fr, agp) in enumerate(picked, 1):
+            f.write(f"## {i}. {r[3]}\n- key: `{r[0]}/{r[1]}#{r[2]}`\n- company: {nice_company(r[4])}\n- location: {r[5]}\n- url: {r[6]}\n- match: {r[10]*100:.0f}% · {fr}" + (f" (typical ~{agp:.0f} d)" if agp else "") + f" · posted {days(r[12]) if len(r) > 12 and r[12] else 'n/a'} · first seen {days(r[7])}" + (f" · {elr}" if elr else "") + "\n\n" + (r[8] or "").strip() + "\n\n")
+    print(f"wrote {hp} ({len(picked)} jobs) and {mp} (full text, for reading). Left out: {skipped['ineligible']} ineligible, {skipped['freshness']} not in {sorted(want)}." + ("" if notes else " No notes yet: read the .md, write work/top-notes.json, re-run with --notes."))
+    for i, (r, el, elr, fr, agp) in enumerate(picked[:10], 1): print(f"  {i:>2}. {r[10]*100:3.0f}%  {r[3][:56]} | {nice_company(r[4])[:28]} | {(r[5] or '')[:28]}")
+
 def cmd_probe(a):
     """Why isn't <url> in my list? Board freshness, snapshot membership, group rank vs the fetch cutoff, rank in the slice."""
     import urllib.parse, datetime
@@ -719,7 +785,8 @@ s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars"
 s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true"); s.add_argument("--no-expand", action="store_true", help="don't auto-fetch the nearest groups when a job is labelled yes")
 s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.add_argument("--all", action="store_true")
 s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))
+s = sub.add_parser("top", help="static shortlist: top N eligible fresh matches by cosine (for agents without a browser)"); s.add_argument("--n", type=int, default=50); s.add_argument("--out"); s.add_argument("--notes", help="JSON {key: why it fits}"); s.add_argument("--freshness", default="fresh", help="comma list of verdicts to keep: fresh,stale,re-stamped,ghost,unknown")
 s = sub.add_parser("probe", help="why isn't this posting in my list?"); s.add_argument("url"); s.add_argument("--board", help="ats/slug when the URL doesn't name the board (workable, paylocity)")
 sub.add_parser("status")
 args = ap.parse_args()
-{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "probe": cmd_probe, "status": cmd_status}[args.cmd](args)
+{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "top": cmd_top, "probe": cmd_probe, "status": cmd_status}[args.cmd](args)
