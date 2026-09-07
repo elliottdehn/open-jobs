@@ -6,20 +6,61 @@
 </p>
 
 <p align="center">
-  <img alt="3,126,253 open postings" src="https://img.shields.io/badge/open_postings-3%2C126%2C253-177A45">
+  <img alt="3.1 million open postings" src="https://img.shields.io/badge/open_postings-3%2C125%2C843-177A45">
   <img alt="65,000 career sites crawled daily" src="https://img.shields.io/badge/career_sites-65%2C000_crawled_daily-152019">
-  <img alt="search runs on your machine" src="https://img.shields.io/badge/search-100%25_local-177A45">
+  <img alt="free, no account" src="https://img.shields.io/badge/free-no_account-177A45">
   <img alt="GitHub stars" src="https://img.shields.io/github/stars/elliottdehn/open-jobs?color=152019">
 </p>
 
 <p align="center">
-  3.1 million current job postings, crawled daily from 65,000 company career sites,<br>
-  with full descriptions and an embedding of every posting. Free. No business model.
+  3.1 million current job postings, crawled every day from 65,000 company career sites,<br>
+  every one graded <b>fresh</b>, <b>stale</b>, <b>re-stamped</b>, or <b>ghost</b>.<br>
+  Free. No account. No business model.
+</p>
+
+<p align="center">
+  <a href="https://backend.dehnbostele.workers.dev/"><b>Try it in your browser</b></a>
+  &nbsp;·&nbsp;
+  <a href="#use-it-with-your-agent">Use it with your agent</a>
+  &nbsp;·&nbsp;
+  <a href="#take-the-data">Take the data</a>
 </p>
 
 <br>
 
-## Get started
+## Every listing wears its verdict
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cards-dark.svg">
+    <img src=".github/assets/cards.svg" alt="Four example listings graded fresh, stale, re-stamped, and ghost" width="880">
+  </picture>
+</p>
+
+Job boards know which listings are dead and will not tell you, because their revenue depends on a
+shelf that looks full. Open Jobs crawls the career sites themselves and records the day it first
+sees every posting. That clock cannot be re-stamped. A model learns how long each kind of posting
+typically lives, and every job is graded against par:
+
+| | verdict | what it means |
+|---|---|---|
+| 🌱 | **Fresh** | younger than postings like it. The market moves fast here. Apply now. |
+| 🥀 | **Stale** | an outlier survivor. Hard to fill, which can mean thin competition. |
+| 🔁 | **Re-stamped** | claims to be newer than when the crawler first saw it. Caught. |
+| 👻 | **Ghost** | open for over a year. The dataset holds 40,000 postings over five years old. |
+
+Fresh is what you see by default. The rest is one click away, labelled.
+
+## Try it in your browser
+
+**[backend.dehnbostele.workers.dev](https://backend.dehnbostele.workers.dev/)**
+
+Type a job title, where you want to work, and a few sentences about the job you want. The page
+writes the posting, finds its neighborhood among 3.1 million openings, and shows you the fresh
+ones first. Say yes or no; a yes pulls in more jobs like it, and Rerank re-sorts the list when you
+ask, never underneath you. No account. Nothing except what you type is sent to the server.
+
+## Use it with your agent
 
 Paste this into Claude Code, Codex, Cursor, or whatever you use:
 
@@ -34,9 +75,11 @@ Or install it as a Claude Code plugin:
 /plugin install job-search@open-jobs
 ```
 
-Your agent interviews you, writes the description of the job you want, pulls the openings nearest
-it onto your disk, and builds a local search page ranked by your taste. Five minutes, start to
-shortlist. You need [`uv`](https://docs.astral.sh/uv/); everything is `uv run tools/jobs.py <cmd>`.
+Your agent interviews you, writes the description of the job you want, pulls the nearest openings
+onto your disk, and hands you a shortlist of fresh, eligible matches ranked by how well they fit.
+On a laptop it also builds a local search page that learns from your yes and no. Five minutes,
+start to shortlist. Your labels, notes, and resume never leave your machine. You need
+[`uv`](https://docs.astral.sh/uv/); everything is `uv run tools/jobs.py <cmd>`.
 
 **Agents: you MUST read [`AGENTS.md`](AGENTS.md) in full before doing anything else in this repo.**
 
@@ -66,48 +109,30 @@ open-jobs, switch the mode selector from **Chat** to **Work** and paste the same
 
 </details>
 
-## Every listing wears its verdict
+## How it works
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cards-dark.svg">
-    <img src=".github/assets/cards.svg" alt="Four example listings graded fresh, stale, re-stamped, and ghost" width="880">
-  </picture>
-</p>
+1. **Crawl.** One Cloudflare Durable Object per career site, 65,000 of them, each wakes at its own
+   time of day, diffs today's listings against yesterday's, and pulls the full description once for
+   every new job. First seen is written once and never changed.
+2. **Grade.** A nightly batch folds the fleet into one dataset, trains the estimators (posting age,
+   salary, seniority, work arrangement), and publishes the search index: a few thousand groups of
+   similar jobs, each with full text and an embedding of every posting.
+3. **Search, locally.** Your description of the job you want is embedded once, its nearest groups
+   come down to your machine, and everything after that, ranking, labels, learning, happens there.
 
-Job boards know which listings are dead and will not tell you, because their revenue depends on a
-shelf that looks full. Open Jobs records when the crawler first sees every posting, and that clock
-cannot be re-stamped. A model learns how long each kind of posting typically lives, and every job
-is graded against par:
+Around 11,000 lines of code. Roughly a dollar a day to run.
+Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md). Enrichment fields:
+[`backend/FIELDS.md`](backend/FIELDS.md).
 
-| | verdict | what it means |
-|---|---|---|
-| 🌱 | **Fresh** | younger than postings like it. The market moves fast here. Apply now. |
-| 🥀 | **Stale** | an outlier survivor. Hard to fill, which can mean thin competition. |
-| 👻 | **Ghost** | open for over a year. The dataset holds 40,000 postings over five years old. |
-| 🔁 | **Re-stamped** | claims to be newer than when the crawler first saw it. Caught. |
-
-The ranking learns from your yes and no, every yes pulls more jobs like it from the full corpus,
-and your labels, notes, and resume never leave your laptop.
-
-## Use the data directly
+## Take the data
 
 The corpus is published as static files: a manifest (a tree of a few thousand groups of similar
 jobs, with labels and exemplars), centroids, and one JSON per group with titles, companies,
-locations, URLs, full JD text, and float32 vectors. `tools/jobs.py fetch` pulls any set of groups
-into a local parquet you can query with DuckDB. The API also answers per-posting questions:
-`POST /status` with a list of `ats/slug#id` keys returns open or removed with timestamps, straight
-from the crawler's records. Layout, schema, and endpoints: [`backend/DOCS.md`](backend/DOCS.md).
-
-## The crawler
-
-[`backend/`](backend/) is a Cloudflare Worker: one Durable Object per job board wakes daily at a
-fixed per-board time, fetches, diffs against yesterday, pulls the full description once per new
-job, embeds it, and writes a parquet snapshot to R2. A nightly batch on one laptop consolidates
-the fleet into the dataset, trains the estimators (salary, seniority, work arrangement, posting
-age), and publishes the search index. Around 11,000 lines of code, roughly a dollar a day.
-Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md); enrichment fields:
-[`backend/FIELDS.md`](backend/FIELDS.md).
+locations, URLs, full description text, and float32 vectors. `tools/jobs.py fetch` pulls any set
+of groups into a local parquet you can query with DuckDB. The API also answers per-posting
+questions: `POST /status` with a list of `ats/slug#id` keys returns open or removed with
+timestamps, straight from the crawler's records. Layout, schema, and endpoints:
+[`backend/DOCS.md`](backend/DOCS.md).
 
 ## The ideas channel
 
