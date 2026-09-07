@@ -35,8 +35,9 @@ endpoints (`/embed`, `/data/*`, `/enrich`).
 `https://backend.dehnbostele.workers.dev` (embed, manifest, groups) may be blocked. If a request to
 it fails with a connection error, a 403 from a proxy, or a "network access denied" message, don't
 retry in a loop and don't route around it. Tell the person this one host needs to be allowed, and
-give them the steps (they are also in the README under "Get started"):
-1. Open https://claude.ai/new#settings/capabilities
+give them the steps (they are also in the README under "Get started"). Write the settings URL as
+a markdown link so it is clickable in the app, not as bare text:
+1. Open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities)
 2. Scroll to the bottom. Under **Additional allowed domains**, add `https://backend.dehnbostele.workers.dev`
 3. Start a fresh session and paste the prompt again.
 Only that host is needed; the tools talk to nothing else. A session picks the setting up only when

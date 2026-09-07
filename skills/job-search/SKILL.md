@@ -21,7 +21,8 @@ embeds the user's ideal job description (get their OK for that call before makin
    `uv run tools/jobs.py <cmd>`.
 4. In the Claude web or mobile app the sandbox has a network allowlist. If a call to
    `https://backend.dehnbostele.workers.dev` is blocked, ask the person to allow that one host:
-   open https://claude.ai/new#settings/capabilities, scroll to the bottom, add
+   open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities) (give it
+   as a clickable markdown link), scroll to the bottom, add
    `https://backend.dehnbostele.workers.dev` under **Additional allowed domains**, then start a
    fresh session. Details in the README under
    "Get started".
