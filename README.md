@@ -49,7 +49,7 @@ GitHub and nothing else. The tools here make one kind of outside call, to the pu
 `backend.dehnbostele.workers.dev`, and it will be blocked until you allow it. Once:
 
 1. Open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities).
-2. Scroll to the bottom. Under **Additional allowed domains**, add `https://backend.dehnbostele.workers.dev`.
+2. Scroll to the bottom. Under **Additional allowed domains**, add exactly `backend.dehnbostele.workers.dev` (no `https://`, no slash).
 3. Start a fresh session and paste the line again.
 
 That is the only domain this repo needs. If your session runs in a custom cloud environment with

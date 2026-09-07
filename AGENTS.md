@@ -38,7 +38,7 @@ retry in a loop and don't route around it. Tell the person this one host needs t
 give them the steps (they are also in the README under "Get started"). Write the settings URL as
 a markdown link so it is clickable in the app, not as bare text:
 1. Open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities)
-2. Scroll to the bottom. Under **Additional allowed domains**, add `https://backend.dehnbostele.workers.dev`
+2. Scroll to the bottom. Under **Additional allowed domains**, add exactly `backend.dehnbostele.workers.dev` (no `https://`, no slash)
 3. Start a fresh session and paste the prompt again.
 Only that host is needed; the tools talk to nothing else. A session picks the setting up only when
 it starts. If the session runs in a custom cloud environment with its own Allowed domains list,
@@ -118,10 +118,12 @@ recompiles the page — the serve log says when to refresh. Disable with `serve 
 (younger than the model-predicted typical age for its content), 🥀 Stale (older: hard-to-fill,
 reposted, or possibly never filled), 👻 ghost risk (open >1 year), 🔁 date-bumped (claims to be newer
 than when our crawler first saw it — the re-stamp is caught because first_seen can't be forged). The
-Freshness facet sits in "Fit for you" next to eligibility: when building a shortlist, default to
-eligible → fresh, and flag any 👻/🔁 you'd otherwise include so the person knows the listing may not
-be real. Stale isn't always bad — a stale-but-real posting can mean thin competition and a motivated
-hiring manager; say so when it's relevant.
+Freshness facet sits in "Fit for you" next to eligibility. **Default to fresh only.** When someone
+just asks for help finding a job, set the Freshness facet to 🌱 Fresh (with eligibility) and put only
+fresh jobs on the shortlist; that is the product. Widen to stale / 👻 / 🔁 only when the person asks,
+or when the fresh set is too thin to be useful — and then say which ones aren't fresh and why they
+may not be real. Stale isn't always bad — a stale-but-real posting can mean thin competition and a
+motivated hiring manager; say so when it's relevant.
 
 The page ranks by a model seeded at the ideal JD, has text search, facets (group, company,
 location, source), J/K labeling that refits the model live, notes, and an export button.
@@ -212,7 +214,8 @@ Loop: revise the JD → `embed` → `fetch` (new groups only; already-downloaded
 Each pass should tighten and the slice grows; only `fetch --replace` when they want to start fresh.
 
 ## 5. Deliverables to leave behind
-- `work/ranked.csv`: the shortlist, best first, with their labels.
+- `work/ranked.csv`: the shortlist, best first, with their labels. Fresh jobs only unless they asked
+  for more (§3).
 - `work/model.json`: `{recipe, w[1536], b, labels}` — the search as a weight vector; re-usable
   against any future slice with the same `recipe`.
 - Anything else they ask for (cover-letter drafts, a tracking sheet, a digest of what's new).

@@ -23,7 +23,8 @@ embeds the user's ideal job description (get their OK for that call before makin
    `https://backend.dehnbostele.workers.dev` is blocked, ask the person to allow that one host:
    open [claude.ai/new#settings/capabilities](https://claude.ai/new#settings/capabilities) (give it
    as a clickable markdown link), scroll to the bottom, add
-   `https://backend.dehnbostele.workers.dev` under **Additional allowed domains**, then start a
+   exactly `backend.dehnbostele.workers.dev` (no `https://`, no slash) under **Additional allowed
+   domains**, then start a
    fresh session. Details in the README under
    "Get started".
 
@@ -40,8 +41,9 @@ The short version of the loop:
    with DuckDB to build a shortlist yourself.
 4. **Use the freshness signals** (the tool's flagship): 🌱 Fresh / 🥀 Stale (age vs. what postings
    with this content typically run), 👻 ghost risk (open >1 year), 🔁 date-bumped (claims to be
-   newer than the crawler first saw it). Default shortlists to eligible → fresh; warn before
-   including a 👻/🔁; note that stale-but-real can mean thin competition.
+   newer than the crawler first saw it). When someone just wants help finding a job, filter to
+   Fresh and shortlist fresh jobs only; widen to stale / 👻 / 🔁 only if they ask or the fresh set is
+   too thin, and say which ones aren't fresh. Stale-but-real can mean thin competition.
 5. Deliver a concrete shortlist (title, company, location, URL, why it fits, freshness) — a list
    with a bottom, not a feed.
 
