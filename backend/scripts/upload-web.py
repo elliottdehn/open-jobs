@@ -13,20 +13,28 @@ def put(key, path, ctype):
         time.sleep(2 * (attempt + 1))
     print(f"FAILED {key}: {r.stderr[-200:]}", flush=True); return False
 groups = sorted(os.listdir(os.path.join(web, "groups")))
-todo = [g for g in groups if not os.path.exists(os.path.join(mark, g))]
-print(f"{len(todo)} of {len(groups)} group files to upload ({a.workers} workers)", flush=True)
-q = queue.Queue(); [q.put(g) for g in todo]; done = [0]; lock = threading.Lock(); t0 = time.time()
-def worker():
-    while True:
-        try: g = q.get_nowait()
-        except queue.Empty: return
-        if put(f"groups/{g}", os.path.join(web, "groups", g), "application/json"): open(os.path.join(mark, g), "w").close()
-        with lock:
-            done[0] += 1
-            if done[0] % 50 == 0 or done[0] == len(todo): print(f"{done[0]}/{len(todo)} groups, {time.time()-t0:.0f}s", flush=True)
-ts = [threading.Thread(target=worker) for _ in range(a.workers)]; [t.start() for t in ts]; [t.join() for t in ts]
-missing = [g for g in groups if not os.path.exists(os.path.join(mark, g))]
-if missing: sys.exit(f"{len(missing)} group files failed; re-run to retry")
+def upload_groups(workers):
+    """Upload every group file without a marker; returns how many are still missing afterwards."""
+    todo = [g for g in groups if not os.path.exists(os.path.join(mark, g))]
+    print(f"{len(todo)} of {len(groups)} group files to upload ({workers} workers)", flush=True)
+    q = queue.Queue(); [q.put(g) for g in todo]; done = [0]; lock = threading.Lock(); t0 = time.time()
+    def worker():
+        while True:
+            try: g = q.get_nowait()
+            except queue.Empty: return
+            if put(f"groups/{g}", os.path.join(web, "groups", g), "application/json"): open(os.path.join(mark, g), "w").close()
+            with lock:
+                done[0] += 1
+                if done[0] % 50 == 0 or done[0] == len(todo): print(f"{done[0]}/{len(todo)} groups, {time.time()-t0:.0f}s", flush=True)
+    ts = [threading.Thread(target=worker) for _ in range(workers)]; [t.start() for t in ts]; [t.join() for t in ts]
+    return len([g for g in groups if not os.path.exists(os.path.join(mark, g))])
+missing = upload_groups(a.workers)
+if missing:
+    # wrangler crashes under contention (271 of 11k at 16 workers on 2026-09-06, 54 on 09-04; all clean on retry):
+    # one more pass at 8 workers before giving up, so the nightly run stays hands-off.
+    print(f"{missing} group files failed; retrying them at 8 workers", flush=True); time.sleep(10)
+    missing = upload_groups(min(8, a.workers))
+if missing: sys.exit(f"{missing} group files failed after the retry; re-run to retry")
 for name in ("salary-model.json", "arrangement-model.json", "seniority-model.json", "age-model.json", "location-countries.json"):  # estimators trained by consolidate.sh step 4b
     if os.path.exists(os.path.join(web, name)): put(name, os.path.join(web, name), "application/json")
 put("centroids.bin", os.path.join(web, "centroids.bin"), "application/octet-stream")
