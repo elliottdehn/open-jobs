@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["duckdb>=1.1"]
+# dependencies = ["duckdb>=1.1", "boto3"]
 # ///
 """Project verified crawler diffs into an immutable, paged feed; see JOB-CHANGES.md."""
 import argparse
@@ -16,6 +16,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -357,7 +358,7 @@ def apply_generation(db, folder, header, *, reset=False):
 def remote_head(base):
     url = base.rstrip('/') + '/data/changes/latest.json?check=' + uuid.uuid4().hex
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={'Cache-Control': 'no-cache'}), timeout=60) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'Cache-Control': 'no-cache', 'User-Agent': 'open-jobs-tools/0.1'}), timeout=60) as r:
             return json.load(r)
     except urllib.error.HTTPError as error:
         if error.code == 404:
@@ -366,6 +367,15 @@ def remote_head(base):
 
 
 def put(key, path):
+    """Upload through scripts/r2.py (S3 API, multipart) when R2 credentials are present; wrangler otherwise.
+    Both are the transport hook publish() takes as `upload=`."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from r2 import R2
+        R2().put_file(key, str(path), 'application/x-ndjson' if key.endswith('.ndjson') else 'application/json')
+        return
+    except (ImportError, RuntimeError):
+        pass
     command = 'npx.cmd' if os.name == 'nt' else 'npx'
     subprocess.run([command, 'wrangler', 'r2', 'object', 'put', f'jobscream-data/{key}',
                     '--file', str(path), '--content-type',

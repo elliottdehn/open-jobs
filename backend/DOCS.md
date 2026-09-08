@@ -271,6 +271,7 @@ It is a thin wrapper: the work is ten stages in `scripts/stage.py`, each one an 
 | estimators | salary, arrangement, seniority, age, city + location tables | local or R2 | `web/` |
 | finalize | `scripts/publish-web.py`: reconcile `groups/` in R2 by size, then models, centroids, manifest last; repoint `export/latest` | `web/` | R2 |
 | history | `scripts/upload-history.py`: diff and ledger parts + `index.json` | local | R2 |
+| feed | `scripts/build-job-changes.py` ([JOB-CHANGES.md](JOB-CHANGES.md)): the paged consumer feed. First run bootstraps from today's export against the index just published; after that, one generation per diff. Receipt in `export/feed/published.json` | local, R2 index | R2 `changes/` |
 | retention | delete older full exports that have a successor diff (local only) | | local |
 
 All uploads go through the S3 API (`scripts/r2.py`: boto3, multipart, retries; credentials `R2_*` in the

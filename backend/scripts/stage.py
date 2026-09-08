@@ -17,6 +17,8 @@ Stages, in pipeline order:
   estimators  salary, arrangement, seniority, age, city table, location table -> web/
   finalize    reconcile groups/ in R2, then models, centroids, manifest (last)
   history     diffs + ledger parts + index.json to R2
+  feed        the paged consumer feed (JOB-CHANGES.md): bootstrap from today's export the first time, then one
+              generation per diff; publishes under changes/ and keeps export/feed/published.json as the receipt
   retention   (local only) delete older full exports that have a successor diff
 
 Layout: --source local keeps today's layout (<backend>/export/<date>/ holds everything). --source r2 reads
@@ -28,7 +30,7 @@ import argparse, glob, json, os, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); BACKEND = os.path.normpath(os.path.join(HERE, ".."))
 ap = argparse.ArgumentParser()
-ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "retention"])
+ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
 ap.add_argument("--publish", action="store_true", help="write parquet / group files to R2 as produced (always on for --source r2)")
@@ -95,6 +97,23 @@ elif a.stage == "finalize":
         os.symlink(a.date, "export/latest"); print(f"export/latest -> {a.date}", flush=True)
 elif a.stage == "history":
     run(["uv", "run", "scripts/upload-history.py"])
+elif a.stage == "feed":
+    # JOB-CHANGES.md, automated: first run bootstraps from today's completed export against the index the history
+    # stage just published; later runs project today's diff onto the last published generation. Local-source
+    # only: the bootstrap reads export/<date>/jobs and web/manifest.json.
+    if r2_mode: stamp("feed needs the local export layout (bootstrap reads jobs/ + web/manifest.json); skipped under --source r2"); sys.exit(0)
+    import urllib.request
+    feed = "export/feed"; os.makedirs(feed, exist_ok=True)
+    idx = os.path.join(feed, "diffs-index.json")
+    # a User-Agent is required: the Worker's edge returns 403 to the default urllib agent
+    with urllib.request.urlopen(urllib.request.Request(f"{a.worker}/data/diffs/index.json?check={int(time.time())}", headers={"cache-control": "no-cache", "user-agent": "open-jobs-tools/0.1"}), timeout=60) as r: open(idx, "wb").write(r.read())
+    receipt = os.path.join(feed, "published.json")
+    if os.path.exists(receipt):
+        side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
+        if not side: stamp("no diff ending today; nothing to project"); sys.exit(0)
+        run(["uv", "run", "scripts/build-job-changes.py", "--out", feed, "--diff", side[-1], "--previous", receipt, "--publish-base", a.worker])
+    else:
+        run(["uv", "run", "scripts/build-job-changes.py", "--out", feed, "--snapshot", export_local, "--index", idx, "--publish-base", a.worker])
 elif a.stage == "retention":
     if r2_mode or a.keep_full: stamp("no local exports to prune" if r2_mode else "kept (--keep-full)"); sys.exit(0)
     side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))

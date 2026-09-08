@@ -43,6 +43,12 @@ rows or a partial board pull. The reasons are only as complete/fresh as the upst
 Use `/status` for a current status check when needed. Daily exports do not capture transient
 changes between builds.
 
+## Daily run
+`scripts/stage.py feed` (the stage after `history` in `consolidate.sh`) does the below automatically: it
+fetches the index cache-busted, bootstraps from today's export when `export/feed/published.json` does not
+exist, and otherwise projects the diff ending today onto the last published generation. Uploads go through
+`scripts/r2.py` (S3 API) when R2 credentials are present. The commands below are the by-hand equivalent.
+
 ## Build and publish
 
 Run from `backend/`, with Python 3.10+ and DuckDB (`uv` installs the script dependency):
