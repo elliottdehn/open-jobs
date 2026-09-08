@@ -16,8 +16,8 @@ event with the full job record plus `op`:
   changed_prev  its previous row
   carried       an old row carried forward into today's export because its whole board vanished from the pull
                 without the crawler saying so (see below); not a removal
-plus <prev>__<date>/lite/data_*.parquet: the same rows without content, raw_json, detail_raw_json, enrichment_json,
-embedding — for mirrors that filter on title/location/url and don't need text or vectors.
+plus <prev>__<date>/lite/data_*.parquet: the same rows without embedding, raw_json, detail_raw_json, enrichment_json;
+content is kept on added/changed rows only — everything a mirror needs to show a job, and none of the vector weight.
 and export/diffs/<prev>__<date>.json with the counts, the boards involved, and `ok_to_prune`.
 
 Boards that vanish: a board with rows yesterday and none today is either really empty now or missing from
@@ -110,12 +110,14 @@ con.execute(f"""COPY (
   UNION ALL SELECT 'carried', '{pd}', '{nd}', {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
 parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
-# lite projection: the same events without text, raw provider JSON, enrichment JSON, or the vector — what a mirror
-# that filters by title/location/url needs, at a small fraction of the size. Full parts remain the record.
-LITE_DROP = "content, raw_json, detail_raw_json, enrichment_json, embedding"
+# lite projection: the same events without the vector or the raw provider / enrichment JSON. The description text
+# stays on `added` and `changed` rows (a mirror has to be able to show a new job) and is dropped where only the key
+# matters (removed, changed_prev, carried). Full parts remain the record.
+LITE_DROP = "raw_json, detail_raw_json, enrichment_json, embedding"
 lited = os.path.join(outd, "lite"); os.makedirs(lited, exist_ok=True)
 for f in glob.glob(os.path.join(lited, "*.parquet")): os.remove(f)
-con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) FROM read_parquet('{outd}/*.parquet')) TO '{lited}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB')""")
+con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) REPLACE (CASE WHEN op IN ('added', 'changed') THEN content END AS content) FROM read_parquet('{outd}/*.parquet'))
+  TO '{lited}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB')""")
 lparts = sorted(glob.glob(os.path.join(lited, "*.parquet"))); lite_bytes = sum(os.path.getsize(f) for f in lparts)
 
 n_new_final = n_new + counts["carried"]
@@ -124,7 +126,7 @@ side = {"from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_af
         "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
         "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
         "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes,
-        "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in lparts], "bytes": lite_bytes}}
+        "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "content_on": ["added", "changed"], "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in lparts], "bytes": lite_bytes}}
 json.dump(side, open(outd + ".json", "w"), indent=1)
 
 # carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.

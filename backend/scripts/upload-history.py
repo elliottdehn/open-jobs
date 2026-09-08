@@ -62,10 +62,10 @@ def entry(prefix, d, extra):
     e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
     lparts = sorted(glob.glob(os.path.join(d, "lite", "*.parquet")))
     if prefix == "diffs" and lparts and all(uploaded(f"diffs/{name}/lite/{os.path.basename(p)}") for p in lparts):
-        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["content", "raw_json", "detail_raw_json", "enrichment_json", "embedding"]}
+        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
     return e
 diffs_index = {"built_at": int(time.time() * 1000), "base": "/data/",
-               "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together. `lite` has the same rows without text, raw JSON, or the vector.",
+               "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together. `lite` has the same rows without the vector or raw JSON; description text is kept on added and changed rows.",
                "entries": [e for e in (entry("diffs", d, lambda n, d: {"from": n.split("__")[0], "to": n.split("__")[1], "sidecar": f"diffs/{n}.json", **side(d)}) for d in diff_dirs) if e]}
 ledger_index = {"built_at": int(time.time() * 1000), "base": "/data/",
                 "note": "every job the crawler has recorded, open or removed, with first_seen_at / last_seen_at / changed_at / removed_at; no text, no vectors. Read every part of a dir together.",

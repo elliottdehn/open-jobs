@@ -261,7 +261,7 @@ markers, and interrupted exports resume from their last complete page.
 ```
 export/latest -> 2026-09-07/         the one full export (snapshots, jobs/, boards/, web/), ~80 GB
 export/diffs/2026-09-06__2026-09-07/data_*.parquet   what changed between two consecutive full exports (lossless; parts <= 200 MB)
-export/diffs/2026-09-06__2026-09-07/lite/data_*.parquet   the same rows without text, raw JSON, or the vector (~1% of the size)
+export/diffs/2026-09-06__2026-09-07/lite/data_*.parquet   the same rows without the vector or raw JSON; text kept on added/changed
 export/diffs/2026-09-06__2026-09-07.json      counts, vanished boards and their verdicts, ok_to_prune
 export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorded, open or removed, with dates
 ```
@@ -269,8 +269,9 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   `added` | `removed` (the old row, in full) | `changed` / `changed_prev` (title, location, url, or text
   or `embed_status` moved; the crawler's `content_hash` is *not* the criterion, it churns for ~370k Workday rows a day) |
   `carried`. `latest` + the diffs reconstructs any day. ~1.4% added and ~1.3% removed per day; ~0.5 GB.
-  `lite/` under each diff holds the same rows minus `content`, `raw_json`, `detail_raw_json`, `enrichment_json`,
-  `embedding` (~5 MB/day): enough for a mirror that filters on title, location, or url. Apply every `added` and
+  `lite/` under each diff holds the same rows minus `embedding`, `raw_json`, `detail_raw_json`, `enrichment_json`,
+  with `content` kept on `added` and `changed` rows and null elsewhere: everything a mirror needs to show a job,
+  at a fraction of the size. Apply every `added` and
   `changed` row; `embed_status` says whether the job is in the public group files yet (`done`), and the flip to
   `done` is itself emitted as a `changed` row, so a mirror that only wants the public corpus can gate on it and
   still catch jobs that were added before they were embedded.
