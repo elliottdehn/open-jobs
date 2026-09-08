@@ -1,13 +1,14 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "boto3"]
 # ///
 """Build the local-first client data from export/jobs/*.parquet (must include embeddings):
   export/web/manifest.json     tree nodes {id, parent, lo, hi, radius, size, label, medoid, exemplars, children}
                                + recipe/dims/counts. Row ranges are into the DFS order.
   export/web/centroids.bin     float16 [nodes x dims] node centroids (unit vectors), same order as manifest.nodes
   export/web/groups/<leaf>.json  jobs of one leaf, DFS order, with exact float32 embeddings (base64)
-Then `scripts/upload-web.sh` puts it in R2.  Run: uv run scripts/build-manifest.py [--leaf-max 400] [--leaf-radius 0.30]
+With --publish each group file is uploaded to R2 as it is written; scripts/publish-web.py (finalize) reconciles and
+publishes centroids + manifest. Run: uv run scripts/build-manifest.py [--leaf-max 400] [--leaf-radius 0.30] [--out DIR] [--publish]
 """
 import argparse, base64, collections, glob, json, os, re, sys, time
 import numpy as np, duckdb
@@ -16,16 +17,29 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--leaf-max", type=int, default=400)
 ap.add_argument("--leaf-radius", type=float, default=0.30)
 ap.add_argument("--pca", type=int, default=256)
-ap.add_argument("--out", help="output dir (default <EXPORT_DIR>/web)")
+ap.add_argument("--out", help="output dir (default <WORK_DIR or EXPORT_DIR>/web)")
+ap.add_argument("--publish", action="store_true", help="upload each group file to R2 (groups/<leaf>.json) as it is written; centroids + manifest are published by the finalize stage")
+ap.add_argument("--groups-prefix", default=os.environ.get("GROUPS_PREFIX", "groups/"), help="R2 key prefix for --publish")
 args = ap.parse_args()
 
-root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
-out = args.out or os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2, Uploader
+# EXPORT_DIR is the export to build from: a local dir, or an s3://bucket/exports/<date> prefix (read in place).
+# WORK_DIR is local scratch (memmap, staging, DuckDB spill); defaults to EXPORT_DIR when that is local.
+export_dir = os.environ.get("EXPORT_DIR", "export")
+is_s3 = export_dir.startswith("s3://")
+root = export_dir if is_s3 else os.path.join(os.path.dirname(__file__), "..", export_dir)
+work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + export_dir.rstrip("/").rsplit("/", 1)[-1]) if is_s3 else root)
+os.makedirs(work, exist_ok=True)
+out = args.out or os.path.join(work, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
 # per-process temp names: two builds on the same export (a validation A/B) must not clobber each other's memmaps
 TMP = f".build-{os.getpid()}"
-con_tmp = os.path.join(root, f"{TMP}.duckdb_tmp"); os.makedirs(con_tmp, exist_ok=True)
-J = os.path.join(root, "jobs", "*.parquet")
+con_tmp = os.path.join(work, f"{TMP}.duckdb_tmp"); os.makedirs(con_tmp, exist_ok=True)
+J = f"{root.rstrip('/')}/jobs/*.parquet"
 con = duckdb.connect()
+r2 = R2() if (is_s3 or args.publish) else None
+if is_s3: r2.duckdb(con)
+uploader = Uploader(r2, workers=8) if args.publish else None
 con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
 con.execute(f"SET temp_directory='{con_tmp}'"); con.execute("SET preserve_insertion_order=false")
 t = time.time()
@@ -49,7 +63,7 @@ q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce
 import pyarrow as pa
 N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
 D = 1536
-_xpath = os.path.join(root, f"{TMP}.vectors.f16.npy")
+_xpath = os.path.join(work, f"{TMP}.vectors.f16.npy")
 if os.path.exists(_xpath): os.remove(_xpath)
 # file-backed so memory pressure evicts pages instead of killing the build (two jetsam deaths on 2026-09-05)
 X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
@@ -98,7 +112,7 @@ t2 = time.time()
 import pyarrow.compute as pc
 perm = pc.sort_indices(H).to_numpy()
 H = H.take(pa.array(perm)); titles = [titles[i] for i in perm]; locs = [locs[i] for i in perm]; hints = [hints[i] for i in perm]; board_of = board_of[perm]
-_x2 = os.path.join(root, f"{TMP}.vectors.f16.sorted.npy")
+_x2 = os.path.join(work, f"{TMP}.vectors.f16.sorted.npy")
 X2 = np.lib.format.open_memmap(_x2, mode="w+", dtype=np.float16, shape=(N, D))
 for _i in range(0, N, 200_000):
     X2[_i:_i + 200_000] = X[perm[_i:_i + 200_000]]
@@ -109,7 +123,7 @@ print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted in {time.
 if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
 # company name per board from boards parquet (resolved), else slug
-B = os.path.join(root, "boards", "*.parquet")
+B = f"{root.rstrip('/')}/boards/*.parquet"
 comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
 compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size_bucket, company_hq_country, company_is_staffing_agency, company_description FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
 
@@ -256,7 +270,7 @@ cur = None; jobs = []; V = None; written = 0; seen_rows = 0
 # is then sorted on its own. A single ORDER BY over the whole corpus needs more buffer than the sort can spill
 # (DuckDB ran out at 5.5 GiB); sorting 250k rows at a time never does.
 import shutil
-CHUNK = 250_000; stage = os.path.join(root, f"{TMP}.stage"); shutil.rmtree(stage, ignore_errors=True)
+CHUNK = 250_000; stage = os.path.join(work, f"{TMP}.stage"); shutil.rmtree(stage, ignore_errors=True)
 con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
   TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD)""")
 print(f"  staged {N:,} rows in {(N + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
@@ -280,12 +294,18 @@ for b in _batches():
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s_)]} if (a, s_) in compfull else {}),
                      "v": base64.b64encode(V[p - cur["lo"]].tobytes()).decode()})
         if p + 1 == cur["hi"]:
-            with open(os.path.join(out, "groups", f"{cur['id']}.json"), "w") as f: json.dump({"leaf": cur["id"], "lo": cur["lo"], "hi": cur["hi"], "jobs": jobs}, f)
+            gpath = os.path.join(out, "groups", f"{cur['id']}.json")
+            with open(gpath, "w") as f: json.dump({"leaf": cur["id"], "lo": cur["lo"], "hi": cur["hi"], "jobs": jobs}, f)
+            if uploader: uploader.put(f"{args.groups_prefix}{cur['id']}.json", gpath, "application/json")
             written += 1; jobs = []; V = None
             if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
 shutil.rmtree(stage, ignore_errors=True)
 if seen_rows != N or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{N} rows")
+if uploader:
+    failed = uploader.join()
+    print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
+    json.dump({"prefix": args.groups_prefix, "published": r2.uploaded, "failed": failed}, open(os.path.join(out, ".published-groups.json"), "w"))
 del X
 try: os.remove(_xpath)
 except OSError: pass

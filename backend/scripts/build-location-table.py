@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1"]
+# dependencies = ["numpy", "duckdb>=1.1", "boto3"]
 # ///
 """Country estimator for location strings the rules in tools/locparse.py can't place ("Charleston",
 "Main Campus", "Utrecht, Nederland"). Embeds every distinct location string once (text-embedding-3-small,
@@ -15,13 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np, duckdb
 here = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.join(here, "..", "..", "tools"))
 from locparse import parse, REMOTE_RE
-root = os.path.join(here, "..", os.environ.get("EXPORT_DIR", "export/latest"))
+sys.path.insert(0, here)
+from r2 import R2
+_ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://")
+root = _ed.rstrip("/") if _s3 else os.path.join(here, "..", _ed)
+work = os.environ.get("WORK_DIR") or (os.path.join(here, "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 cache_path = os.path.join(here, "..", "export", "location-embeddings.npz")
 DIMS, MODEL = 256, "text-embedding-3-small"
 key = os.environ.get("OPENAI_API_KEY") or open(os.path.join(here, "..", "..", "oai_key.txt"), encoding="utf-8").read().strip()
 
 t0 = time.time()
-rows = duckdb.connect().execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL AND length(location) BETWEEN 2 AND 120 GROUP BY location").fetchall()
+rows = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()).execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL AND length(location) BETWEEN 2 AND 120 GROUP BY location").fetchall()
 strings = [r[0].strip() for r in rows if r[0].strip()]; counts = {r[0].strip(): r[1] for r in rows}
 placed, unplaced = {}, []
 for s in strings:
@@ -100,7 +104,7 @@ table = {}
 for s, (cc, conf, sim) in zip(Q_keys, vote(Q, A, A_cc)):
     if conf >= MIN_CONF and sim >= MIN_SIM: table[s] = [cc, round(conf, 2)]
 covered = sum(counts[s] for s in table); unplaced_jobs = sum(counts[s] for s in unplaced)
-out = os.path.join(root, "web", "location-countries.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
+out = os.path.join(work, "web", "location-countries.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump({"model": f"{MODEL}:{DIMS}", "min_sim": MIN_SIM, "min_conf": MIN_CONF, "holdout_accuracy": acc, "n": len(table), "built_at": int(time.time() * 1000), "table": table}, open(out, "w", encoding="utf-8"), ensure_ascii=False)
 print(f"wrote {out}: {len(table):,} of {len(unplaced):,} unplaced strings get a country ({covered:,} of {unplaced_jobs:,} unplaced postings = {covered / max(unplaced_jobs, 1):.0%}); "
       f"top: {collections.Counter(v[0] for v in table.values()).most_common(6)}; tokens {usage[0]:,} (${usage[0] * 0.02 / 1e6:.2f}); {time.time() - t0:.0f}s")

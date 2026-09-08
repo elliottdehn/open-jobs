@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["duckdb>=1.1"]
+# dependencies = ["duckdb>=1.1", "boto3"]
 # ///
 """Daily diff between the previous full export and today's, lossless: latest + diffs reconstructs any day.
 
@@ -30,6 +30,8 @@ boards/<ats>.parquet so the index and tomorrow's diff see them). jobCount == 0 m
 """
 import argparse, concurrent.futures, glob, hashlib, json, os, sys, time, urllib.parse, urllib.request
 import duckdb
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--new", default=os.environ.get("EXPORT_DIR"), help="today's export dir (default $EXPORT_DIR)")
@@ -41,15 +43,24 @@ ap.add_argument("--no-carry", action="store_true", help="don't append carried ro
 ap.add_argument("--max-absent", type=int, default=3000, help="more vanished boards than this = the pull is broken; carry all, no per-board calls")
 a = ap.parse_args()
 if not a.new: sys.exit("--new or EXPORT_DIR required")
-new, prev = os.path.abspath(a.new), os.path.realpath(a.prev)
-nd, pd = os.path.basename(new), os.path.basename(prev)
-if not glob.glob(os.path.join(new, "jobs", "*.parquet")): sys.exit(f"no jobs parquet in {new}")
-if prev == new or not glob.glob(os.path.join(prev, "jobs", "*.parquet")):
+# --prev / --new: local export dirs or s3://bucket/exports/<date> prefixes (read in place through DuckDB's S3 client)
+def _root(p): return p.rstrip("/") if p.startswith("s3://") else os.path.realpath(p)
+new, prev = _root(a.new), _root(a.prev)
+nd, pd = new.rsplit("/", 1)[-1], prev.rsplit("/", 1)[-1]
+r2 = R2() if (new.startswith("s3://") or prev.startswith("s3://")) else None
+def _key(p): return p.split("/", 3)[3]
+def _exists(p): return (r2.head(_key(p)) is not None) if p.startswith("s3://") else os.path.exists(p)
+def _has_jobs(root):
+    if root.startswith("s3://"): return any(k.endswith(".parquet") for k, _, _ in r2.list(_key(root) + "/jobs/"))
+    return bool(glob.glob(os.path.join(root, "jobs", "*.parquet")))
+if not _has_jobs(new): sys.exit(f"no jobs parquet in {new}")
+if prev == new or not _has_jobs(prev):
     print(f"no previous export to diff against ({a.prev}); skipping"); sys.exit(0)
 os.makedirs(a.out, exist_ok=True)
 t0 = time.time()
 con = duckdb.connect()
-con.execute("SET memory_limit='20GB'"); con.execute(f"SET temp_directory='{os.path.join(a.out, '.tmp')}'"); con.execute("SET preserve_insertion_order=false")
+con.execute(f"SET memory_limit='{os.environ.get('DIFF_MEMORY', '20GB')}'"); os.makedirs(os.path.join(a.out, ".tmp"), exist_ok=True); con.execute(f"SET temp_directory='{os.path.join(a.out, '.tmp')}'"); con.execute("SET preserve_insertion_order=false")
+if r2: r2.duckdb(con)
 con.execute(f"CREATE VIEW old AS SELECT * FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
 con.execute(f"CREATE VIEW new AS SELECT * FROM read_parquet('{new}/jobs/*.parquet', union_by_name=true)")
 cols = [r[0] for r in con.execute("DESCRIBE new").fetchall()]
@@ -169,23 +180,26 @@ json.dump(side, open(outd + ".json", "w"), indent=1)
 carried_files = []
 if carry_boards and not a.no_carry:
     for ats in sorted({k[0] for k in carry_boards}):
-        jp = os.path.join(new, "jobs", f"{ats}.parquet"); tmp = jp + ".tmp"
-        if os.path.exists(jp):
+        jp = f"{new}/jobs/{ats}.parquet"; tmp = (jp if not new.startswith("s3://") else os.path.join(a.out, ".tmp", f"carry-{ats}.parquet")) + ".tmp"
+        if _exists(jp):
             con.execute(f"""COPY (SELECT * FROM read_parquet('{jp}')
               UNION ALL BY NAME SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))
               ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
         else:
             con.execute(f"""COPY (SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
-        os.replace(tmp, jp); carried_files.append(jp)
-        bp_old, bp = os.path.join(prev, "boards", f"{ats}.parquet"), os.path.join(new, "boards", f"{ats}.parquet")
-        if os.path.exists(bp_old):
-            tmpb = bp + ".tmp"
-            base = f"SELECT * REPLACE (CAST(slug AS VARCHAR) AS slug) FROM read_parquet('{bp}') UNION ALL BY NAME " if os.path.exists(bp) else ""
+        if jp.startswith("s3://"): r2.put_file(_key(jp), tmp); os.remove(tmp)
+        else: os.replace(tmp, jp)
+        carried_files.append(jp)
+        bp_old, bp = f"{prev}/boards/{ats}.parquet", f"{new}/boards/{ats}.parquet"
+        if _exists(bp_old):
+            tmpb = (bp if not new.startswith("s3://") else os.path.join(a.out, ".tmp", f"carryb-{ats}.parquet")) + ".tmp"
+            base = f"SELECT * REPLACE (CAST(slug AS VARCHAR) AS slug) FROM read_parquet('{bp}') UNION ALL BY NAME " if _exists(bp) else ""
             con.execute(f"""COPY ({base} SELECT b.* REPLACE (CAST(b.slug AS VARCHAR) AS slug) FROM read_parquet('{bp_old}') b WHERE EXISTS (SELECT 1 FROM carryb c WHERE c.ats=b.ats AND c.slug=CAST(b.slug AS VARCHAR))
-              {"AND NOT EXISTS (SELECT 1 FROM read_parquet('" + bp + "') x WHERE x.ats=b.ats AND CAST(x.slug AS VARCHAR)=CAST(b.slug AS VARCHAR))" if os.path.exists(bp) else ""}) TO '{tmpb}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
-            os.replace(tmpb, bp)
+              {"AND NOT EXISTS (SELECT 1 FROM read_parquet('" + bp + "') x WHERE x.ats=b.ats AND CAST(x.slug AS VARCHAR)=CAST(b.slug AS VARCHAR))" if _exists(bp) else ""}) TO '{tmpb}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+            if bp.startswith("s3://"): r2.put_file(_key(bp), tmpb); os.remove(tmpb)
+            else: os.replace(tmpb, bp)
 
-side.update({"carried_into": [os.path.relpath(p, new) for p in carried_files], "carry_done": True, "seconds": round(time.time() - t0)})
+side.update({"carried_into": [p[len(new) + 1:] for p in carried_files], "carry_done": True, "seconds": round(time.time() - t0)})
 json.dump(side, open(outd + ".json", "w"), indent=1)
 pct = lambda n: f"{100 * n / max(1, n_old):.2f}%"
 print(f"diff {pd} -> {nd}: {n_old:,} -> {n_new:,} jobs; added {counts['added']:,} ({pct(counts['added'])}), removed {counts['removed']:,} ({pct(counts['removed'])}), changed {counts['changed']:,}, carried {counts['carried']:,} from {len(carry_boards)} vanished board(s) [{len(absent) - len(carry_boards)} really emptied]; {out_bytes / 1e6:.0f} MB in {len(parts)} part(s) + lite {lite_bytes / 1e6:.0f} MB, {time.time() - t0:.0f}s -> {os.path.relpath(outd)}/")

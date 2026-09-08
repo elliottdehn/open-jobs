@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "boto3"]
 # ///
 """Salary estimator: ridge regression from the job embedding (1536-d) to log(annual USD), trained on
 postings with a mechanically stated USD salary (tools/salary.py). Writes <EXPORT_DIR>/web/salary-model.json
@@ -11,9 +11,14 @@ import numpy as np, duckdb
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 from salary import extract
 
-root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export/latest"))
-J = os.path.join(root, "jobs", "*.parquet")
-con = duckdb.connect(); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
+# EXPORT_DIR: local export dir or s3://bucket/exports/<date> (read in place); outputs go to <WORK_DIR or EXPORT_DIR>/web
+_ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://")
+root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..", _ed)
+work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
+J = f"{root}/jobs/*.parquet"
+con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
 q = f"""SELECT embed_model, content, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300
           AND (contains(content, '$') OR contains(content, 'USD') OR contains(content, '€') OR contains(content, '£'))
@@ -50,7 +55,7 @@ for lam in (0.3, 1, 3, 10, 30):
     print(f"  lambda {lam:>4}: holdout MAE {mae:.3f} log ≈ {100*(np.exp(mae)-1):.0f}% · within ±20%: {within:.0%}")
     if best is None or mae < best[0]: best = (mae, lam, within)
 w, b = fit(X, y, best[1]); resid = y - (X @ w + b); sigma = float(resid.std())
-out = os.path.join(root, "web", "salary-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
+out = os.path.join(work, "web", "salary-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump({"recipe": tag, "dims": D, "w": [round(float(v), 6) for v in w], "b": float(b), "sigma": sigma, "n": int(N), "lambda": best[1],
            "holdout": {"mae_log": float(best[0]), "within_20pct": float(best[2])}, "target": "log(annual USD midpoint)", "trained_at": int(time.time() * 1000)}, open(out, "w", encoding="utf-8"))
 print(f"wrote {out}: n={N:,}, lambda={best[1]}, sigma={sigma:.3f} (±{100*(np.exp(sigma)-1):.0f}%), holdout within ±20%: {best[2]:.0%}")

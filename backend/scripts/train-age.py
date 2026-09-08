@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "boto3"]
 # ///
 """Posting-age estimator: predict how old an open posting of this content *typically* is, from its
 embedding. The client compares a job's actual age against the prediction: younger -> Fresh, older ->
@@ -8,15 +8,20 @@ Stale (an outlier survivor for its market: hard-to-fill, ghost, or bumped). Trai
 small MLP (1536->64->1) on log1p(age days) over all dated open postings; publishes whichever wins the
 holdout to <EXPORT_DIR>/web/age-model.json {kind, recipe, ... , holdout}.
 Run: EXPORT_DIR=export/latest uv run scripts/train-age.py"""
-import json, os, time
+import sys, json, os, time
 import numpy as np, duckdb
 
-root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export/latest"))
-J = os.path.join(root, "jobs", "*.parquet")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
+# EXPORT_DIR: local export dir or s3://bucket/exports/<date> (read in place); outputs go to <WORK_DIR or EXPORT_DIR>/web
+_ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://")
+root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..", _ed)
+work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
+J = f"{root}/jobs/*.parquet"
 TARGET_N = 800_000  # plenty for a 1536-d head; keeps the matrix ~5 GB
 CAP_DAYS = 3650.0   # fossils beyond 10y say "ancient", not "12.7y exactly"
 
-con = duckdb.connect(); con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")
+con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")
 total = con.execute(f"SELECT count(*) FROM read_parquet('{J}') WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND published_at IS NOT NULL").fetchone()[0]
 p_keep = min(1.0, TARGET_N / max(total, 1))
 q = f"""SELECT embed_model, greatest(0, date_diff('day', published_at, now())) AS age_days, embedding
@@ -84,7 +89,7 @@ for epoch in range(3):
     hte = np.maximum(X[te] @ W1 + b1, 0); mae_m = np.mean(np.abs(hte @ W2 + b2 - y[te]))
     print(f"  mlp epoch {epoch + 1}: holdout MAE {mae_m:.3f}")
 
-out = os.path.join(root, "web", "age-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
+out = os.path.join(work, "web", "age-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
 common = {"recipe": tag, "dims": D, "n": int(N), "target": "log1p(age days of open posting)",
           "cap_days": CAP_DAYS, "baseline_mae": float(base_mae), "trained_at": int(time.time() * 1000)}
 if mae_m < best_r[1]:

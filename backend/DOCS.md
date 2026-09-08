@@ -159,7 +159,7 @@ supported, CORS open):
 - `groups/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen,
   jd text ≤ 4k chars) with exact float32 embeddings (`v`, base64 little-endian).
 Build + publish: `uv run scripts/build-manifest.py` (from `export/jobs/*.parquet` pulled with
-`--embed`) then `scripts/upload-web.sh`. Rebuild whenever the embedding recipe or the corpus changes.
+`--embed`) then `scripts/publish-web.py`. Rebuild whenever the embedding recipe or the corpus changes.
 Experiment / evaluation of the tree: `scripts/experiments/tree.py`.
 
 ## HTTP API
@@ -252,10 +252,30 @@ fleet in about an hour. Without a kick the same work happens at each board's nex
 
 ## Daily consolidation (pull everything → parquet → manifest → R2)
 
-One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models] [--skip-ledger] [--keep-full]`.
-It writes `export/<YYYY-MM-DD>/`, repoints `export/latest`, and streams an unbuffered log to
-`logs/consolidate-<date>.log`. Every stage is re-runnable; finished ATSes are skipped via `.done`
-markers, and interrupted exports resume from their last complete page.
+One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models] [--skip-ledger] [--keep-full] [--source r2] [--from STAGE]`.
+It is a thin wrapper: the work is ten stages in `scripts/stage.py`, each one an idempotent command
+(`uv run scripts/stage.py <stage> --date <date>`), and the wrapper only sequences them and keeps the log
+(`logs/consolidate-<date>.log`). `--from <stage>` resumes after a failure.
+
+| stage | does | reads | writes |
+|---|---|---|---|
+| ingest | local-only ATSes fetched from this machine, posted to the Worker | the sites | Worker |
+| pull | per-board snapshots -> `export/<date>/snapshots/` (skipped with `--source r2`) | R2 | local |
+| ledger | slim `status=all` export of every board -> `export/ledger/<date>/` | Worker | local |
+| parquet | snapshots (+ `/export` fallback) -> `jobs/<ats>.parquet`, `boards/<ats>.parquet` | local or R2 in place | local, and `exports/<date>/` in R2 with `--publish`/`--source r2` |
+| diff | today vs the previous export -> `export/diffs/<prev>__<date>/` | local or R2 | local |
+| tree | manifest, centroids, group files; `--publish` streams each group file to `groups/` as written | local or R2 | `web/`, R2 |
+| estimators | salary, arrangement, seniority, age, city + location tables | local or R2 | `web/` |
+| finalize | `scripts/publish-web.py`: reconcile `groups/` in R2 by size, then models, centroids, manifest last; repoint `export/latest` | `web/` | R2 |
+| history | `scripts/upload-history.py`: diff and ledger parts + `index.json` | local | R2 |
+| retention | delete older full exports that have a successor diff (local only) | | local |
+
+All uploads go through the S3 API (`scripts/r2.py`: boto3, multipart, retries; credentials `R2_*` in the
+environment or `.dev.vars`), so there is no 300 MiB per-object cap and no `wrangler` in the pipeline.
+`--source r2` is the container layout: snapshots and the previous export are read from the bucket in
+place through DuckDB's S3 client, parquet is written to `exports/<date>/`, and only scratch
+(`work-<date>/`: vector memmap, staging, DuckDB spill) is local. Every script that reads an export takes
+`EXPORT_DIR` as a local dir or an `s3://bucket/exports/<date>` prefix, with `WORK_DIR` for local scratch.
 
 Where this is heading: [`CONTAINER.md`](CONTAINER.md), the plan for running consolidation as Cloudflare
 Containers started by the cron, with the measured stage sizes and the changes each stage needs.
@@ -370,7 +390,7 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
    employer's location-replicated postings, harmless), purity if you run
    `scripts/experiments/hull.py` on a sample.
 
-5. **Upload** (`upload-web.sh`, `EXPORT_DIR=<dir>`). Puts `groups/*` first, then `centroids.bin`,
+5. **Upload** (`publish-web.py`, `EXPORT_DIR=<dir>`). Reconciles `groups/*` first, then `centroids.bin`,
    then `manifest.json` last, so a client never sees a manifest whose groups aren't there yet.
    Objects are served at `/data/*` with `cache-control: max-age=3600`; group ids change every
    build, so stale caches only ever miss, never mismatch. (Old group files accumulate in the
@@ -495,7 +515,9 @@ src/ratelimit.ts     per-IP fixed-window RateLimit DO (used by /embed)
 src/budget.ts        per-IP USD meter (hour/day windows) for /enrich; src/pricing.ts has the rates
 web/                 JobScream client (index.html, app.js)
 scripts/build-manifest.py  tree manifest + centroids + group files for the client
-scripts/upload-web.sh      publish export/web to R2
+scripts/publish-web.py     finalize: reconcile groups/ in R2, then models, centroids, manifest
+scripts/stage.py           one consolidation stage per invocation (the container unit)
+scripts/r2.py              R2 through the S3 API (boto3, multipart); DuckDB S3 config
 src/enrich.ts        job enrichment (structured extraction) + JD text cleanup
 src/jobschema.ts     job_v1 strict JSON schema + instructions (FIELDS.md §2)
 src/company.ts       board/company resolver (schema, candidate derivation, prompt)

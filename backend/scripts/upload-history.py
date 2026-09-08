@@ -1,27 +1,33 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["boto3"]
+# ///
 """Publish the history files to R2 so they are public at /data/diffs/* and /data/ledger/* (consolidate.sh step 5b).
 
-  python3 scripts/upload-history.py [--diffs export/diffs] [--ledger export/ledger] [--force]
+  uv run scripts/upload-history.py [--diffs export/diffs] [--ledger export/ledger] [--force]
 
-Layout on disk (build-diff.py / build-ledger.py write parts <= 200 MB because wrangler caps an upload at 300 MiB):
+Uploads go through the S3 API (scripts/r2.py, multipart), so there is no per-object size cap; parts are still
+<= 200 MB because readers benefit from bounded files.
+Layout on disk:
   export/diffs/<prev>__<date>/data_N.parquet  + export/diffs/<prev>__<date>.json (sidecar)
   export/ledger/<date>/data_N.parquet
 Uploads every part and sidecar that has no marker under export/.uploaded-history/, then rewrites and uploads
 diffs/index.json and ledger/index.json: the public lists of what is available, with parts and sidecar counts,
 because the bucket listing itself is admin-only. Markers are per file, so a re-run only uploads what is new.
 """
-import argparse, glob, hashlib, json, os, subprocess, sys, time
+import argparse, glob, hashlib, json, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
 ap = argparse.ArgumentParser()
 ap.add_argument("--diffs", default="export/diffs"); ap.add_argument("--ledger", default="export/ledger")
 ap.add_argument("--marks", default="export/.uploaded-history"); ap.add_argument("--force", action="store_true", help="re-upload everything")
 a = ap.parse_args()
-B = "jobscream-data"; os.makedirs(a.marks, exist_ok=True)
+os.makedirs(a.marks, exist_ok=True)
+r2 = R2()
 
 def put(key, path, ctype):
-    for attempt in range(4):
-        r = subprocess.run(["npx", "wrangler", "r2", "object", "put", f"{B}/{key}", "--file", path, "--content-type", ctype, "--remote"], capture_output=True, text=True)
-        if r.returncode == 0: return True
-        time.sleep(3 * (attempt + 1))
-    print(f"FAILED {key}: {r.stderr[-200:]}", flush=True); return False
+    try: r2.put_file(key, path, ctype); return True
+    except Exception as e: print(f"FAILED {key}: {str(e)[-200:]}", flush=True); return False
 
 def mark_of(key): return os.path.join(a.marks, key.replace("/", "__"))
 stats = {"uploaded": 0, "failed": 0}

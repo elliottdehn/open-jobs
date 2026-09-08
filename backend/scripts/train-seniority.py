@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "scipy"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "scipy", "boto3"]
 # ///
 """Seniority estimator: multinomial logistic regression from the job embedding (1536-d) to the eight levels
 tools/seniority.py can read off a title (intern … executive), trained on postings whose title states one.
@@ -13,14 +13,19 @@ import numpy as np, duckdb
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 from seniority import extract, LEVELS
 
-root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export/latest"))
-J = os.path.join(root, "jobs", "*.parquet")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
+# EXPORT_DIR: local export dir or s3://bucket/exports/<date> (read in place); outputs go to <WORK_DIR or EXPORT_DIR>/web
+_ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://")
+root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..", _ed)
+work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
+J = f"{root}/jobs/*.parquet"
 SAMPLE = int(os.environ.get("SAMPLE", "250000"))
-con = duckdb.connect(); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
+con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
 q = f"""SELECT embed_model, title, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL USING SAMPLE {SAMPLE} ROWS"""
 CLASSES = list(LEVELS)
-cache = os.path.join(root, "web", "seniority-train.npz")
+cache = os.path.join(work, "web", "seniority-train.npz")
 t0 = time.time(); X = []; y = []; seen = 0; tag = None; counts = {c: 0 for c in CLASSES + ["unknown"]}
 if os.path.exists(cache) and not os.environ.get("RESCAN"):
     z = np.load(cache, allow_pickle=True); X = list(z["X"]); y = list(z["y"]); seen = int(z["seen"]); tag = str(z["tag"]); counts = json.loads(str(z["counts"]))
@@ -74,7 +79,7 @@ per = {}
 for k, c in enumerate(CLASSES):
     tp = int(((pred == k) & (y[te] == k)).sum()); fp = int(((pred == k) & (y[te] != k)).sum()); fn = int(((pred != k) & (y[te] == k)).sum())
     per[c] = {"precision": tp / max(tp + fp, 1), "recall": tp / max(tp + fn, 1), "support": int((y[te] == k).sum())}
-out = os.path.join(root, "web", "seniority-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
+out = os.path.join(work, "web", "seniority-model.json"); os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump({"recipe": tag, "dims": D, "classes": CLASSES, "W": [[round(float(v), 5) for v in W[:, k]] for k in range(K)], "b": [float(v) for v in b],
            "n": int(N), "lambda": best[1], "label_share": {c: counts[c] / seen for c in CLASSES + ["unknown"]},
            "holdout": {"accuracy": float(best[0]), "per_class": per}, "threshold": 0.7, "trained_at": int(time.time() * 1000)}, open(out, "w", encoding="utf-8"))

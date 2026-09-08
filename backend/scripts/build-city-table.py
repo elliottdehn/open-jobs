@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["duckdb>=1.1"]
+# dependencies = ["duckdb>=1.1", "boto3"]
 # ///
 """Bare city -> country table for tools/locparse.py, learned from the corpus: for every "City, <place that
 resolves to one country>" segment, tally city -> country; keep cities with >= 25 postings where one country
@@ -9,9 +9,13 @@ Run: EXPORT_DIR=export/latest uv run scripts/build-city-table.py"""
 import duckdb, sys, os, collections, json, re
 here = os.path.dirname(__file__); sys.path.insert(0, os.path.join(here, "..", "..", "tools"))
 import locparse; from locparse import parse, _split
-root = os.path.join(here, "..", os.environ.get("EXPORT_DIR", "export/latest"))
+sys.path.insert(0, here)
+from r2 import R2
+_ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://")
+root = _ed.rstrip("/") if _s3 else os.path.join(here, "..", _ed)
+work = os.environ.get("WORK_DIR") or (os.path.join(here, "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 base = dict(locparse.CITY_COUNTRY)  # includes the previous table; rebuild from scratch below
-rows = duckdb.connect().execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL GROUP BY location").fetchall()
+rows = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()).execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL GROUP BY location").fetchall()
 tally = collections.defaultdict(collections.Counter)
 for loc, n in rows:
     for seg in _split(loc):

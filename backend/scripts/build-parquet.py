@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["duckdb>=1.1"]
+# dependencies = ["duckdb>=1.1", "boto3"]
 # ///
 """Flatten export/*.ndjson (one line per board) into parquet, streaming one ATS at a time so
 memory stays bounded (the full job set with content + raw is several GB):
@@ -9,17 +9,39 @@ memory stays bounded (the full job set with content + raw is several GB):
 Run: uv run scripts/build-parquet.py"""
 import glob, os, sys
 import duckdb
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r2 import R2
 
+# SNAPSHOT_SOURCE=r2 reads snapshots/<ats>/*.parquet from the bucket in place (no local pull); default = local
+# <EXPORT_DIR>/snapshots/. --publish uploads jobs/<ats>.parquet and boards/<ats>.parquet to exports/<date>/ in R2.
+# --ats a,b restricts to those providers (tests). Local-only providers (ndjson via /export) are unchanged.
 root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
+date_name = os.path.basename(os.path.realpath(root))
+argv = sys.argv[1:]
+only = set(next((a.split("=", 1)[1] for a in argv if a.startswith("--ats=")), "").split(",")) - {""}
+publish = "--publish" in argv
+from_r2 = os.environ.get("SNAPSHOT_SOURCE", "local") == "r2"
+r2 = R2() if (from_r2 or publish) else None
 files = sorted(glob.glob(os.path.join(root, "*.ndjson")))
-snap_dirs = sorted(d for d in glob.glob(os.path.join(root, "snapshots", "*")) if glob.glob(os.path.join(d, "*.parquet")))
-snap_ats = {os.path.basename(d) for d in snap_dirs}
-if not files and not snap_dirs:
+if from_r2:
+    import json as _json
+    boards = _json.load(open(os.path.join(os.path.dirname(__file__), "..", "src", "boards.json")))
+    exclude = set(os.environ.get("SNAPSHOT_EXCLUDE", "jobscore,governmentjobs").split(","))
+    snap_r2 = sorted(a for a in boards if a not in exclude)
+    snap_dirs = []; snap_ats = set(snap_r2)
+else:
+    snap_r2 = []
+    snap_dirs = sorted(d for d in glob.glob(os.path.join(root, "snapshots", "*")) if glob.glob(os.path.join(d, "*.parquet")))
+    snap_ats = {os.path.basename(d) for d in snap_dirs}
+if only:
+    files = [f for f in files if os.path.basename(f)[:-len(".ndjson")] in only]; snap_dirs = [d for d in snap_dirs if os.path.basename(d) in only]; snap_r2 = [a for a in snap_r2 if a in only]
+if not files and not snap_dirs and not snap_r2:
     sys.exit("no export/*.ndjson files or snapshots/; run scripts/pull-snapshots.mjs or scripts/export.mjs first")
 for d in ("jobs", "boards"):
     os.makedirs(os.path.join(root, d), exist_ok=True)
 
 con = duckdb.connect()
+if from_r2: r2.duckdb(con)
 con.execute("SET preserve_insertion_order = false")
 con.execute("SET threads = 2")
 con.execute("SET memory_limit = '10GB'")
@@ -144,7 +166,7 @@ def split_ndjson(f, jobs_out, boards_out):
                 jo.write(json.dumps(j) + "\n")
 
 def finalize(ats, outs):
-    """Shared tail for both sources: dark aggregator guard, org column strip, count."""
+    """Shared tail for both sources: dark aggregator guard, org column strip, count, optional publish."""
     if ats == "dark":
         # aggregator guard: a `dark` board whose open postings name >2 distinct hiringOrganizations is a job
         # board, not an employer -> drop all its jobs from the export (keeps the corpus employer-only).
@@ -160,7 +182,9 @@ def finalize(ats, outs):
     else:
         con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
-    print(f"{ats:16} {n:>9,} jobs", flush=True)
+    if publish:
+        for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{ats}.parquet", outs[k], "application/octet-stream")
+    print(f"{ats:16} {n:>9,} jobs" + (f"  -> exports/{date_name}/" if publish else ""), flush=True)
 
 tmp = os.path.join(root, ".split")
 os.makedirs(tmp, exist_ok=True)
@@ -184,16 +208,22 @@ for f in files:
     finalize(ats, outs)
 
 
-# ---- per-board R2 snapshot parquets (scripts/pull-snapshots.mjs) ----
-for d in snap_dirs:
-    ats = os.path.basename(d)
-    outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
-    parts = glob.glob(os.path.join(d, "*.parquet"))
-    newest = max(os.path.getmtime(x) for x in parts)
-    if not force and all(os.path.exists(o) and os.path.getmtime(o) > newest for o in outs.values()):
-        print(f"{ats:16} up to date (snapshots)", flush=True)
-        continue
-    pq = os.path.join(d, "*.parquet")
+# ---- per-board R2 snapshot parquets: local (scripts/pull-snapshots.mjs) or read from the bucket in place ----
+for src in (snap_dirs or snap_r2):
+    if from_r2:
+        ats = src; pq = r2.url(f"snapshots/{ats}/*.parquet")
+        outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
+        if not any(True for _ in r2.list(f"snapshots/{ats}/")):
+            print(f"{ats:16} no snapshots in R2", flush=True); continue
+    else:
+        d = src; ats = os.path.basename(d)
+        outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
+        parts = glob.glob(os.path.join(d, "*.parquet"))
+        newest = max(os.path.getmtime(x) for x in parts)
+        if not force and all(os.path.exists(o) and os.path.getmtime(o) > newest for o in outs.values()):
+            print(f"{ats:16} up to date (snapshots)", flush=True)
+            continue
+        pq = os.path.join(d, "*.parquet")
     # boards.parquet: board meta rides in each snapshot's footer kv; rebuild the boards.jsonl shape
     # split_ndjson produces so BOARDS_SQL is reused unchanged.
     kv = con.execute(f"SELECT file_name, decode(value) FROM parquet_kv_metadata('{pq}') WHERE decode(key) = 'board_meta'").fetchall()

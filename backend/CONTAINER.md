@@ -113,11 +113,29 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
   them, and a final step posts the run summary (counts, diff line, ledger line) to the ideas Slack
   webhook or a new one, so a failed night is noticed without reading logs.
 
+## Status (2026-09-08)
+
+Steps 1-3 below are done, each validated on real data:
+- **Write as produced.** `scripts/r2.py` (S3 API, multipart) replaces `wrangler` everywhere: the tree build
+  streams group files to `groups/` while writing them (`--publish`), `publish-web.py` (finalize) reconciles
+  `groups/` by size and then publishes models, centroids, and the manifest last, `upload-history.py` uses the
+  same transport. `upload-web.py` is gone, and with it the 300 MiB cap and the crash-and-retry.
+- **Read in place.** `build-parquet.py --source r2` reads the 62k snapshots straight from the bucket
+  (DuckDB S3, footer metadata included) and publishes `jobs/`/`boards/` to `exports/<date>/`; the tree
+  build, the diff (both roots, carry-forward rewriting the R2 object), and the estimators accept an
+  `s3://` `EXPORT_DIR`. Verified on a one-provider export in the bucket.
+- **Stages.** `scripts/stage.py <stage>` is the unit a container runs; `consolidate.sh` is now a thin
+  wrapper that sequences them, with `--from` to resume. The laptop path is unchanged in behaviour.
+
+Not yet: ingest still runs from the laptop (step 6), and no image, Workflow, or cron trigger exists (step 5).
+Reading 62k snapshots from a laptop through DuckDB's S3 client is ~46 files/s (about 22 min for the
+fleet), comparable to the current pull; inside Cloudflare it should be well under that.
+
 ## Order of work
 
 Each step is useful on its own and lands on the laptop first, so nothing is a big-bang move.
 
-1. **Tree build streams text and metadata** — DONE 2026-09-08. Two passes: pass 1 loads vectors
+1. **Tree build streams text and metadata** — DONE 2026-09-08 (see Status). Two passes: pass 1 loads vectors
    into the float16 memmap and keeps only titles/locations/company hints/board per row; the tree is
    built unchanged; pass 2 streams the parquet back in DFS order (DuckDB join on the exact job key,
    sort by position) and writes each group file as its last row arrives. Output verified byte-identical
@@ -131,12 +149,10 @@ Each step is useful on its own and lands on the laptop first, so nothing is a bi
    into 250k-position chunks and sorting each); and `time -l` measures the `uv` wrapper, not Python.
    The 9.6 GB vector memmap and ~5 GB staging stay on disk (fits the 20 GB instance if parquet is read
    from R2).
-2. **Write artifacts to R2 as produced** (group files, diff parts, ledger parts) via the S3 API
-   with multipart; retire `upload-web.py` / `upload-history.py` and the 300 MiB cap.
-3. **Read snapshots and exports from R2 in place**; stop staging `export/<date>/` locally. At this
-   point the laptop run needs ~10 GB of disk and ~8 GB of memory.
-4. **Split `consolidate.sh` into stage commands** with R2 prefixes as the only state between them;
-   keep a thin shell wrapper for local runs.
+2. **Write artifacts to R2 as produced** — DONE 2026-09-08 (see Status).
+3. **Read snapshots and exports from R2 in place** — DONE 2026-09-08 as `--source r2` (see Status).
+   With it the run needs ~15 GB of local disk (memmap + staging) and ~10 GB of memory.
+4. **Split `consolidate.sh` into stage commands** — DONE 2026-09-08 (`scripts/stage.py`; see Status).
 5. **Container image + Workflow + cron.** Run it in parallel with the laptop for a week, diffing
    the two manifests, then switch.
 6. **Ingest** for the local-only ATSes: a separate small job outside Cloudflare, or drop them.
