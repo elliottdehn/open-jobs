@@ -280,6 +280,14 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   `changed` row; `embed_status` says whether the job is in the public group files yet (`done`), and the flip to
   `done` is itself emitted as a `changed` row, so a mirror that only wants the public corpus can gate on it and
   still catch jobs that were added before they were embedded.
+- **What a removal means.** Every `removed` row carries `removal`: `closed` (the crawler marked the job
+  removed; `removed_at_crawler` says when, from the same run's ledger), `left_dataset` (the crawler still
+  holds it open, so it left the export for another reason: an eligibility or filter rule, or dedup picking a
+  different mirror), or `unknown` (never in the ledger). The sidecar counts them. Closure is a crawler
+  guarantee only for `closed`; `POST /status` answers for any key at any time.
+- **What counts as a change.** `title`, `location`, `url`, `content`, `embed_status`, `published_at`. Not
+  tracked: `departments`, `updated_at`, enrichment, and company metadata, which lives in `boards/` and is
+  not part of the diff (the sidecar's `change_key` lists the tracked fields for the schema version).
 - **Vanished boards.** A board with rows yesterday and none today is asked about: `GET /boards/:ats/:slug`
   says whether the crawler still holds open jobs for it. If so, our pull missed it and its rows are
   `carried` (appended into today's `jobs/` and `boards/` parquet so the index and tomorrow's diff keep
@@ -298,6 +306,12 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   `GET /data/diffs/<prev>__<date>/data_N.parquet` (or `.../lite/data_N.parquet`) and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
   and `/data/ledger/index.json` list what is available with the parts and the sidecar counts (the bucket listing
   itself is admin-only). DuckDB reads them in place: `read_parquet(['https://backend.dehnbostele.workers.dev/data/diffs/<a>__<b>/data_0.parquet', ...])`.
+- **Bootstrap and recovery (for a mirror).** `diffs/index.json` carries `head` (the export date behind the
+  current `groups/` and `manifest.json`) and `snapshot_built_at` (that manifest's `built_at`). Bootstrap from
+  `groups/` when `manifest.built_at` equals `snapshot_built_at`, record `head`, then apply every diff whose
+  `from` equals your head, in order, verifying each part's sha256 and each diff's `parent`. Diffs are never
+  expired, so there is no cursor expiry; a hash mismatch or a missing diff is a broken chain, and the answer
+  is to re-bootstrap, never to skip.
 - **Retention policy, as stated in the public indexes:** diffs and ledger days are kept indefinitely; the full
   export is overwritten daily; the group files are rewritten daily under the same names. A mirror bootstraps
   from `groups/` once and replays diffs from that day. Not yet done: a periodic full anchor (a monthly published

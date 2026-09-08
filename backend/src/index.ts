@@ -466,7 +466,10 @@ export default {
 			// Pull-driven stream with backpressure: the client's read pace bounds Worker memory (a page of big
 			// boards with vectors + JD bodies is hundreds of MB — eagerly enqueuing it OOMs the isolate).
 			// Big boards are paged internally (PAGE jobs per DO call) and emitted as multi-part lines.
-			const PAGE = query.embed ? 150 : 0;
+			// Always page: a status=all export of a 30k-job board built in one response blew the DO's isolate memory
+			// (2026-09-07: "isolate exceeded its memory limit and was reset" on 27 boards, 4,946 rows missing from the
+			// ledger). Vectors are ~6 KB a row, slim rows ~300 B; both stay far under the 32 MiB RPC cap at these sizes.
+			const PAGE = query.embed ? 150 : 2000;
 			const enc2 = enc;
 			let bi = 0; // next board index
 			let cur: { slug: string; part: number; done: boolean } | null = null;

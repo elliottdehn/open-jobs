@@ -9,8 +9,10 @@
 Writes export/diffs/<prev>__<date>/data_*.parquet (parts <= 200 MB: wrangler uploads are capped at 300 MiB), one row per
 event with the full job record plus `op`:
   added         the new row (first day in the corpus)
-  removed       the old row, in full (so a removed posting's text is never lost)
-  changed       the new row of a posting whose title, location, url, text, or embed_status moved (not the crawler's
+  removed       the old row, in full (so a removed posting's text is never lost), with `removal` = closed
+                (the crawler set removed_at; `removed_at_crawler` says when) | left_dataset (still open in the
+                crawler: eligibility, dedup, or a filter rule moved it out of the export) | unknown
+  changed       the new row of a posting whose title, location, url, text, embed_status, or published_at moved (not the crawler's
                 content_hash, which also covers the raw provider payload and churns for ~370k Workday rows a day).
                 The embed_status flip to done is the moment a job enters the public group files.
   changed_prev  its previous row
@@ -58,12 +60,13 @@ collist = ", ".join(f'"{c}"' for c in cols)
 # Workday alone re-stamps ~370k of those a day ("30+ days ago" strings, counters) with nothing a reader would notice.
 # embed_status is part of the key too: a job that arrives unembedded enters the public corpus (the group files) only
 # when it flips to done, and a mirror has to see that flip as an event or it never learns the job became visible.
-con.execute("CREATE TABLE ok AS SELECT ats, slug, id, title, location, url, embed_status, md5(coalesce(content, '')) AS ch FROM old")
-con.execute("CREATE TABLE nk AS SELECT ats, slug, id, title, location, url, embed_status, md5(coalesce(content, '')) AS ch FROM new")
+# published_at too: a board re-stamping its posted date is both a visible change and the re-stamp signal.
+con.execute("CREATE TABLE ok AS SELECT ats, slug, id, title, location, url, embed_status, published_at, md5(coalesce(content, '')) AS ch FROM old")
+con.execute("CREATE TABLE nk AS SELECT ats, slug, id, title, location, url, embed_status, published_at, md5(coalesce(content, '')) AS ch FROM new")
 n_old, n_new = con.execute("SELECT (SELECT count(*) FROM ok), (SELECT count(*) FROM nk)").fetchone()
 con.execute("CREATE TABLE addk AS SELECT n.ats, n.slug, n.id FROM nk n WHERE NOT EXISTS (SELECT 1 FROM ok o WHERE o.ats=n.ats AND o.slug=n.slug AND o.id=n.id)")
 con.execute("CREATE TABLE gonek AS SELECT o.ats, o.slug, o.id FROM ok o WHERE NOT EXISTS (SELECT 1 FROM nk n WHERE n.ats=o.ats AND n.slug=o.slug AND n.id=o.id)")
-con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch OR n.embed_status IS DISTINCT FROM o.embed_status")
+con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch OR n.embed_status IS DISTINCT FROM o.embed_status OR n.published_at IS DISTINCT FROM o.published_at")
 # boards with rows yesterday and none at all today
 con.execute("""CREATE TABLE absent AS
   SELECT g.ats, g.slug, count(*) AS old_jobs FROM gonek g
@@ -98,16 +101,29 @@ con.execute("CREATE TABLE remk AS SELECT g.* FROM gonek g WHERE NOT EXISTS (SELE
 con.execute("CREATE TABLE carryk AS SELECT g.* FROM gonek g WHERE EXISTS (SELECT 1 FROM carryb c WHERE c.ats=g.ats AND c.slug=g.slug)")
 counts = dict(zip(["added", "removed", "changed", "carried"], con.execute("SELECT (SELECT count(*) FROM addk), (SELECT count(*) FROM remk), (SELECT count(*) FROM chgk), (SELECT count(*) FROM carryk)").fetchone()))
 
+# Removal semantics, from the ledger built earlier in the same run (step 2b): a key the crawler has marked removed
+# is `closed`; one the crawler still holds open left the export for another reason (eligibility, dedup, a filter
+# rule) and is `left_dataset`; a key the ledger has never seen is `unknown`. Only `removed` rows carry a value.
+ledger_dir = os.path.join(os.path.dirname(a.out), "ledger", nd)
+have_ledger = bool(glob.glob(os.path.join(ledger_dir, "*.parquet")))
+if have_ledger:
+    con.execute(f"CREATE TABLE led AS SELECT l.ats, l.slug, l.id, l.is_open, l.removed_at FROM read_parquet('{ledger_dir}/*.parquet') l WHERE EXISTS (SELECT 1 FROM remk k WHERE k.ats=l.ats AND k.slug=l.slug AND k.id=l.id)")
+else:
+    con.execute("CREATE TABLE led (ats VARCHAR, slug VARCHAR, id VARCHAR, is_open BOOLEAN, removed_at TIMESTAMPTZ)")
+    print("WARNING: no ledger for today; removed rows get removal = 'unknown'")
+removal_sql = "CASE WHEN led.is_open = false THEN 'closed' WHEN led.is_open THEN 'left_dataset' ELSE 'unknown' END"
+removal_counts = dict(con.execute(f"SELECT {removal_sql} AS removal, count(*) FROM remk k LEFT JOIN led USING (ats, slug, id) GROUP BY 1").fetchall())
+
 # one file, every event with the full record
 outd = os.path.join(a.out, f"{pd}__{nd}")
 if os.path.isdir(outd):
     for f in glob.glob(os.path.join(outd, "*.parquet")): os.remove(f)
 con.execute(f"""COPY (
-  SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
-  UNION ALL SELECT 'removed', '{pd}', '{nd}', {collist} FROM old o WHERE EXISTS (SELECT 1 FROM remk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
-  UNION ALL SELECT 'changed', '{pd}', '{nd}', {collist} FROM new n WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
-  UNION ALL SELECT 'changed_prev', '{pd}', '{nd}', {collist} FROM old o WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
-  UNION ALL SELECT 'carried', '{pd}', '{nd}', {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
+  SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
+  UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
+  UNION ALL SELECT 'changed', '{pd}', '{nd}', NULL, NULL, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
+  UNION ALL SELECT 'changed_prev', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
+  UNION ALL SELECT 'carried', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
 parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
 # lite projection: the same events without the vector or the raw provider / enrichment JSON. The description text
@@ -138,7 +154,8 @@ for cand in sorted(glob.glob(os.path.join(a.out, f"*__{pd}.json"))):
 
 n_new_final = n_new + counts["carried"]
 ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
-side = {"schema_version": 1, "from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
+side = {"schema_version": 2, "from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
+        "removal": removal_counts, "change_key": ["title", "location", "url", "content", "embed_status", "published_at"],
         "content_sha256": content_sha256, "parent": parent,
         "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
         "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),

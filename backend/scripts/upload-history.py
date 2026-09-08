@@ -82,7 +82,13 @@ def entry(prefix, d, extra):
         lh = side_hashes(d, "lite")
         e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p), "sha256": lh.get(os.path.basename(p)) or sha256_of(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
     return e
-diffs_index = {"schema_version": 1, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
+def snapshot_built_at():
+    try: return json.load(open("export/latest/web/manifest.json")).get("built_at")
+    except Exception: return None
+latest_date = os.path.basename(os.path.realpath("export/latest")) if os.path.exists("export/latest") else None
+diffs_index = {"schema_version": 2, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
+               "head": latest_date, "snapshot_built_at": snapshot_built_at(),
+               "bootstrap": "groups/ and manifest.json are the export named by `head` when manifest.built_at == snapshot_built_at. Bootstrap from them, record head, then apply every diff whose `from` == your head, in order, verifying each part's sha256 and each diff's parent. History is never expired; a broken chain means re-bootstrap.",
                "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together. `lite` has the same rows without the vector or raw JSON; description text is kept on added and changed rows.",
                "entries": [e for e in (entry("diffs", d, lambda n, d: {"from": n.split("__")[0], "to": n.split("__")[1], "sidecar": f"diffs/{n}.json", **side(d)}) for d in diff_dirs) if e]}
 ledger_index = {"schema_version": 1, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
