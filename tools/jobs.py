@@ -18,7 +18,7 @@
 
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
 """
-import argparse, base64, json, os, sys, time, urllib.request, urllib.error, math, re
+import argparse, base64, glob, json, os, sys, time, urllib.request, urllib.error, math, re
 # Windows consoles default to cp1252; our output has ✓ · – etc. Reconfigure stdout/stderr to UTF-8 (no-op elsewhere).
 for _s in (sys.stdout, sys.stderr):
     try: _s.reconfigure(encoding="utf-8", errors="replace")
@@ -727,24 +727,37 @@ def cmd_probe(a):
     ip = os.path.join(WORK, "ideal.json")
     if not os.path.exists(ip): print("  (no work/ideal.json, so no ranking context)"); return
     _, ideal_v = ideal(); sim = float(v @ ideal_v)
-    # tree descent = the build's assignment rule (nearest sub-centroid), so this is the job's group
     jp = os.path.join(WORK, "jobs.parquet"); local = None
     if os.path.exists(jp):
         import duckdb
         local = duckdb.connect().execute(f"SELECT leaf, sim, title, location FROM read_parquet('{jp}') WHERE ats=? AND slug=? AND id=?", [r["ats"], r["slug"], job["id"]]).fetchone()
-    # group by tree descent (the build's assignment rule, nearest sub-centroid); node ids are per build, so
-    # the parquet's stale `leaf` column can't be compared against today's manifest
+    # Membership, authoritatively: the leaf files `fetch` actually downloaded (work/groups/<leaf>.json). A file is
+    # "current" only if its lo/hi/size match today's manifest node (leaf ids are reassigned every build), so a
+    # stale file can never vouch for a job. Tree descent on the final centroids is only an estimate: the build
+    # assigned members in PCA space with the split's own centroids, and the two can disagree.
+    key = f"{r['ats']}/{r['slug']}#{job['id']}"
+    gdir = os.path.join(WORK, "groups"); current, stale_files, found_in = set(), 0, None
+    for gf in sorted(glob.glob(os.path.join(gdir, "*.json"))) if os.path.isdir(gdir) else []:
+        try:
+            g = json.load(open(gf, encoding="utf-8")); node = T[g["leaf"]] if 0 <= g.get("leaf", -1) < len(T) else None
+        except Exception: continue
+        if not node or node["children"] or (g.get("lo"), g.get("hi"), len(g["jobs"])) != (node["lo"], node["hi"], node["size"]): stale_files += 1; continue
+        current.add(g["leaf"])
+        if found_in is None and any(f"{x['ats']}/{x['slug']}#{x['id']}" == key for x in g["jobs"]): found_in = g["leaf"]
     n = T[0]
     while n["children"]: n = max((T[c] for c in n["children"]), key=lambda c: float(C[c["id"]] @ v))
-    leaves = nearest(m, C, ideal_v, len(T)); rank = next(i for i, (lf, _) in enumerate(leaves, 1) if lf["id"] == n["id"])
-    gp = os.path.join(WORK, "groups.json"); fetched = [g["id"] for g in json.load(open(gp, encoding="utf-8"))] if os.path.exists(gp) else []
-    leaf_ids = {lf["id"] for lf, _ in leaves}; stale = fetched and not all(g in leaf_ids for g in fetched)
-    print(f"  similarity to your ideal JD: {sim:.3f} · group {n['id']} ({n['label']}) is rank {rank} of {len(leaves)} groups for your JD")
-    if local: pass  # membership is settled below by the parquet itself
-    elif stale: print(f"  (work/groups.json predates today's manifest, so group ids can't be compared; you fetched {len(fetched)} groups and this one ranks {rank}: re-run `fetch --top {max(rank, len(fetched))}` to be sure)")
-    elif fetched:
-        if n["id"] in fetched: print(f"  ✓ that group IS in your slice (you fetched {len(fetched)} groups)")
-        else: print(f"  ✗ that group is NOT in your slice: you fetched {len(fetched)} groups and it ranks {rank}. `fetch --top {max(rank, len(fetched))}` (or `--groups {n['id']}`) would include it.")
+    leaves = nearest(m, C, ideal_v, len(T)); rank_of = {lf["id"]: i for i, (lf, _) in enumerate(leaves, 1)}
+    print(f"  similarity to your ideal JD: {sim:.3f}")
+    if found_in is not None:
+        print(f"  ✓ group {found_in} ({T[found_in]['label']}): read from the downloaded leaf file, rank {rank_of[found_in]} of {len(leaves)} for your JD; that group IS in your slice ({len(current)} current group file(s))")
+    else:
+        est = n["id"]
+        print(f"  ~ group {est} ({n['label']}) by tree descent — an ESTIMATE (the build assigns in PCA space; this can name a neighbouring leaf), rank {rank_of[est]} of {len(leaves)} for your JD")
+        if current:
+            if est in current: print(f"    that group's file is in your slice ({len(current)} current group file(s)) and the job is not in it: the estimate is off by a leaf. `fetch --top {max(rank_of[est] + 5, len(current))}` pulls the neighbourhood around it.")
+            else: print(f"    not among the {len(current)} group file(s) you have (it ranks {rank_of[est]}). `fetch --top {max(rank_of[est], len(current))}` (or `--groups {est}`) would include it, if the estimate is right.")
+        else: print("    no current group files in work/groups/ (nothing fetched yet, or all predate today's manifest)")
+    if stale_files: print(f"    ({stale_files} file(s) in work/groups/ predate today's manifest and were ignored; `fetch` refreshes them)")
     if os.path.exists(jp):
         con = duckdb.connect(); row = local
         total = con.execute(f"SELECT count(*), sum(sim > ?) FROM read_parquet('{jp}')", [sim]).fetchone()
