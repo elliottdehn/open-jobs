@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "duckdb>=1.1", "pyarrow", "zstandard"]
+# dependencies = ["numpy", "duckdb>=1.1", "pyarrow"]
 # ///
 """Build the local-first client data from export/jobs/*.parquet (must include embeddings):
   export/web/manifest.json     tree nodes {id, parent, lo, hi, radius, size, label, medoid, exemplars, children}
@@ -16,46 +16,46 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--leaf-max", type=int, default=400)
 ap.add_argument("--leaf-radius", type=float, default=0.30)
 ap.add_argument("--pca", type=int, default=256)
+ap.add_argument("--out", help="output dir (default <EXPORT_DIR>/web)")
 args = ap.parse_args()
 
 root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
-out = os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
+out = args.out or os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
+con_tmp = os.path.join(root, ".duckdb_tmp"); os.makedirs(con_tmp, exist_ok=True)
 J = os.path.join(root, "jobs", "*.parquet")
 con = duckdb.connect()
 con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
+con.execute(f"SET temp_directory='{con_tmp}'"); con.execute("SET preserve_insertion_order=false")
 t = time.time()
 recipe = con.execute(f"SELECT embed_model, count(*) FROM read_parquet('{J}') WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY 2 DESC").fetchall()
 print("recipes:", recipe)
 tag = recipe[0][0]
-q = f"""SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
-               coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint,
-               epoch_ms(first_seen_at) AS first_seen_ms,
-               epoch_ms(published_at) AS published_ms,
+WHERE_ = f"FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"
+# The exact key string per row ties the vector-loading pass to the group-writing pass without relying on parquet
+# scan order (which is not stable across queries). Not a hash: 3.1M keys produced one 64-bit collision on 2026-09-08.
+HKEY = "ats || '/' || slug || '#' || id AS h"
+q_load = f"""SELECT {HKEY}, ats, slug, coalesce(title,'') AS title, coalesce(location,'') AS location,
+               coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint, embedding {WHERE_}"""
+q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
+               epoch_ms(first_seen_at) AS first_seen_ms, epoch_ms(published_at) AS published_ms,
                left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
-               json_extract(enrichment_json, '$.data') AS enrichment,
-               embedding
-        FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"""
-# Load via Arrow: the FLOAT[] column comes back as a ListArray whose flat values view is a zero-copy
-# float32 buffer -> reshape to (N, D). Metadata columns go through Python objects (small).
-# Stream in record batches: vectors go straight into a preallocated float32 array (N x D), small
-# columns become Python lists, and the big text columns (jd, enrichment) stay in Arrow until a group
-# file needs them. Peak memory ≈ 4·N·D bytes + text, instead of ~3x that.
+               json_extract(enrichment_json, '$.data') AS enrichment {WHERE_}"""
+# Pass 1 (vectors): stream record batches; vectors go straight into a file-backed float16 array (N x D); the
+# only per-row Python kept is what labels and exemplars need (title, location, company hint, board). Everything
+# else a group file needs (id, url, dates, jd text, enrichment) is streamed back out of the parquet in DFS order
+# by pass 2 below, so no text is ever held for the whole corpus.
 import pyarrow as pa
-import zstandard
-# jd text for 3M jobs is ~10 GB uncompressed; held raw (as an Arrow table) it stacked on the 18 GB
-# vector matrix and got this process OOM-killed. Hold each row zstd-compressed (~3x smaller) and
-# decompress only when a group file is written.
-_zc = zstandard.ZstdCompressor(level=3); _zd = zstandard.ZstdDecompressor()
-N = con.execute(q.replace("SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", "SELECT count(*) FROM (SELECT ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,", 1) + ")").fetchone()[0]
+N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
 D = 1536
 _xpath = os.path.join(root, ".vectors.f16.npy")
 if os.path.exists(_xpath): os.remove(_xpath)
 # file-backed so memory pressure evicts pages instead of killing the build (two jetsam deaths on 2026-09-05)
 X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
-small = {c: [] for c in ("ats", "slug", "id", "title", "location", "url", "company_hint", "first_seen_ms", "published_ms")}
-jd_z = []; enr_z = []
+titles, locs, hints = [], [], []
+board_ids = {}; board_of = np.empty(N, dtype=np.int32)
+H = []  # key strings, as Arrow chunks (no per-row Python objects)
 pos_ = 0
-reader = con.execute(q).fetch_record_batch(50_000)
+reader = con.execute(q_load).to_arrow_reader(50_000)
 while True:
     try: b = reader.read_next_batch()
     except StopIteration: break
@@ -63,15 +63,20 @@ while True:
     vals = emb.values.to_numpy(zero_copy_only=False)
     n = len(b)
     X[pos_:pos_ + n] = vals.reshape(n, -1)[:, :D]
-    for c in small: small[c].extend(b.column(c).to_pylist())
-    jd_z.extend(_zc.compress(t.encode()) if t else None for t in b.column("jd").to_pylist())
-    enr_z.extend(_zc.compress(t.encode()) if t else None for t in b.column("enrichment").to_pylist())
+    H.append(b.column("h"))
+    for k, (a_, s_) in enumerate(zip(b.column("ats").to_pylist(), b.column("slug").to_pylist())):
+        board_of[pos_ + k] = board_ids.setdefault((a_, s_), len(board_ids))
+    titles.extend(b.column("title").to_pylist()); locs.extend(b.column("location").to_pylist()); hints.extend(b.column("company_hint").to_pylist())
     pos_ += n
     print(f"\r  loaded {pos_:,}/{N:,}", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
 del reader
-meta_rows = list(zip(small["ats"], small["slug"], small["id"], small["title"], small["location"], small["url"], small["company_hint"], small["first_seen_ms"], small["published_ms"]))
-del small
+assert pos_ == N, f"loaded {pos_} rows, expected {N}"
+boards = [None] * len(board_ids)
+for k, i_ in board_ids.items(): boards[i_] = k
+del board_ids
+H = pa.chunked_array(H).combine_chunks()
+if len(H) != N: sys.exit(f"keys {len(H)} != rows {N}")
 # Clean + unit-normalize IN ROW BLOCKS: a whole-matrix np.linalg.norm materializes an X-sized x*x temp
 # (~18 GB at 3M jobs), which doubled peak memory and got this process SIGKILLed once the corpus outgrew
 # RAM. Blockwise keeps the temp at ~1 GB regardless of N.
@@ -83,7 +88,17 @@ for _i in range(0, X.shape[0], 200_000):
 	del _b32
 del _blk
 N, D = X.shape
-print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s")
+# Deterministic row order: sort every per-row array by key, so the build no longer depends on parquet scan order
+# (which varies with column selection and thread count). Same export in, same tree out, run after run.
+t2 = time.time()
+import pyarrow.compute as pc
+perm = pc.sort_indices(H).to_numpy()
+H = H.take(pa.array(perm)); titles = [titles[i] for i in perm]; locs = [locs[i] for i in perm]; hints = [hints[i] for i in perm]; board_of = board_of[perm]
+_x2 = os.path.join(root, ".vectors.f16.sorted.npy")
+X2 = np.lib.format.open_memmap(_x2, mode="w+", dtype=np.float16, shape=(N, D))
+for _i in range(0, N, 200_000): X2[_i:_i + 200_000] = X[perm[_i:_i + 200_000]]
+del X; os.remove(_xpath); X = X2; _xpath = _x2; del perm
+print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted in {time.time()-t2:.0f}s)")
 
 # company name per board from boards parquet (resolved), else slug
 B = os.path.join(root, "boards", "*.parquet")
@@ -153,12 +168,12 @@ def words(idx, k=4):
     c = collections.Counter()
     if len(idx) > 20000: idx = np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
     for r in idx:
-        for w in re.findall(r"[a-z][a-z+#]+", meta_rows[r][3].lower()):
+        for w in re.findall(r"[a-z][a-z+#]+", titles[r].lower()):
             if w not in STOP and len(w) > 2: c[w] += 1
     return [w for w, _ in c.most_common(k)]
 def company(r):
-    a, s = meta_rows[r][0], meta_rows[r][1]
-    return comp.get((a, s)) or meta_rows[r][6] or s
+    a, s = boards[board_of[r]]
+    return comp.get((a, s)) or hints[r] or s
 def norm_title(t):
     return re.sub(r"[^a-z]+", " ", t.lower()).strip()
 
@@ -188,9 +203,9 @@ def exemplars_for(idx, cen, k=6):
     med = idx[int(np.argmax(sims_to(idx, cen)))]
     kk = max(2, min(8, len(idx) // 25))
     cand = [r for _, r in sub_medoids(idx, kk, len(idx))] if len(idx) >= 10 else list(idx)
-    seen = {norm_title(meta_rows[med][3])}; ex = [med]
+    seen = {norm_title(titles[med])}; ex = [med]
     for r in cand:
-        t = norm_title(meta_rows[r][3])
+        t = norm_title(titles[r])
         if t in seen: continue
         seen.add(t); ex.append(r)
         if len(ex) >= k: break
@@ -200,10 +215,10 @@ for n in nodes:
     idx = order[n["lo"]:n["hi"]]
     ex_rows = exemplars_for(idx, n["_cen"])
     n["size"] = int(len(idx)); n["label"] = " · ".join(words(idx))
-    n["exemplars"] = [{"title": meta_rows[r][3][:80], "company": company(r)[:40], "location": meta_rows[r][4][:40]} for r in ex_rows]
-    n["medoid"] = meta_rows[ex_rows[0]][3][:80]
+    n["exemplars"] = [{"title": titles[r][:80], "company": company(r)[:40], "location": locs[r][:40]} for r in ex_rows]
+    n["medoid"] = titles[ex_rows[0]][:80]
     samp = idx if len(idx) <= 20000 else np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
-    n["distinct_titles"] = int(len({norm_title(meta_rows[r][3]) for r in samp}) * (len(idx) / len(samp)))
+    n["distinct_titles"] = int(len({norm_title(titles[r]) for r in samp}) * (len(idx) / len(samp)))
 
 # outputs
 C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
@@ -214,20 +229,39 @@ manifest = {
     "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
 }
 with open(os.path.join(out, "manifest.json"), "w") as f: json.dump(manifest, f)
-# groups: one file per leaf, jobs in DFS order, int8 embeddings (per-vector scale)
+# Pass 2 (group files): the parquet is streamed back in DFS order. `assign` maps each row's key to its DFS
+# position; DuckDB joins, sorts by position (spilling to temp_directory), and hands back record batches. Leaves are
+# contiguous in that order, so a file is written the moment its last row arrives. Vectors come from X (the same
+# float16-normalized values as before) so group files are byte-identical to the single-pass build.
 t = time.time()
-for n in leaves:
-    idx = order[n["lo"]:n["hi"]]
-    V = X[idx].astype(np.float32)  # exact vectors (unit length), float32 little-endian base64
-    jobs = []
-    for i, r in enumerate(idx):
-        a, s, jid, title, loc, url, _, fs, pub = meta_rows[r]
-        _j = jd_z[int(r)]; _e = enr_z[int(r)]
-        jd = _zd.decompress(_j).decode() if _j else ""; enr = _zd.decompress(_e).decode() if _e else None
-        jobs.append({"ats": a, "slug": s, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(fs or 0), "pub": int(pub or 0), "jd": jd,
-                     **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s)]} if (a, s) in compfull else {}),
-                     "v": base64.b64encode(V[i].tobytes()).decode()})
-    with open(os.path.join(out, "groups", f"{n['id']}.json"), "w") as f: json.dump({"leaf": n["id"], "lo": n["lo"], "hi": n["hi"], "jobs": jobs}, f)
+con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
+_assign = pa.table({"h": H.take(pa.array(order)), "pos": pa.array(np.arange(N, dtype=np.int64))})
+con.register("assign_src", _assign); con.execute("INSERT INTO assign SELECT h, pos FROM assign_src"); con.unregister("assign_src"); del _assign
+leaf_at = {n["lo"]: n for n in leaves}  # DFS position -> the leaf that starts there
+cur = None; jobs = []; V = None; written = 0; seen_rows = 0
+reader = con.execute(f"SELECT a.pos, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h) ORDER BY a.pos").to_arrow_reader(20_000)
+while True:
+    try: b = reader.read_next_batch()
+    except StopIteration: break
+    cols = {c: b.column(c).to_pylist() for c in ("pos", "ats", "slug", "id", "title", "location", "url", "first_seen_ms", "published_ms", "jd", "enrichment")}
+    for k in range(len(b)):
+        p = cols["pos"][k]
+        if p != seen_rows: sys.exit(f"group pass out of order at position {p} (expected {seen_rows}); the key join lost or duplicated rows")
+        seen_rows += 1
+        if cur is None or p >= cur["hi"]:
+            cur = leaf_at[p]; jobs = []; V = X[order[cur["lo"]:cur["hi"]]].astype(np.float32)
+        r = int(order[p]); a, s_, jid, title, loc, url = cols["ats"][k], cols["slug"][k], cols["id"][k], cols["title"][k], cols["location"][k], cols["url"][k]
+        jd = cols["jd"][k] or ""; enr = cols["enrichment"][k]
+        jobs.append({"ats": a, "slug": s_, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(cols["first_seen_ms"][k] or 0), "pub": int(cols["published_ms"][k] or 0), "jd": jd,
+                     **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s_)]} if (a, s_) in compfull else {}),
+                     "v": base64.b64encode(V[p - cur["lo"]].tobytes()).decode()})
+        if p + 1 == cur["hi"]:
+            with open(os.path.join(out, "groups", f"{cur['id']}.json"), "w") as f: json.dump({"leaf": cur["id"], "lo": cur["lo"], "hi": cur["hi"], "jobs": jobs}, f)
+            written += 1; jobs = []; V = None
+            if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
+print(file=sys.stderr)
+del reader
+if seen_rows != N or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{N} rows")
 del X
 try: os.remove(_xpath)
 except OSError: pass

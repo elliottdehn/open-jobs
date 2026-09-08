@@ -376,6 +376,18 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
    build, so stale caches only ever miss, never mismatch. (Old group files accumulate in the
    bucket; prune by listing keys not referenced by the current manifest.)
 
+### The manifest build (`scripts/build-manifest.py`)
+Two passes over `jobs/*.parquet`. Pass 1 loads every embedded open job's vector into a float16 memmap
+(`.vectors.f16.sorted.npy`, deleted at the end) and keeps per row only what labels and exemplars need.
+Rows are then **key-sorted** (`ats/slug#id`), so the same export always yields the same tree: the tree's
+random choices are seeded but index into rows, and parquet scan order varies with column selection and
+threads. The tree is built as before (bisection in PCA-256 space, centroids and radii in the full space).
+Pass 2 streams the parquet back in DFS order (DuckDB join on the key, `ORDER BY` position, spilling to
+`.duckdb_tmp/`) and writes each group file when its last row arrives, so no description text is ever
+held for the whole corpus. Verified byte-identical to the single-pass build on 2026-09-07. `--out` writes
+elsewhere than `<EXPORT_DIR>/web` (validation builds). Peak real memory 14.9 GB (4.5 GB during the tree;
+the rest is DuckDB's sort in pass 2), ~20 min at 3.1M jobs.
+
 ### Before you run it
 - The fleet should be quiet: `POST /backfill` and wait for a sweep with `pendingDetails`/
   `pendingEmbeds` ≈ 0 (`GET /sync/:ats`), otherwise the pull captures half-embedded boards.
