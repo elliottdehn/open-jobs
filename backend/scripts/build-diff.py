@@ -54,6 +54,7 @@ con.execute(f"CREATE VIEW old AS SELECT * FROM read_parquet('{prev}/jobs/*.parqu
 con.execute(f"CREATE VIEW new AS SELECT * FROM read_parquet('{new}/jobs/*.parquet', union_by_name=true)")
 cols = [r[0] for r in con.execute("DESCRIBE new").fetchall()]
 collist = ", ".join(f'"{c}"' for c in cols)
+old_collist = ", ".join(f'o."{c}"' for c in cols)
 
 # narrow key tables first; the wide rows are only touched once, in the final COPY
 # "changed" = a visible field moved. Not content_hash: the crawler hashes the provider's raw payload too, and
@@ -120,7 +121,7 @@ if os.path.isdir(outd):
     for f in glob.glob(os.path.join(outd, "*.parquet")): os.remove(f)
 con.execute(f"""COPY (
   SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
-  UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
+  UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {old_collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
   UNION ALL SELECT 'changed', '{pd}', '{nd}', NULL, NULL, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
   UNION ALL SELECT 'changed_prev', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
   UNION ALL SELECT 'carried', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
