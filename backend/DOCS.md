@@ -271,7 +271,9 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   `carried`. `latest` + the diffs reconstructs any day. ~1.4% added and ~1.3% removed per day; ~0.5 GB.
   `lite/` under each diff holds the same rows minus `embedding`, `raw_json`, `detail_raw_json`, `enrichment_json`,
   with `content` kept on `added` and `changed` rows and null elsewhere: everything a mirror needs to show a job,
-  at a fraction of the size. Apply every `added` and
+  at a fraction of the size. Two tiers, on purpose: **lite** to filter and display, **full** to search (the vector
+  on every new job) or to reconstruct history. Vectors on added/changed rows alone would bring lite to ~330 MB
+  against ~400 MB for full, so there is no middle tier. Apply every `added` and
   `changed` row; `embed_status` says whether the job is in the public group files yet (`done`), and the flip to
   `done` is itself emitted as a `changed` row, so a mirror that only wants the public corpus can gate on it and
   still catch jobs that were added before they were embedded.
