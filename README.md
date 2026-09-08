@@ -135,7 +135,7 @@ timestamps, straight from the crawler's records.
 
 History is published too. Every day's diff against the day before, one row per event with the
 full job record (added, removed, changed, and the previous version of changed), sits under
-`/data/diffs/`, and a daily ledger of every job the crawler has ever recorded, open or removed, with
+`/data/diffs/`, each with a `lite/` twin that drops text and vectors for mirrors that only filter, and a daily ledger of every job the crawler has ever recorded, open or removed, with
 its first-seen and removed dates, under `/data/ledger/`. `/data/diffs/index.json` and
 `/data/ledger/index.json` list what is there. Layout, schema, and endpoints:
 [`backend/DOCS.md`](backend/DOCS.md).

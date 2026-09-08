@@ -44,6 +44,7 @@ for d in diff_dirs:
     name = os.path.basename(d)
     if not final(d): print(f"  skip diffs/{name}: not final (no sidecar, or carry_done != true); re-run build-diff.py", flush=True); continue
     for part in sorted(glob.glob(os.path.join(d, "*.parquet"))): sync(f"diffs/{name}/{os.path.basename(part)}", part, "application/octet-stream")
+    for part in sorted(glob.glob(os.path.join(d, "lite", "*.parquet"))): sync(f"diffs/{name}/lite/{os.path.basename(part)}", part, "application/octet-stream")
     sync(f"diffs/{name}.json", d + ".json", "application/json")
 ledger_dirs = sorted(d for d in glob.glob(os.path.join(a.ledger, "20*")) if os.path.isdir(d))
 for d in ledger_dirs:
@@ -58,9 +59,13 @@ def entry(prefix, d, extra):
     name = os.path.basename(d); parts = sorted(glob.glob(os.path.join(d, "*.parquet")))
     if not parts or not all(uploaded(f"{prefix}/{name}/{os.path.basename(p)}") for p in parts): return None
     if prefix == "diffs" and not (final(d) and uploaded(f"diffs/{name}.json")): return None
-    return {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
+    e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
+    lparts = sorted(glob.glob(os.path.join(d, "lite", "*.parquet")))
+    if prefix == "diffs" and lparts and all(uploaded(f"diffs/{name}/lite/{os.path.basename(p)}") for p in lparts):
+        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["content", "raw_json", "detail_raw_json", "enrichment_json", "embedding"]}
+    return e
 diffs_index = {"built_at": int(time.time() * 1000), "base": "/data/",
-               "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together.",
+               "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together. `lite` has the same rows without text, raw JSON, or the vector.",
                "entries": [e for e in (entry("diffs", d, lambda n, d: {"from": n.split("__")[0], "to": n.split("__")[1], "sidecar": f"diffs/{n}.json", **side(d)}) for d in diff_dirs) if e]}
 ledger_index = {"built_at": int(time.time() * 1000), "base": "/data/",
                 "note": "every job the crawler has recorded, open or removed, with first_seen_at / last_seen_at / changed_at / removed_at; no text, no vectors. Read every part of a dir together.",

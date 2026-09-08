@@ -10,11 +10,14 @@ Writes export/diffs/<prev>__<date>/data_*.parquet (parts <= 200 MB: wrangler upl
 event with the full job record plus `op`:
   added         the new row (first day in the corpus)
   removed       the old row, in full (so a removed posting's text is never lost)
-  changed       the new row of a posting whose title, location, url, or text moved (not the crawler's content_hash,
-                which also covers the raw provider payload and churns for ~370k Workday rows a day)
+  changed       the new row of a posting whose title, location, url, text, or embed_status moved (not the crawler's
+                content_hash, which also covers the raw provider payload and churns for ~370k Workday rows a day).
+                The embed_status flip to done is the moment a job enters the public group files.
   changed_prev  its previous row
   carried       an old row carried forward into today's export because its whole board vanished from the pull
                 without the crawler saying so (see below); not a removal
+plus <prev>__<date>/lite/data_*.parquet: the same rows without content, raw_json, detail_raw_json, enrichment_json,
+embedding — for mirrors that filter on title/location/url and don't need text or vectors.
 and export/diffs/<prev>__<date>.json with the counts, the boards involved, and `ok_to_prune`.
 
 Boards that vanish: a board with rows yesterday and none today is either really empty now or missing from
@@ -53,12 +56,14 @@ collist = ", ".join(f'"{c}"' for c in cols)
 # narrow key tables first; the wide rows are only touched once, in the final COPY
 # "changed" = a visible field moved. Not content_hash: the crawler hashes the provider's raw payload too, and
 # Workday alone re-stamps ~370k of those a day ("30+ days ago" strings, counters) with nothing a reader would notice.
-con.execute("CREATE TABLE ok AS SELECT ats, slug, id, title, location, url, md5(coalesce(content, '')) AS ch FROM old")
-con.execute("CREATE TABLE nk AS SELECT ats, slug, id, title, location, url, md5(coalesce(content, '')) AS ch FROM new")
+# embed_status is part of the key too: a job that arrives unembedded enters the public corpus (the group files) only
+# when it flips to done, and a mirror has to see that flip as an event or it never learns the job became visible.
+con.execute("CREATE TABLE ok AS SELECT ats, slug, id, title, location, url, embed_status, md5(coalesce(content, '')) AS ch FROM old")
+con.execute("CREATE TABLE nk AS SELECT ats, slug, id, title, location, url, embed_status, md5(coalesce(content, '')) AS ch FROM new")
 n_old, n_new = con.execute("SELECT (SELECT count(*) FROM ok), (SELECT count(*) FROM nk)").fetchone()
 con.execute("CREATE TABLE addk AS SELECT n.ats, n.slug, n.id FROM nk n WHERE NOT EXISTS (SELECT 1 FROM ok o WHERE o.ats=n.ats AND o.slug=n.slug AND o.id=n.id)")
 con.execute("CREATE TABLE gonek AS SELECT o.ats, o.slug, o.id FROM ok o WHERE NOT EXISTS (SELECT 1 FROM nk n WHERE n.ats=o.ats AND n.slug=o.slug AND n.id=o.id)")
-con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch")
+con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch OR n.embed_status IS DISTINCT FROM o.embed_status")
 # boards with rows yesterday and none at all today
 con.execute("""CREATE TABLE absent AS
   SELECT g.ats, g.slug, count(*) AS old_jobs FROM gonek g
@@ -105,13 +110,21 @@ con.execute(f"""COPY (
   UNION ALL SELECT 'carried', '{pd}', '{nd}', {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
 parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
+# lite projection: the same events without text, raw provider JSON, enrichment JSON, or the vector — what a mirror
+# that filters by title/location/url needs, at a small fraction of the size. Full parts remain the record.
+LITE_DROP = "content, raw_json, detail_raw_json, enrichment_json, embedding"
+lited = os.path.join(outd, "lite"); os.makedirs(lited, exist_ok=True)
+for f in glob.glob(os.path.join(lited, "*.parquet")): os.remove(f)
+con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) FROM read_parquet('{outd}/*.parquet')) TO '{lited}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB')""")
+lparts = sorted(glob.glob(os.path.join(lited, "*.parquet"))); lite_bytes = sum(os.path.getsize(f) for f in lparts)
 
 n_new_final = n_new + counts["carried"]
 ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
 side = {"from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
         "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
         "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
-        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes}
+        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes,
+        "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in lparts], "bytes": lite_bytes}}
 json.dump(side, open(outd + ".json", "w"), indent=1)
 
 # carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.
@@ -138,5 +151,5 @@ if carry_boards and not a.no_carry:
 side.update({"carried_into": [os.path.relpath(p, new) for p in carried_files], "carry_done": True, "seconds": round(time.time() - t0)})
 json.dump(side, open(outd + ".json", "w"), indent=1)
 pct = lambda n: f"{100 * n / max(1, n_old):.2f}%"
-print(f"diff {pd} -> {nd}: {n_old:,} -> {n_new:,} jobs; added {counts['added']:,} ({pct(counts['added'])}), removed {counts['removed']:,} ({pct(counts['removed'])}), changed {counts['changed']:,}, carried {counts['carried']:,} from {len(carry_boards)} vanished board(s) [{len(absent) - len(carry_boards)} really emptied]; {out_bytes / 1e6:.0f} MB in {len(parts)} part(s), {time.time() - t0:.0f}s -> {os.path.relpath(outd)}/")
+print(f"diff {pd} -> {nd}: {n_old:,} -> {n_new:,} jobs; added {counts['added']:,} ({pct(counts['added'])}), removed {counts['removed']:,} ({pct(counts['removed'])}), changed {counts['changed']:,}, carried {counts['carried']:,} from {len(carry_boards)} vanished board(s) [{len(absent) - len(carry_boards)} really emptied]; {out_bytes / 1e6:.0f} MB in {len(parts)} part(s) + lite {lite_bytes / 1e6:.0f} MB, {time.time() - t0:.0f}s -> {os.path.relpath(outd)}/")
 if not ok_to_prune: print(f"WARNING: not ok_to_prune (new {n_new_final:,} vs old {n_old:,}, removed {pct(counts['removed'])}); the previous full export will be kept")

@@ -261,13 +261,19 @@ markers, and interrupted exports resume from their last complete page.
 ```
 export/latest -> 2026-09-07/         the one full export (snapshots, jobs/, boards/, web/), ~80 GB
 export/diffs/2026-09-06__2026-09-07/data_*.parquet   what changed between two consecutive full exports (lossless; parts <= 200 MB)
+export/diffs/2026-09-06__2026-09-07/lite/data_*.parquet   the same rows without text, raw JSON, or the vector (~1% of the size)
 export/diffs/2026-09-06__2026-09-07.json      counts, vanished boards and their verdicts, ok_to_prune
 export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorded, open or removed, with dates
 ```
 - **Diffs** (`scripts/build-diff.py`, step 3b): one row per event with the full job record and `op` =
   `added` | `removed` (the old row, in full) | `changed` / `changed_prev` (title, location, url, or text
-  moved; the crawler's `content_hash` is *not* the criterion, it churns for ~370k Workday rows a day) |
+  or `embed_status` moved; the crawler's `content_hash` is *not* the criterion, it churns for ~370k Workday rows a day) |
   `carried`. `latest` + the diffs reconstructs any day. ~1.4% added and ~1.3% removed per day; ~0.5 GB.
+  `lite/` under each diff holds the same rows minus `content`, `raw_json`, `detail_raw_json`, `enrichment_json`,
+  `embedding` (~5 MB/day): enough for a mirror that filters on title, location, or url. Apply every `added` and
+  `changed` row; `embed_status` says whether the job is in the public group files yet (`done`), and the flip to
+  `done` is itself emitted as a `changed` row, so a mirror that only wants the public corpus can gate on it and
+  still catch jobs that were added before they were embedded.
 - **Vanished boards.** A board with rows yesterday and none today is asked about: `GET /boards/:ats/:slug`
   says whether the crawler still holds open jobs for it. If so, our pull missed it and its rows are
   `carried` (appended into today's `jobs/` and `boards/` parquet so the index and tomorrow's diff keep
@@ -278,7 +284,7 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   no vectors; minutes, not hours), so removed jobs and their `removed_at` come straight from the Board
   DOs. This, not the diffs, is the source for posting lifetimes and survival curves.
 - **Published** (`scripts/upload-history.py`, step 5b): both go to R2 under `diffs/` and `ledger/`, public at
-  `GET /data/diffs/<prev>__<date>/data_N.parquet` and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
+  `GET /data/diffs/<prev>__<date>/data_N.parquet` (or `.../lite/data_N.parquet`) and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
   and `/data/ledger/index.json` list what is available with the parts and the sidecar counts (the bucket listing
   itself is admin-only). DuckDB reads them in place: `read_parquet(['https://backend.dehnbostele.workers.dev/data/diffs/<a>__<b>/data_0.parquet', ...])`.
 - **Retention** (step 6): once today's diff exists and passes its sanity check (`ok_to_prune`: job
