@@ -34,11 +34,17 @@ def sync(key, path, ctype):
 def uploaded(key): return os.path.exists(mark_of(key))
 
 # diffs: every complete directory of parts + its sidecar
+def final(d):
+    """A diff is final when its sidecar exists and says the carry step completed. build-diff.py writes the sidecar
+    before the carry (carry_done=false) and again after; a run that died in between must be re-run, not published."""
+    try: return json.load(open(d + ".json")).get("carry_done") is True
+    except Exception: return False
 diff_dirs = sorted(d for d in glob.glob(os.path.join(a.diffs, "*__*")) if os.path.isdir(d))
 for d in diff_dirs:
     name = os.path.basename(d)
+    if not final(d): print(f"  skip diffs/{name}: not final (no sidecar, or carry_done != true); re-run build-diff.py", flush=True); continue
     for part in sorted(glob.glob(os.path.join(d, "*.parquet"))): sync(f"diffs/{name}/{os.path.basename(part)}", part, "application/octet-stream")
-    if os.path.exists(d + ".json"): sync(f"diffs/{name}.json", d + ".json", "application/json")
+    sync(f"diffs/{name}.json", d + ".json", "application/json")
 ledger_dirs = sorted(d for d in glob.glob(os.path.join(a.ledger, "20*")) if os.path.isdir(d))
 for d in ledger_dirs:
     name = os.path.basename(d)
@@ -51,6 +57,7 @@ def side(d):
 def entry(prefix, d, extra):
     name = os.path.basename(d); parts = sorted(glob.glob(os.path.join(d, "*.parquet")))
     if not parts or not all(uploaded(f"{prefix}/{name}/{os.path.basename(p)}") for p in parts): return None
+    if prefix == "diffs" and not (final(d) and uploaded(f"diffs/{name}.json")): return None
     return {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
 diffs_index = {"built_at": int(time.time() * 1000), "base": "/data/",
                "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together.",
