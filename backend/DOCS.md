@@ -257,6 +257,9 @@ It writes `export/<YYYY-MM-DD>/`, repoints `export/latest`, and streams an unbuf
 `logs/consolidate-<date>.log`. Every stage is re-runnable; finished ATSes are skipped via `.done`
 markers, and interrupted exports resume from their last complete page.
 
+Where this is heading: [`CONTAINER.md`](CONTAINER.md), the plan for running consolidation as Cloudflare
+Containers started by the cron, with the measured stage sizes and the changes each stage needs.
+
 ### Layout and retention: one full export, plus history as diffs
 ```
 export/latest -> 2026-09-07/         the one full export (snapshots, jobs/, boards/, web/), ~80 GB
