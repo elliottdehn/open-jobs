@@ -26,7 +26,7 @@ unreachable, means our pull lost it -> its rows are `carried` (appended to today
 boards/<ats>.parquet so the index and tomorrow's diff see them). jobCount == 0 means it really emptied ->
 `removed`. Without this, one bad pull would look like 50,000 postings closing and reopening the next day.
 """
-import argparse, concurrent.futures, glob, json, os, sys, time, urllib.parse, urllib.request
+import argparse, concurrent.futures, glob, hashlib, json, os, sys, time, urllib.parse, urllib.request
 import duckdb
 
 ap = argparse.ArgumentParser()
@@ -120,13 +120,30 @@ con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) REPLACE (CASE WHEN op IN ('
   TO '{lited}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB')""")
 lparts = sorted(glob.glob(os.path.join(lited, "*.parquet"))); lite_bytes = sum(os.path.getsize(f) for f in lparts)
 
+# Integrity: sha256 per part, a content hash over the full parts, and the parent diff's content hash, so a chain
+# of diffs breaks loudly if a file goes missing or is truncated instead of replaying something plausible and wrong.
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
+    return h.hexdigest()
+part_hashes = {os.path.basename(f): sha256_of(f) for f in parts}
+lite_hashes = {os.path.basename(f): sha256_of(f) for f in lparts}
+content_sha256 = hashlib.sha256("\n".join(f"{k} {v}" for k, v in sorted(part_hashes.items())).encode()).hexdigest()
+parent = None
+for cand in sorted(glob.glob(os.path.join(a.out, f"*__{pd}.json"))):
+    try:
+        pj = json.load(open(cand)); parent = {"diff": os.path.basename(cand)[:-5], "content_sha256": pj.get("content_sha256")}
+    except Exception: pass
+
 n_new_final = n_new + counts["carried"]
 ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
-side = {"from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
+side = {"schema_version": 1, "from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
+        "content_sha256": content_sha256, "parent": parent,
         "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
         "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
-        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes,
-        "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "content_on": ["added", "changed"], "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in lparts], "bytes": lite_bytes}}
+        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f), "sha256": part_hashes[os.path.basename(f)]} for f in parts], "bytes": out_bytes,
+        "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "content_on": ["added", "changed"], "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f), "sha256": lite_hashes[os.path.basename(f)]} for f in lparts], "bytes": lite_bytes}}
 json.dump(side, open(outd + ".json", "w"), indent=1)
 
 # carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.

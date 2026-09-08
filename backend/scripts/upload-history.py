@@ -9,7 +9,7 @@ Uploads every part and sidecar that has no marker under export/.uploaded-history
 diffs/index.json and ledger/index.json: the public lists of what is available, with parts and sidecar counts,
 because the bucket listing itself is admin-only. Markers are per file, so a re-run only uploads what is new.
 """
-import argparse, glob, json, os, subprocess, sys, time
+import argparse, glob, hashlib, json, os, subprocess, sys, time
 ap = argparse.ArgumentParser()
 ap.add_argument("--diffs", default="export/diffs"); ap.add_argument("--ledger", default="export/ledger")
 ap.add_argument("--marks", default="export/.uploaded-history"); ap.add_argument("--force", action="store_true", help="re-upload everything")
@@ -32,6 +32,17 @@ def sync(key, path, ctype):
     else: stats["failed"] += 1
     return ok
 def uploaded(key): return os.path.exists(mark_of(key))
+def sha256_of(path):
+    """Cached per file under the marks dir; the sidecar's hash wins when present."""
+    c = mark_of("sha256__" + path.replace("/", "__"))
+    if os.path.exists(c) and os.path.getmtime(c) >= os.path.getmtime(path): return open(c).read().strip()
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
+    open(c, "w").write(h.hexdigest()); return h.hexdigest()
+RETENTION = ("diffs/ and ledger/ are kept indefinitely and never rewritten once listed here. The full export behind them is "
+             "overwritten daily (export/latest), and the group files under groups/ are rewritten daily under the same names, "
+             "so a mirror bootstraps from groups/ once and replays diffs from that day on; a diff's parent chain must be unbroken.")
 
 # diffs: every complete directory of parts + its sidecar
 def final(d):
@@ -53,21 +64,28 @@ for d in ledger_dirs:
 
 # public indexes: only entries whose every part is up
 def side(d):
-    try: return {k: v for k, v in json.load(open(d + ".json")).items() if k in ("old_jobs", "new_jobs", "new_jobs_after_carry", "counts", "ok_to_prune")}
+    try: return {k: v for k, v in json.load(open(d + ".json")).items() if k in ("old_jobs", "new_jobs", "new_jobs_after_carry", "counts", "ok_to_prune", "content_sha256", "parent")}
+    except Exception: return {}
+def side_hashes(d, sub=""):
+    try:
+        j = json.load(open(d + ".json")); lst = (j.get("lite") or {}).get("parts") if sub else j.get("parts")
+        return {p["file"]: p.get("sha256") for p in (lst or []) if p.get("sha256")}
     except Exception: return {}
 def entry(prefix, d, extra):
     name = os.path.basename(d); parts = sorted(glob.glob(os.path.join(d, "*.parquet")))
     if not parts or not all(uploaded(f"{prefix}/{name}/{os.path.basename(p)}") for p in parts): return None
     if prefix == "diffs" and not (final(d) and uploaded(f"diffs/{name}.json")): return None
-    e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
+    fh = side_hashes(d) if prefix == "diffs" else {}
+    e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p), "sha256": fh.get(os.path.basename(p)) or sha256_of(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
     lparts = sorted(glob.glob(os.path.join(d, "lite", "*.parquet")))
     if prefix == "diffs" and lparts and all(uploaded(f"diffs/{name}/lite/{os.path.basename(p)}") for p in lparts):
-        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
+        lh = side_hashes(d, "lite")
+        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p), "sha256": lh.get(os.path.basename(p)) or sha256_of(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
     return e
-diffs_index = {"built_at": int(time.time() * 1000), "base": "/data/",
+diffs_index = {"schema_version": 1, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
                "note": "one row per event with the full job record; op = added | removed | changed | changed_prev | carried; from/to are the two consecutive full exports. Read every part of a dir together. `lite` has the same rows without the vector or raw JSON; description text is kept on added and changed rows.",
                "entries": [e for e in (entry("diffs", d, lambda n, d: {"from": n.split("__")[0], "to": n.split("__")[1], "sidecar": f"diffs/{n}.json", **side(d)}) for d in diff_dirs) if e]}
-ledger_index = {"built_at": int(time.time() * 1000), "base": "/data/",
+ledger_index = {"schema_version": 1, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
                 "note": "every job the crawler has recorded, open or removed, with first_seen_at / last_seen_at / changed_at / removed_at; no text, no vectors. Read every part of a dir together.",
                 "entries": [e for e in (entry("ledger", d, lambda n, d: {"date": n}) for d in ledger_dirs) if e]}
 ok = True

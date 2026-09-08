@@ -289,10 +289,19 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
 - **Ledger** (`scripts/build-ledger.py`, step 2b): a slim `status=all` export of every board (no text,
   no vectors; minutes, not hours), so removed jobs and their `removed_at` come straight from the Board
   DOs. This, not the diffs, is the source for posting lifetimes and survival curves.
+- **Integrity.** Every part carries a sha256 (in the sidecar and in `index.json`); a diff's `content_sha256`
+  is the hash of its full parts' hashes, and `parent` names the previous diff and its `content_sha256`, so the
+  chain from any bootstrap day forward breaks loudly if a file goes missing or is truncated. `schema_version`
+  is in every sidecar and index. Published diffs and ledger days are never rewritten (a re-run of a diff that
+  was not final is fine, since it was never listed).
 - **Published** (`scripts/upload-history.py`, step 5b): both go to R2 under `diffs/` and `ledger/`, public at
   `GET /data/diffs/<prev>__<date>/data_N.parquet` (or `.../lite/data_N.parquet`) and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
   and `/data/ledger/index.json` list what is available with the parts and the sidecar counts (the bucket listing
   itself is admin-only). DuckDB reads them in place: `read_parquet(['https://backend.dehnbostele.workers.dev/data/diffs/<a>__<b>/data_0.parquet', ...])`.
+- **Retention policy, as stated in the public indexes:** diffs and ledger days are kept indefinitely; the full
+  export is overwritten daily; the group files are rewritten daily under the same names. A mirror bootstraps
+  from `groups/` once and replays diffs from that day. Not yet done: a periodic full anchor (a monthly published
+  `jobs/` parquet), which would bound replay for someone reconstructing an arbitrary past day.
 - **Retention** (step 6): once today's diff exists and passes its sanity check (`ok_to_prune`: job
   count within 10% and removals under 15%), every older full export that has a successor diff is
   deleted, listed first. `--keep-full` keeps them; a failed or skipped diff keeps them too.
