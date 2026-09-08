@@ -6,6 +6,9 @@ for consolidation (NDJSON → parquet). No central database: each board is its o
 
 Production: `https://backend.dehnbostele.workers.dev`
 
+Optional public snapshot deltas: [Job changes feed](JOB-CHANGES.md) describes publishing
+and consuming additions, edits and dataset removals without re-downloading all group files.
+
 ## Architecture
 
 ```
