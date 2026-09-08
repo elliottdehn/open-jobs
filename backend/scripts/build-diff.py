@@ -106,32 +106,36 @@ con.execute(f"""COPY (
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
 parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
 
-# carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them
+n_new_final = n_new + counts["carried"]
+ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
+side = {"from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
+        "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
+        "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
+        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes}
+json.dump(side, open(outd + ".json", "w"), indent=1)
+
+# carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.
+# Slugs are compared as text: a provider whose slugs are all digits gets a numeric slug column in boards/*.parquet.
 carried_files = []
 if carry_boards and not a.no_carry:
     for ats in sorted({k[0] for k in carry_boards}):
         jp = os.path.join(new, "jobs", f"{ats}.parquet"); tmp = jp + ".tmp"
         if os.path.exists(jp):
             con.execute(f"""COPY (SELECT * FROM read_parquet('{jp}')
-              UNION ALL BY NAME SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
+              UNION ALL BY NAME SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))
               ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
         else:
-            con.execute(f"""COPY (SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+            con.execute(f"""COPY (SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
         os.replace(tmp, jp); carried_files.append(jp)
         bp_old, bp = os.path.join(prev, "boards", f"{ats}.parquet"), os.path.join(new, "boards", f"{ats}.parquet")
         if os.path.exists(bp_old):
             tmpb = bp + ".tmp"
-            base = f"SELECT * FROM read_parquet('{bp}') UNION ALL BY NAME " if os.path.exists(bp) else ""
-            con.execute(f"""COPY ({base} SELECT b.* FROM read_parquet('{bp_old}') b WHERE EXISTS (SELECT 1 FROM carryb c WHERE c.ats=b.ats AND c.slug=b.slug)
-              {"AND NOT EXISTS (SELECT 1 FROM read_parquet('" + bp + "') x WHERE x.ats=b.ats AND x.slug=b.slug)" if os.path.exists(bp) else ""}) TO '{tmpb}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+            base = f"SELECT * REPLACE (CAST(slug AS VARCHAR) AS slug) FROM read_parquet('{bp}') UNION ALL BY NAME " if os.path.exists(bp) else ""
+            con.execute(f"""COPY ({base} SELECT b.* REPLACE (CAST(b.slug AS VARCHAR) AS slug) FROM read_parquet('{bp_old}') b WHERE EXISTS (SELECT 1 FROM carryb c WHERE c.ats=b.ats AND c.slug=CAST(b.slug AS VARCHAR))
+              {"AND NOT EXISTS (SELECT 1 FROM read_parquet('" + bp + "') x WHERE x.ats=b.ats AND CAST(x.slug AS VARCHAR)=CAST(b.slug AS VARCHAR))" if os.path.exists(bp) else ""}) TO '{tmpb}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
             os.replace(tmpb, bp)
 
-n_new_final = n_new + counts["carried"]
-ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
-side = {"from": pd, "to": nd, "old_jobs": n_old, "new_jobs": n_new, "new_jobs_after_carry": n_new_final, "counts": counts,
-        "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
-        "carried_into": [os.path.relpath(p, new) for p in carried_files], "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
-        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f)} for f in parts], "bytes": out_bytes}
+side.update({"carried_into": [os.path.relpath(p, new) for p in carried_files], "carry_done": True, "seconds": round(time.time() - t0)})
 json.dump(side, open(outd + ".json", "w"), indent=1)
 pct = lambda n: f"{100 * n / max(1, n_old):.2f}%"
 print(f"diff {pd} -> {nd}: {n_old:,} -> {n_new:,} jobs; added {counts['added']:,} ({pct(counts['added'])}), removed {counts['removed']:,} ({pct(counts['removed'])}), changed {counts['changed']:,}, carried {counts['carried']:,} from {len(carry_boards)} vanished board(s) [{len(absent) - len(carry_boards)} really emptied]; {out_bytes / 1e6:.0f} MB in {len(parts)} part(s), {time.time() - t0:.0f}s -> {os.path.relpath(outd)}/")
