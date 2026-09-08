@@ -21,7 +21,9 @@ args = ap.parse_args()
 
 root = os.path.join(os.path.dirname(__file__), "..", os.environ.get("EXPORT_DIR", "export"))  # EXPORT_DIR=export-slim for the vector-only pull
 out = args.out or os.path.join(root, "web"); os.makedirs(os.path.join(out, "groups"), exist_ok=True)
-con_tmp = os.path.join(root, ".duckdb_tmp"); os.makedirs(con_tmp, exist_ok=True)
+# per-process temp names: two builds on the same export (a validation A/B) must not clobber each other's memmaps
+TMP = f".build-{os.getpid()}"
+con_tmp = os.path.join(root, f"{TMP}.duckdb_tmp"); os.makedirs(con_tmp, exist_ok=True)
 J = os.path.join(root, "jobs", "*.parquet")
 con = duckdb.connect()
 con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
@@ -47,7 +49,7 @@ q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce
 import pyarrow as pa
 N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
 D = 1536
-_xpath = os.path.join(root, ".vectors.f16.npy")
+_xpath = os.path.join(root, f"{TMP}.vectors.f16.npy")
 if os.path.exists(_xpath): os.remove(_xpath)
 # file-backed so memory pressure evicts pages instead of killing the build (two jetsam deaths on 2026-09-05)
 X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
@@ -63,7 +65,8 @@ while True:
     vals = emb.values.to_numpy(zero_copy_only=False)
     n = len(b)
     X[pos_:pos_ + n] = vals.reshape(n, -1)[:, :D]
-    H.append(b.column("h"))
+    if (pos_ // 50_000) % 8 == 7: X.flush()  # dirty file-backed pages count as footprint until written back
+    H.append(pa.array(b.column("h").to_pylist(), type=pa.string()))  # a copy: keeping the batch's own column pins the whole batch, vectors included (19 GB by the end of loading)
     for k, (a_, s_) in enumerate(zip(b.column("ats").to_pylist(), b.column("slug").to_pylist())):
         board_of[pos_ + k] = board_ids.setdefault((a_, s_), len(board_ids))
     titles.extend(b.column("title").to_pylist()); locs.extend(b.column("location").to_pylist()); hints.extend(b.column("company_hint").to_pylist())
@@ -87,6 +90,7 @@ for _i in range(0, X.shape[0], 200_000):
 	_blk[:] = _b32 / (np.sqrt((_b32 * _b32).sum(axis=1, keepdims=True)) + 1e-9)
 	del _b32
 del _blk
+X.flush()
 N, D = X.shape
 # Deterministic row order: sort every per-row array by key, so the build no longer depends on parquet scan order
 # (which varies with column selection and thread count). Same export in, same tree out, run after run.
@@ -94,11 +98,15 @@ t2 = time.time()
 import pyarrow.compute as pc
 perm = pc.sort_indices(H).to_numpy()
 H = H.take(pa.array(perm)); titles = [titles[i] for i in perm]; locs = [locs[i] for i in perm]; hints = [hints[i] for i in perm]; board_of = board_of[perm]
-_x2 = os.path.join(root, ".vectors.f16.sorted.npy")
+_x2 = os.path.join(root, f"{TMP}.vectors.f16.sorted.npy")
 X2 = np.lib.format.open_memmap(_x2, mode="w+", dtype=np.float16, shape=(N, D))
-for _i in range(0, N, 200_000): X2[_i:_i + 200_000] = X[perm[_i:_i + 200_000]]
+for _i in range(0, N, 200_000):
+    X2[_i:_i + 200_000] = X[perm[_i:_i + 200_000]]
+    if (_i // 200_000) % 4 == 3: X2.flush()
+X2.flush()
 del X; os.remove(_xpath); X = X2; _xpath = _x2; del perm
 print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted in {time.time()-t2:.0f}s)")
+if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
 # company name per board from boards parquet (resolved), else slug
 B = os.path.join(root, "boards", "*.parquet")
@@ -234,15 +242,31 @@ with open(os.path.join(out, "manifest.json"), "w") as f: json.dump(manifest, f)
 # contiguous in that order, so a file is written the moment its last row arrives. Vectors come from X (the same
 # float16-normalized values as before) so group files are byte-identical to the single-pass build.
 t = time.time()
+# Pass 2 is the memory peak of the whole build (DuckDB sorting ~30 GB of wide rows, plus batch conversion):
+# the buffer cap makes the sort spill to temp_directory instead of growing (the key join + sort refuse to run
+# under 4 GB; 6 GB works), fewer threads mean fewer concurrent sort partitions, and small batches bound the
+# Python-side copy. Output is unaffected.
+con.execute("SET memory_limit='6GB'"); con.execute("SET threads=2")
 con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
 _assign = pa.table({"h": H.take(pa.array(order)), "pos": pa.array(np.arange(N, dtype=np.int64))})
 con.register("assign_src", _assign); con.execute("INSERT INTO assign SELECT h, pos FROM assign_src"); con.unregister("assign_src"); del _assign
 leaf_at = {n["lo"]: n for n in leaves}  # DFS position -> the leaf that starts there
 cur = None; jobs = []; V = None; written = 0; seen_rows = 0
-reader = con.execute(f"SELECT a.pos, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h) ORDER BY a.pos").to_arrow_reader(20_000)
-while True:
-    try: b = reader.read_next_batch()
-    except StopIteration: break
+# One scan of the parquet writes the joined rows to a local staging dir partitioned by position chunk; each chunk
+# is then sorted on its own. A single ORDER BY over the whole corpus needs more buffer than the sort can spill
+# (DuckDB ran out at 5.5 GiB); sorting 250k rows at a time never does.
+import shutil
+CHUNK = 250_000; stage = os.path.join(root, f"{TMP}.stage"); shutil.rmtree(stage, ignore_errors=True)
+con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
+  TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD)""")
+print(f"  staged {N:,} rows in {(N + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
+def _batches():
+    for k in range((N + CHUNK - 1) // CHUNK):
+        r = con.execute(f"SELECT * FROM read_parquet('{stage}/chunk={k}/*.parquet', hive_partitioning=false) ORDER BY pos").to_arrow_reader(5_000)
+        while True:
+            try: yield r.read_next_batch()
+            except StopIteration: break
+for b in _batches():
     cols = {c: b.column(c).to_pylist() for c in ("pos", "ats", "slug", "id", "title", "location", "url", "first_seen_ms", "published_ms", "jd", "enrichment")}
     for k in range(len(b)):
         p = cols["pos"][k]
@@ -260,10 +284,11 @@ while True:
             written += 1; jobs = []; V = None
             if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
-del reader
+shutil.rmtree(stage, ignore_errors=True)
 if seen_rows != N or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{N} rows")
 del X
 try: os.remove(_xpath)
 except OSError: pass
+shutil.rmtree(con_tmp, ignore_errors=True)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
 print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")

@@ -382,11 +382,14 @@ Two passes over `jobs/*.parquet`. Pass 1 loads every embedded open job's vector 
 Rows are then **key-sorted** (`ats/slug#id`), so the same export always yields the same tree: the tree's
 random choices are seeded but index into rows, and parquet scan order varies with column selection and
 threads. The tree is built as before (bisection in PCA-256 space, centroids and radii in the full space).
-Pass 2 streams the parquet back in DFS order (DuckDB join on the key, `ORDER BY` position, spilling to
-`.duckdb_tmp/`) and writes each group file when its last row arrives, so no description text is ever
-held for the whole corpus. Verified byte-identical to the single-pass build on 2026-09-07. `--out` writes
-elsewhere than `<EXPORT_DIR>/web` (validation builds). Peak real memory 14.9 GB (4.5 GB during the tree;
-the rest is DuckDB's sort in pass 2), ~20 min at 3.1M jobs.
+Pass 2 joins the parquet to each row's DFS position in one scan, writes the joined rows to a local staging
+dir partitioned into 250k-position chunks, then sorts and streams one chunk at a time, writing each group
+file when its last row arrives. No description text is ever held for the whole corpus, and no sort is
+larger than a chunk (a single `ORDER BY` over the corpus exhausted DuckDB's buffer). Verified byte-identical
+to the single-pass build on 2026-09-07, twice. `--out` writes elsewhere than `<EXPORT_DIR>/web` (validation
+builds); temp files carry the pid, so two builds on one export do not collide. Peak real memory 9.7 GB
+(1.4 GB loading, 4.5 GB through the tree, ~9.6 GB briefly in pass 2 with DuckDB capped at 6 GB), ~20 min
+at 3.1M jobs. `BUILD_MANIFEST_STOP_AFTER=load` exits after loading (memory probes).
 
 ### Before you run it
 - The fleet should be quiet: `POST /backfill` and wait for a sweep with `pendingDetails`/

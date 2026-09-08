@@ -15,7 +15,7 @@ Measured on 2026-09-07 (3.13M open jobs, 63k boards):
 | 2b ledger | slim `status=all` export of every board -> `export/ledger/<date>/` | 33 min | 2 GB disk, 535 MB out |
 | 3 parquet | snapshots -> `jobs/<ats>.parquet`, `boards/<ats>.parquet` | 6 min | 8 GB disk, DuckDB |
 | 3b diff | today vs previous export -> `export/diffs/<prev>__<date>/` | 1 min | DuckDB, 20 GB cap, spills |
-| 4 manifest | tree over all embedded jobs, centroids, 11k group files | 23 min (now ~11) | was 19.3 GB real memory; **now 4.5 GB through the tree build, ~15 GB spike in the group-file pass** (see step 1 below); 9.6 GB float16 vector memmap on disk; 37 GB of group files |
+| 4 manifest | tree over all embedded jobs, centroids, 11k group files | ~20 min | was 19.3 GB real memory; **now 9.7 GB peak** (4.5 GB through the tree, a brief 9.6 GB in the group-file pass under DuckDB's 6 GB cap); 9.6 GB float16 vector memmap + ~5 GB staging on disk; 37 GB of group files |
 | 4b estimators | salary, arrangement, seniority, age, city + location tables | 15 min | a few GB |
 | 5 upload | 11k group files + centroids + manifest, via `wrangler r2 object put` | 45 min (+ retry) | network; 300 MiB/object cap |
 | 5b history | diffs + ledger parts + `index.json` | 5 min | same |
@@ -33,12 +33,10 @@ not documented, so a single three-hour process is not something to depend on.
 Three things exceed that:
 
 1. **Disk.** 80 GB staged per day vs 20 GB.
-2. **Memory for the tree build.** Was 19.3 GB real memory: the PCA-256 projection (~3 GB) plus every
-   job's compressed description text and metadata held in Python for the group-file pass. Done on
-   2026-09-08 (step 1 below): 4.5 GB through the tree build. What remains is the group-file pass, where
-   DuckDB sorts the wide rows into DFS order and the Python side converts 20k-row batches; measured
-   peak ~15 GB, which is DuckDB's sort plus Arrow-to-Python conversion, not held state. Lowering the
-   DuckDB cap and the batch size for that pass should bring it under 8 GB; unmeasured as of this note.
+2. **Memory for the tree build.** Was 19.3 GB real memory. Done on 2026-09-08 (step 1 below): 9.7 GB
+   peak, 4.5 GB through the tree itself. The remaining peak is DuckDB's buffer (capped at 6 GB) during the
+   group-file pass on top of the ~4.5 GB Python baseline (PCA projection + titles). Fits `standard-4`
+   with ~2 GB to spare; lowering the DuckDB cap to 4 GB now that sorts are per-chunk would widen that.
 3. **Duration.** One process for 2.5 hours, with the group-file upload alone at 45 minutes.
 
 Everything else already fits: the diff builder runs under a DuckDB memory cap and spills; the
@@ -126,9 +124,13 @@ Each step is useful on its own and lands on the laptop first, so nothing is a bi
    to the original on the 2026-09-07 export: same 22,375-node tree, same centroids, all 11,188 group
    files identical. Also made the build deterministic: rows are key-sorted after loading, so the tree
    no longer depends on parquet scan order (the original produced a different tree every run).
-   Measured: 19.3 -> 14.9 GB peak real memory, 4.5 GB during the tree itself; 26.9 -> 20.6 min.
-   Still to do for the container: cap the pass-2 spike (DuckDB memory limit + smaller batches), and
-   the 9.6 GB vector memmap stays on disk (fits the 20 GB instance if parquet is read from R2).
+   Measured: 19.3 -> 9.7 GB peak real memory, 4.5 GB during the tree itself; 26.9 -> ~20 min. Three
+   things it took to get there, each found by a footprint sampler rather than by reasoning: keeping an
+   Arrow column from a batch pins the whole batch (19 GB by the end of loading; fixed by copying the
+   keys out); a single ORDER BY over the corpus exhausts DuckDB's buffer at any cap (fixed by staging
+   into 250k-position chunks and sorting each); and `time -l` measures the `uv` wrapper, not Python.
+   The 9.6 GB vector memmap and ~5 GB staging stay on disk (fits the 20 GB instance if parquet is read
+   from R2).
 2. **Write artifacts to R2 as produced** (group files, diff parts, ledger parts) via the S3 API
    with multipart; retire `upload-web.py` / `upload-history.py` and the 300 MiB cap.
 3. **Read snapshots and exports from R2 in place**; stop staging `export/<date>/` locally. At this
