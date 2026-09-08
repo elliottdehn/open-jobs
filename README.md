@@ -131,7 +131,13 @@ jobs, with labels and exemplars), centroids, and one JSON per group with titles,
 locations, URLs, full description text, and float32 vectors. `tools/jobs.py fetch` pulls any set
 of groups into a local parquet you can query with DuckDB. The API also answers per-posting
 questions: `POST /status` with a list of `ats/slug#id` keys returns open or removed with
-timestamps, straight from the crawler's records. Layout, schema, and endpoints:
+timestamps, straight from the crawler's records.
+
+History is published too. Every day's diff against the day before, one row per event with the
+full job record (added, removed, changed, and the previous version of changed), sits under
+`/data/diffs/`, and a daily ledger of every job the crawler has ever recorded, open or removed, with
+its first-seen and removed dates, under `/data/ledger/`. `/data/diffs/index.json` and
+`/data/ledger/index.json` list what is there. Layout, schema, and endpoints:
 [`backend/DOCS.md`](backend/DOCS.md).
 
 ## The ideas channel

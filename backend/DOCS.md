@@ -252,10 +252,38 @@ fleet in about an hour. Without a kick the same work happens at each board's nex
 
 ## Daily consolidation (pull everything → parquet → manifest → R2)
 
-One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload]`. It writes
-`export/<YYYY-MM-DD>/` (never touches earlier days), repoints `export/latest`, and streams an
-unbuffered log to `logs/consolidate-<date>.log`. Every stage is re-runnable; finished ATSes are
-skipped via `.done` markers, and interrupted exports resume from their last complete page.
+One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models] [--skip-ledger] [--keep-full]`.
+It writes `export/<YYYY-MM-DD>/`, repoints `export/latest`, and streams an unbuffered log to
+`logs/consolidate-<date>.log`. Every stage is re-runnable; finished ATSes are skipped via `.done`
+markers, and interrupted exports resume from their last complete page.
+
+### Layout and retention: one full export, plus history as diffs
+```
+export/latest -> 2026-09-07/         the one full export (snapshots, jobs/, boards/, web/), ~80 GB
+export/diffs/2026-09-06__2026-09-07/data_*.parquet   what changed between two consecutive full exports (lossless; parts <= 200 MB)
+export/diffs/2026-09-06__2026-09-07.json      counts, vanished boards and their verdicts, ok_to_prune
+export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorded, open or removed, with dates
+```
+- **Diffs** (`scripts/build-diff.py`, step 3b): one row per event with the full job record and `op` =
+  `added` | `removed` (the old row, in full) | `changed` / `changed_prev` (title, location, url, or text
+  moved; the crawler's `content_hash` is *not* the criterion, it churns for ~370k Workday rows a day) |
+  `carried`. `latest` + the diffs reconstructs any day. ~1.4% added and ~1.3% removed per day; ~0.5 GB.
+- **Vanished boards.** A board with rows yesterday and none today is asked about: `GET /boards/:ats/:slug`
+  says whether the crawler still holds open jobs for it. If so, our pull missed it and its rows are
+  `carried` (appended into today's `jobs/` and `boards/` parquet so the index and tomorrow's diff keep
+  them); if the crawler says 0, it really emptied and the rows are `removed`. Without this, one bad pull
+  reads as 50,000 postings closing and reopening. More than `--max-absent` (3000) vanished boards means
+  the pull is broken: everything is carried and nothing is deleted.
+- **Ledger** (`scripts/build-ledger.py`, step 2b): a slim `status=all` export of every board (no text,
+  no vectors; minutes, not hours), so removed jobs and their `removed_at` come straight from the Board
+  DOs. This, not the diffs, is the source for posting lifetimes and survival curves.
+- **Published** (`scripts/upload-history.py`, step 5b): both go to R2 under `diffs/` and `ledger/`, public at
+  `GET /data/diffs/<prev>__<date>/data_N.parquet` and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
+  and `/data/ledger/index.json` list what is available with the parts and the sidecar counts (the bucket listing
+  itself is admin-only). DuckDB reads them in place: `read_parquet(['https://backend.dehnbostele.workers.dev/data/diffs/<a>__<b>/data_0.parquet', ...])`.
+- **Retention** (step 6): once today's diff exists and passes its sanity check (`ok_to_prune`: job
+  count within 10% and removals under 15%), every older full export that has a successor diff is
+  deleted, listed first. `--keep-full` keeps them; a failed or skipped diff keeps them too.
 
 ### The stages, and what each one taught us
 
@@ -318,7 +346,8 @@ skipped via `.done` markers, and interrupted exports resume from their last comp
   `pendingEmbeds` ≈ 0 (`GET /sync/:ats`), otherwise the pull captures half-embedded boards.
   The daily cron handles steady state; a big recipe change (new `EMBED_TAG`) needs a full
   backfill first (~5 h at the 10M TPM embeddings cap).
-- Disk: ~35 GB NDJSON + ~8 GB parquet + ~5 GB web per day. Keep 2 days.
+- Disk: ~80 GB for the one full export, plus ~0.5 GB per day of diffs and ~0.3 GB per day of
+  ledger. While a run is in progress two full exports exist (~160 GB); step 6 drops the older one.
 - Time: ~3 h end to end at 2M jobs (pull ~70 min with the 8.7k-job Oracle tenants and Workday,
   parquet ~25, manifest ~10, upload ~85 min for ~7k group files at 16 workers).
 
