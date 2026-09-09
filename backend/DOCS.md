@@ -1,7 +1,8 @@
 # open-jobs backend
 
-A Cloudflare Worker + Durable Objects crawler that fetches every job board in `../slugs.json`
-once a day, keeps a diffed history per board, and writes each board's open jobs as a parquet
+A Cloudflare Worker + Durable Objects crawler that fetches every job board in `../slugs.json` (schema 2:
+`ats` = boards the crawler fetches, `gone` = boards it found dead; 114k across 36 providers, rebuilt from the
+fleet itself by `scripts/build-slugs.py`, so the file and the running fleet cannot drift apart) once a day, keeps a diffed history per board, and writes each board's open jobs as a parquet
 snapshot to R2. A nightly consolidation (laptop today, a container next; see [CONTAINER.md](CONTAINER.md))
 folds the snapshots into one dataset, publishes the search index, the daily diffs, the ledger, and
 the paged feed. No central database: each board is its own Durable Object.
@@ -244,7 +245,8 @@ Slugs containing `/` (dayforce) must be URL-encoded (`%2F`).
 
 ### Deploy
 ```sh
-npm run build:boards        # regenerate src/boards.json from ../slugs.json (dedupes; run when slugs change)
+npm run build:boards        # regenerate src/boards.json from ../slugs.json (live + gone; --live-only for a fresh deploy)
+uv run scripts/build-slugs.py   # the other direction: rebuild ../slugs.json from the fleet's own board metadata (after a consolidation)
 npx wrangler types          # after changing bindings/vars
 npx tsc --noEmit
 npx wrangler deploy
@@ -557,7 +559,8 @@ scripts/train-*.py, build-city-table.py, build-location-table.py   the estimator
 scripts/publish-web.py     finalize: reconcile groups/, then models, centroids, manifest
 scripts/upload-history.py  diffs + ledger + index.json (--remote-index rebuilds from the bucket)
 scripts/build-job-changes.py, test_job_changes.py   the feed publisher and its tests (PR #7)
-scripts/build-boards.mjs   slugs.json -> boards.json
+scripts/build-boards.mjs   slugs.json -> boards.json (live + gone by default; --live-only)
+scripts/build-slugs.py     the fleet -> slugs.json: every board the Worker runs, split into `ats` (fetchable) and `gone` (dead), from the ledger export
 scripts/build-comeet.mjs   comeet uid resolver (--via worker)
 scripts/discover-careers.py  career-site discovery for the dark pool
 scripts/try-fetcher.mjs    run a fetcher directly in Node

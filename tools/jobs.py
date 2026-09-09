@@ -702,7 +702,7 @@ def cmd_probe(a):
     if not r.get("slug"): sys.exit(f"  ✗ board unresolved: {r.get('hint')}\n    (re-run with --board <ats>/<slug> once you know it; boards are listed in backend/slugs.json)")
     print(f"board: {r['ats']}/{r['slug']}" + (f"  (job id {r['id']})" if r.get("id") else ""))
     if not d.get("crawled"):
-        sys.exit("  ✗ this board is not in slugs.json, so it has never been crawled. Add it (PR to backend/slugs.json) and it joins the daily fetch.")
+        sys.exit("  ✗ this board is not in slugs.json, so it has never been crawled. Add it (PR to slugs.json at the repo root, under `ats`) and it joins the daily fetch.")
     if not board:
         sys.exit("  ✗ board is in slugs.json but has never completed a fetch (new or unreachable). It will appear after its first successful daily fetch.")
     print(f"  crawled: yes · last successful fetch {when(board['lastOkAt'])} ({ago(board['lastOkAt'])}) · {board['jobCount']} open jobs · status {board['lastStatus']}" + (f" ({board['lastError'][:80]})" if board.get("lastError") else "") + f" · next fetch {when(board['nextFetchAt'])}")
