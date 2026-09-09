@@ -76,6 +76,8 @@ h2{font-size:24px;margin:0 0 10px;letter-spacing:-.01em;text-wrap:balance}
 h3{font-size:16px;margin:26px 0 6px}
 p{max-width:72ch;margin:8px 0}.soft{color:var(--soft)}
 code{font:13.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel);padding:1px 5px;border-radius:4px}
+pre.hero{font-size:17px;line-height:1.9;padding:22px 26px;border-left:3px solid var(--acc);margin:16px 0 18px}
+.ln{display:inline-block;width:2.2em;color:var(--soft);user-select:none}
 pre{font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel);padding:14px 16px;border-radius:6px;overflow-x:auto;margin:12px 0 0;max-width:100%}
 .wrap{overflow-x:auto;margin-top:12px}
 table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
@@ -100,11 +102,14 @@ and pandas read them in place.</p>
 <section>
 <p class="eyebrow">Start here</p>
 <h2>Take all of today's data</h2>
-<pre>git clone ${REPO} && cd open-jobs
-uv run tools/jobs.py export
-uv run tools/jobs.py sql "SELECT ats, count(*) FROM jobs GROUP BY 1 ORDER BY 2 DESC"</pre>
-<p><code>export</code> pulls today's ${gb(jobsBytes)} into <code>work/export/${esc(head)}/</code> and resumes if interrupted;
-<code>sql</code> runs DuckDB over it with <code>jobs</code> and <code>boards</code> as views.</p>
+<pre class="hero"><span class="ln">1</span>git clone ${REPO}
+<span class="ln">2</span>cd open-jobs
+<span class="ln">3</span>uv run tools/jobs.py export</pre>
+<p>Three commands and the whole dataset is on your disk: every open posting, full description text, the
+${esc(manifest.recipe)} embedding, and the company fields, as ${num(atsList.length)} parquet files (${gb(jobsBytes)}) under
+<code>work/export/${esc(head)}/</code>. The download resumes if interrupted. Then
+<code>uv run tools/jobs.py sql "SELECT title, company, location FROM jobs LIMIT 20"</code> queries it with DuckDB, with
+<code>jobs</code> and <code>boards</code> as views.</p>
 <p>That is the full export: one parquet file per applicant tracking system, ${num(atsList.length)} files, one row per open
 posting with the description text and its ${esc(manifest.recipe)} embedding, plus <code>boards/</code> with one row per
 career site and its company fields. The files live at <a href="/data/exports/${esc(head)}/jobs/">exports/${esc(head)}/jobs/</a>;

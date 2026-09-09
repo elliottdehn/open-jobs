@@ -840,7 +840,10 @@ def cmd_export(a):
                 if attempt == 4: sys.exit(f"\nfailed: {path}: {e}")
                 time.sleep(2 * (attempt + 1))
         if have != size: sys.exit(f"\nshort file: {dest} ({have} of {size} bytes)")
-    print(f"\ndone: {out}  ({time.time() - t0:.0f}s)\n  duckdb: SELECT ats, count(*) FROM read_parquet('{os.path.join(out, 'jobs', '*.parquet')}') GROUP BY 1")
+    import duckdb
+    n_jobs, n_boards = (duckdb.sql(f"SELECT count(*) FROM '{os.path.join(out, sub_, '*.parquet')}'").fetchone()[0] for sub_ in ("jobs", "boards"))
+    print(f"\n\n  {n_jobs:,} postings from {n_boards:,} career sites, {len(plan)} files, {total / 1e9:.1f} GB, {time.time() - t0:.0f}s\n  -> {out}\n"
+          f"  query it:  uv run tools/jobs.py sql \"SELECT title, company, location FROM jobs LIMIT 20\"")
 
 ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")

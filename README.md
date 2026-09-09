@@ -127,14 +127,16 @@ Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md). Enrichment 
 ## Take the data
 
 ```
-git clone https://github.com/elliottdehn/open-jobs && cd open-jobs
+git clone https://github.com/elliottdehn/open-jobs
+cd open-jobs
 uv run tools/jobs.py export
-uv run tools/jobs.py sql "SELECT ats, count(*) FROM jobs GROUP BY 1 ORDER BY 2 DESC"
 ```
 
-Every open posting, one parquet per applicant tracking system, with the description text and a
-1536-dim embedding per row. [`/data/`](https://backend.dehnbostele.workers.dev/data/) lists every
-published file with sizes, build dates, and how to read each in place.
+Three commands and the whole dataset is on your disk: every open posting with its full description,
+a 1536-dim embedding, and company fields, as one parquet file per applicant tracking system (~13 GB,
+resumable). Then `uv run tools/jobs.py sql "SELECT title, company, location FROM jobs LIMIT 20"`
+queries it with DuckDB. [`/data/`](https://backend.dehnbostele.workers.dev/data/) lists every published
+file with sizes, build dates, and how to read each in place.
 
 The corpus is published as static files: a manifest (a tree of a few thousand groups of similar
 jobs, with labels and exemplars), centroids, and one JSON per group with titles, companies,
