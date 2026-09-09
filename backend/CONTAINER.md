@@ -52,9 +52,9 @@ ledger is HTTP against the Worker; the estimators are small; the retention step 
 - The `/export` fallback stays HTTP against the Worker; it only covers ATSes without snapshots.
 - Output `jobs/<ats>.parquet` and `boards/<ats>.parquet` go straight to R2 under
   `exports/<date>/` (~8 GB) rather than to local disk. Every later stage reads them from there.
-- Ingest (1) is the one stage that cannot move as is: `fetch-local.mjs` exists because those
-  providers block Cloudflare IPs. Either it keeps running from a machine outside Cloudflare on its own
-  schedule (it only needs the Worker), or those ATSes are dropped from the daily run.
+- Ingest (1) cannot move: `fetch-local.mjs` exists because those providers block Cloudflare IPs. It
+  stays a laptop command run on its own schedule (it only needs the Worker); the container's run
+  starts at pull. See step 6.
 
 ### Ledger (2b): unchanged, output to R2
 `pull-pool.py` + `build-ledger.py` as today; the raw ndjson (~2 GB) fits on the container disk;
@@ -159,7 +159,10 @@ Each step is useful on its own and lands on the laptop first, so nothing is a bi
 5. **Container image + Workflow + cron + the Slack line.** Run it in parallel with the laptop for
    a week, diffing the two manifests, then switch. The Slack summary and the missed-run check ship
    with it, not after.
-6. **Ingest** for the local-only ATSes: a separate small job outside Cloudflare, or drop them.
+6. **Ingest** for the local-only ATSes — decided 2026-09-08: it stays a laptop command,
+   `uv run scripts/stage.py ingest`, run nightly or whenever. It only talks to the Worker, and the
+   boards it posts flow into snapshots like every other board, so the container never depends on it
+   and never waits for it; skipping it just leaves those two providers stale until the next run.
 
 Until step 5, a `launchd` job on the laptop at a fixed hour makes the current script hands-off:
 it is re-runnable, prunes its own exports, and publishes everything it produces.
