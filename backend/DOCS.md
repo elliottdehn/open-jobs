@@ -1,13 +1,17 @@
 # open-jobs backend
 
 A Cloudflare Worker + Durable Objects crawler that fetches every job board in `../slugs.json`
-once a day, keeps a diffed snapshot per board, and lets you pull everything down to a laptop
-for consolidation (NDJSON → parquet). No central database: each board is its own Durable Object.
+once a day, keeps a diffed history per board, and writes each board's open jobs as a parquet
+snapshot to R2. A nightly consolidation (laptop today, a container next; see [CONTAINER.md](CONTAINER.md))
+folds the snapshots into one dataset, publishes the search index, the daily diffs, the ledger, and
+the paged feed. No central database: each board is its own Durable Object.
 
-Production: `https://backend.dehnbostele.workers.dev`
+Production: `https://backend.dehnbostele.workers.dev` — the search page at `/`, the API and the
+published data under it.
 
-Optional paged crawler-diff projection: [Job changes feed](JOB-CHANGES.md) describes publishing
-and consuming additions, edits and dataset removals without re-downloading all group files.
+Consumers: the hosted search page (`../site/index.html`), the agent tools (`../tools/jobs.py`),
+DuckDB straight against `/data/*`, and the [job changes feed](JOB-CHANGES.md) for anyone keeping a
+mirror in a database.
 
 ## Architecture
 
@@ -48,8 +52,13 @@ Board DO (one per "ats/slug", 64k of them)
   get `enrich_status = 'pending'`. Enrichment is **one-shot**: a job that is `done` is never
   re-queued, even if its content changes later (`changed_at`/`content_hash` still update, so a
   consumer can detect drift). Every fetch inserts a `runs` row with the counts.
+- **Snapshots** (`src/snapshot.ts`): after a fetch that changed something, once the board's embed
+  backlog has drained (or after 48 h regardless), the board writes its *open* jobs, vectors included,
+  as one parquet object to R2 at `snapshots/<ats>/<slug>.parquet`, board meta in the footer.
+  Consolidation reads these instead of calling every DO. An empty board deletes its object; boards
+  over 15k open jobs are skipped (isolate memory); `POST /boards/:ats/:slug/snapshot` forces one.
 - **Storage schema**:
-  - `jobs(id, data JSON, content_hash, first_seen_at, last_seen_at, changed_at, removed_at, enrich_status, enriched_at, enrichment JSON, enrich_error, detail_status, detail JSON, detail_error, detail_fetched_at)`
+  - `jobs(id, data JSON, content_hash, first_seen_at, last_seen_at, changed_at, removed_at, enrich_status, enriched_at, enrichment JSON, enrich_error, detail_status, detail JSON, detail_error, detail_fetched_at, embedding BLOB, embed_model, embed_status)`
   - `runs(id, run_at, status ok|gone|error, added, changed, removed, unchanged, error)`
   - KV `meta`: `BoardMeta` (slot, last run/ok, status, error, failures, jobCount, nextFetchAt, nextAlarmAt)
 
@@ -98,8 +107,16 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 | taleo | subdomain | via `fetchDetail` (jobdetail.ftl state blob) | default career section only; `tbe` (Business Edition) unsupported |
 | workable | account subdomain | yes | widget API |
 | workday | hostname | via `fetchDetail` | sites discovered from robots.txt; 20/page; full JD from `/wday/cxs/.../job/...` once per job |
-| ukg | `host:companyCode:boardGuid` (mined from Common Crawl) | brief in listing; full via `fetchDetail` | legacy datacenter slugs return gone |
-| successfactors | RMK site hostname, e.g. jobs.exxonmobil.com (mined via rmkcdn CDN refs) | full JD in `/sitemap.xml` RSS | legacy CDN slugs return gone |
+| dark | career-site hostname | yes (schema.org JobPosting JSON-LD in the HTML) | "dark pool": bespoke career sites with no shared ATS, mined from Web Data Commons / Common Crawl; the aggregator guard drops boards naming >2 hiring organizations |
+| bamboohr | company subdomain | via `fetchDetail` | slugs mined from Common Crawl (*.bamboohr.com) |
+| jazzhr | company subdomain (applytojob.com) | via `fetchDetail` | slugs mined from Common Crawl |
+| cornerstone | corp subdomain (csod.com) | yes (public search API) | SPA, but the search API returns the full posting |
+| usajobs | organization code (e.g. `AF00`) | yes | data.usajobs.gov API, `USAJOBS_KEY` secret; 10k cap per query |
+| governmentjobs | NEOGOV search slice | yes | **local-only** (IP-pinned pagination): state and local government, ~22k jobs |
+| snowflake | (abandoned experiment, 2026-08-31: custom extractors for big companies' own sites; registered, see `src/snowflake/index.ts`) | | |
+
+Registered providers: 36 (`src/boards.json`, 114k slugs); `localOnlyAts` (`jobscore`, `governmentjobs`)
+are fetched from the laptop and ingested, the other 34 by the fleet.
 
 ### Board (company) enrichment (`src/company.ts`, `src/openai.ts`)
 Identifies the company behind a board — name, homepage, careers/LinkedIn URLs, HQ, industry,
@@ -121,7 +138,7 @@ alarm tick, after its detail fetch, when
 the `EMBED` var is `"on"` (default). Stored as a float32 BLOB (`embedding`, `embed_model`,
 `embed_status`). `POST /boards/:ats/:slug/embed` embeds a whole board immediately. Export with
 `?embed=1` / `--embed` (≈6 KB per job in JSON; `embedding FLOAT[]` in parquet). Cost ≈ $0.02 per
-1M tokens at ~1.2k tokens/job → ~$45 for the current 1.9M jobs. **What is embedded**: labelled
+1M tokens at ~1.2k tokens/job → ~$75 for the current 3.1M jobs. **What is embedded**: labelled
 lines for company (resolved name or slug-derived), title, location, departments, posted date,
 industry / staffing flag when known, source ATS, then the **full JD text** (capped at 28k chars ≈
 the model's 8k-token input) — the whole record, so classifiers can be trained on the vector alone.
@@ -145,45 +162,55 @@ Two entry points:
 Errors land in `enrich_error` / `enrich_status = error`; re-queue with
 `POST /boards/:ats/:slug/retry-enrichment` or re-call `/jobs/enrich` (errors are retried, `done` is not).
 
-## Local-first client (JobScream)
+## What is published, and who reads it
 
-`web/` is a static app served by the Worker at `/` (Workers static assets). Flow: paste a résumé →
-`POST /embed` (the only server call that sees user text; IP rate-limited) → the client loads the
-**tree manifest** and walks it from the résumé vector to show the nearest job *groups* (medoid,
-exemplars, size, spread) → **Maybe** downloads that group's file, **No** skips it (and seeds hard
-negatives) → screen 3 labels jobs with `J`/`K` and refits a logistic regression in the tab, live →
-**Export** yields `{recipe, w[1536], b, groups_maybe, labels}` — the user's search as a weight vector.
+The hosted search page (`../site/index.html`, one self-contained file uploaded as a Worker static
+asset and served at `/`) and the agent tools (`../tools/jobs.py`, see `../AGENTS.md`) both work the
+same way: embed the person's ideal job once (`POST /jd` writes it, `POST /embed` embeds it), walk the
+tree manifest to the nearest groups, download those group files, and do everything else locally.
+No server sees labels, notes, or a résumé.
 
-Data for the client lives in the `jobscream-data` R2 bucket, served at `GET /data/*` (Range
-supported, CORS open):
+Everything lives in the `jobscream-data` R2 bucket, served at `GET /data/*` (Range, CORS, one hour
+of cache), rebuilt nightly:
 - `manifest.json` — recursive-bisection tree over all embedded open jobs: nodes with `lo/hi` row
-  range (DFS order), `radius`, `size`, `label`, `medoid`, `exemplars`, `children`; plus `recipe`.
-- `centroids.bin` — float16 `[nodes × dims]` unit centroids, same order as `manifest.tree`.
-- `groups/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen,
-  jd text ≤ 4k chars) with exact float32 embeddings (`v`, base64 little-endian).
-Build + publish: `uv run scripts/build-manifest.py` (from `export/jobs/*.parquet` pulled with
-`--embed`) then `scripts/publish-web.py`. Rebuild whenever the embedding recipe or the corpus changes.
-Experiment / evaluation of the tree: `scripts/experiments/tree.py`.
+  range (DFS order), `radius`, `size`, `label`, `medoid`, `exemplars`, `children`; plus `recipe`,
+  `jobs`, `leaves`, `built_at`.
+- `centroids.bin` — float16 `[nodes × dims]` unit centroids, same order as `manifest.tree`; a client
+  walks the tree with byte-range reads (each subtree is contiguous in DFS order) instead of
+  downloading the 69 MB file.
+- `groups/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen, pub,
+  jd text ≤ 4k chars, enrichment and company when known) with exact float32 embeddings (`v`, base64
+  little-endian). Leaf ids restart at 0 every build; old files above the current count linger,
+  unreferenced and harmless.
+- `age-model.json`, `salary-model.json`, `arrangement-model.json`, `seniority-model.json`,
+  `location-countries.json` — the estimators (`FIELDS.md`, `scripts/train-*.py`), applied client-side.
+- `diffs/`, `ledger/`, `changes/` — history: see "Layout and retention" below and JOB-CHANGES.md.
+Build + publish: the `tree`, `estimators`, `finalize`, `history`, and `feed` stages of the daily
+consolidation. Experiment / evaluation of the tree: `scripts/experiments/tree.py`.
 
 ## HTTP API
 
 Admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>` (a Worker secret). With no secret set they
-fail closed (401 for everyone); public endpoints (`/embed`, `/enrich`, `/probe`, `/ideas`, `/data/*`) never need it.
-Locally the token lives in `backend/admin_token.txt` (git-ignored); `consolidate.sh` exports it as `ADMIN_TOKEN`. Cloudflare's bot rules 403 the default
-Python `urllib` user agent — send any custom UA (curl is fine).
+fail closed (401 for everyone); public endpoints (`/status`, `/probe`, `/embed`, `/jd`, `/enrich`, `/ideas`, `/data/*`)
+never need it, and every response, 401s and 404s included, carries CORS headers. Locally the token lives in
+`backend/admin_token.txt` (git-ignored); `consolidate.sh` / `stage.py` export it as `ADMIN_TOKEN`. Cloudflare's
+bot rules 403 the default Python `urllib` user agent — send any custom UA (curl is fine; the scripts use
+`open-jobs-tools/0.1`).
 
 | Method | Path | Purpose |
 |---|---|---|
+| POST | `/status` | **public**, 60 / 10 min per IP: body `{keys:["ats/slug#id",…]}` (≤ 1000 keys, ≤ 150 boards) → `{statuses:{key:{status:"open"\|"removed"\|"unknown", firstSeenAt, lastSeenAt, removedAt}}}`, straight from the Board DOs (the source of truth for `removed_at`) |
 | POST | `/enrich` | **public**, per-IP metered (`ENRICH_HOUR_USD` 5 / `ENRICH_DAY_USD` 50, actual token + web-search cost; cached results free): body `{jobs:[{ats,slug,id}…]}` (≤ 300) → `{boards:{name:{company,…}}, jobs:{key:{status,enrichment,cached}}, cost:{thisCallUsd,hourUsd,dayUsd,…}}`; 429 + `retry-after` when a window is exhausted (cached part still returned). Runs job extraction + company resolution, both one-shot |
 | GET | `/enrich/budget` | this IP's hour/day spend and limits |
-| GET | `/probe?url=<job url>[&board=ats/slug]` | **public**: "why isn't this posting in the corpus?" — resolves the board from the URL (`src/probe.ts`; slugs.json-matched for icims/gohire; workable/paylocity/embedded `gh_jid` need `board=`), returns `{resolved, crawled, board:{lastOkAt,jobCount,nextFetchAt,…}, job:{found,status,firstSeenAt,embedStatus,embedding,…}}`. 60/10 min per IP. `tools/jobs.py probe` adds the snapshot/group/slice context |
+| GET | `/probe?url=<job url>[&board=ats/slug]` | **public**: "why isn't this posting in the corpus?" — resolves the board from the URL (`src/probe.ts`; slugs.json-matched for icims/gohire; workable/paylocity/embedded `gh_jid` need `board=`), returns `{resolved, crawled, board:{lastOkAt,jobCount,nextFetchAt,…}, job:{found,status,firstSeenAt,embedStatus,embedding,…}}`. 60/10 min per IP. `tools/jobs.py probe` adds the group membership (from downloaded leaf files) and slice rank |
 | POST | `/ideas` | **public**: `{file, line, idea, tags[]}` (or `{text}`; anonymous, no identity collected) relayed to the #multipenny-ideas Slack channel as a Block Kit message with a GitHub-linked file:line header (`SLACK_IDEAS_WEBHOOK` secret); 30/hour per IP |
 | POST | `/embed` | **public**, IP rate-limited (`EMBED_RATE_LIMIT` per `EMBED_RATE_WINDOW_MS`, default 10 / 10 min): body `{text, title?, location?}` → `{vector[1536], recipe}`; 429 with `retry-after` when limited, 503 when the embeddings API is saturated |
 | POST | `/jd` | **public**, 20 / 10 min per IP and metered against the same per-IP USD windows as `/enrich`: body `{title, location, blurb, model?: "luna"\|"astra"}` → `{jd, sections, model, usage, costUsd, budget}`. Expands a person's short description of the job they want into the *ideal* JD in the shape of a real posting (`src/jd.ts`, structured output, no tools), ready for `/embed`. `luna` (gpt-5.6-luna, default, ~$0.003/call) or `astra` (gpt-6-astra, ~$0.1/call) |
-| GET | `/data/<key>` | **public**: object from the `jobscream-data` R2 bucket (manifest, centroids, group files), Range + CORS |
+| GET | `/data/<key>` | **public**: any object in the `jobscream-data` R2 bucket (manifest, centroids, group files, estimator models, `diffs/`, `ledger/`, `changes/`), Range + CORS, `max-age=3600` |
 | GET | `/ats[?all=1]` | providers fetched by the Worker fleet → slug counts; `all=1` includes local-only ones |
 | POST | `/sync` | start a Registry sweep for every enabled ATS (what the cron does) |
 | GET | `/sync/:ats` | sweep status: `mode`, `cursor/total`, `touched`, `fetched`, `skipped`, `errors`, `lastError`, `finishedAt` |
+| GET | `/snapshots?ats=<ats>[&cursor=…]` | list the per-board snapshot objects of one ATS (key, size, etag, uploaded); what `pull-snapshots.mjs` walks |
 | POST | `/backfill[?ats=a,b]` | kick every board with a detail/embed/enrich backlog so it drains now (per-board minute ticks); progress via `/sync/:ats` (`fetched` = kicked) |
 | POST | `/fetch-all[?ats=a,b][&skipRecent=<ms>]` | on-demand fetch of every board (arms if needed) via the Registry sweep in `fetch` mode. Boards that are *fresh* — completed a non-error fetch within `skipRecent` (default 6 h; `0` forces) — are skipped. Does not change daily slots. Progress via `/sync/:ats` |
 | GET | `/boards/:ats/:slug[?filters]` | `{meta, jobs}` for one board |
@@ -192,6 +219,8 @@ Python `urllib` user agent — send any custom UA (curl is fine).
 | POST | `/boards/:ats/:slug/retry-enrichment` | reset `error` enrichments to `pending` |
 | POST | `/jobs/enrich` | body `{"jobs":[{"ats","slug","id"}…],"force"?:bool}` → `{boards: {"ats/slug": {company, companyError}}, jobs: {"ats/slug#id": {status, enrichment, cached}}}`; idempotent lazy enrichment; resolves the board's company first (cached) |
 | POST | `/boards/:ats/:slug/embed` | embed all un-embedded jobs on the board now |
+| POST | `/boards/:ats/:slug/snapshot` | write the board's R2 parquet snapshot now |
+| POST | `/boards/:ats/:slug/wipe` | drop every row (recovery for a pathological board); fetch again after |
 | POST | `/boards/:ats/:slug/ingest` | body = `{status:"ok", jobs:[Job…]}` \| `{status:"gone"}` \| `{status:"error", error}` fetched off-Cloudflare; runs the normal fetch pipeline (local-only ATSes) |
 | POST | `/boards/:ats/:slug/enrich-board[?force=1]` | resolve the company behind the board now (OpenAI Responses + web_search, one-shot unless `force`) |
 | GET | `/export/:ats?offset=0&limit=200[&filters][&skipEmpty=1]` | NDJSON, one `{ats, slug, meta, jobs}` line per board; headers `x-total`, `x-next-offset` |
@@ -220,7 +249,10 @@ npx wrangler types          # after changing bindings/vars
 npx tsc --noEmit
 npx wrangler deploy
 ```
-Migrations: `v1` created the scaffold's `MyDurableObject`; `v2` deleted it and created `Board` + `Registry`.
+`../site/index.html` (the search page) is uploaded as a static asset on every deploy and served at `/`;
+every API path is listed under `run_worker_first` in `wrangler.jsonc` so the assets layer never shadows an endpoint.
+Migrations: `v1` created the scaffold's `MyDurableObject`; `v2` deleted it and created `Board` + `Registry`;
+`v3` added `RateLimit`, `v4` `Budget`.
 Adding a DO class = new migration tag. Deploying mid-sweep is safe: Registry/Board state is in storage.
 
 ### Bootstrap / re-arm the fleet
@@ -256,7 +288,7 @@ fleet in about an hour. Without a kick the same work happens at each board's nex
 ## Daily consolidation (pull everything → parquet → manifest → R2)
 
 One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models] [--skip-ledger] [--keep-full] [--source r2] [--from STAGE]`.
-It is a thin wrapper: the work is ten stages in `scripts/stage.py`, each one an idempotent command
+It is a thin wrapper: the work is twelve stages in `scripts/stage.py`, each one an idempotent command
 (`uv run scripts/stage.py <stage> --date <date>`), and the wrapper only sequences them and keeps the log
 (`logs/consolidate-<date>.log`). `--from <stage>` resumes after a failure.
 
@@ -282,8 +314,9 @@ place through DuckDB's S3 client, parquet is written to `exports/<date>/`, and o
 (`work-<date>/`: vector memmap, staging, DuckDB spill) is local. Every script that reads an export takes
 `EXPORT_DIR` as a local dir or an `s3://bucket/exports/<date>` prefix, with `WORK_DIR` for local scratch.
 
-Where this is heading: [`CONTAINER.md`](CONTAINER.md), the plan for running consolidation as Cloudflare
-Containers started by the cron, with the measured stage sizes and the changes each stage needs.
+[`CONTAINER.md`](CONTAINER.md) has the container: how to build and run it locally against the bucket, what state
+lives in R2 between runs, the measured stage sizes, and what remains for the Cloudflare side (image push,
+Workflow on the cron, a week in parallel).
 
 ### Layout and retention: one full export, plus history as diffs
 ```
@@ -293,10 +326,10 @@ export/diffs/2026-09-06__2026-09-07/lite/data_*.parquet   the same rows without 
 export/diffs/2026-09-06__2026-09-07.json      counts, vanished boards and their verdicts, ok_to_prune
 export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorded, open or removed, with dates
 ```
-- **Diffs** (`scripts/build-diff.py`, step 3b): one row per event with the full job record and `op` =
+- **Diffs** (`scripts/build-diff.py`, the `diff` stage): one row per event with the full job record and `op` =
   `added` | `removed` (the old row, in full) | `changed` / `changed_prev` (title, location, url, or text
   or `embed_status` moved; the crawler's `content_hash` is *not* the criterion, it churns for ~370k Workday rows a day) |
-  `carried`. `latest` + the diffs reconstructs any day. ~1.4% added and ~1.3% removed per day; ~0.5 GB.
+  `carried`. `latest` + the diffs reconstructs any day. 1.4–3.1% added and removed per day so far; 0.4–1 GB full, 36–96 MB lite.
   `lite/` under each diff holds the same rows minus `embedding`, `raw_json`, `detail_raw_json`, `enrichment_json`,
   with `content` kept on `added` and `changed` rows and null elsewhere: everything a mirror needs to show a job,
   at a fraction of the size. Two tiers, on purpose: **lite** to filter and display, **full** to search (the vector
@@ -319,7 +352,7 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   them); if the crawler says 0, it really emptied and the rows are `removed`. Without this, one bad pull
   reads as 50,000 postings closing and reopening. More than `--max-absent` (3000) vanished boards means
   the pull is broken: everything is carried and nothing is deleted.
-- **Ledger** (`scripts/build-ledger.py`, step 2b): a slim `status=all` export of every board (no text,
+- **Ledger** (`scripts/build-ledger.py`, the `ledger` stage): a slim `status=all` export of every board (no text,
   no vectors; minutes, not hours), so removed jobs and their `removed_at` come straight from the Board
   DOs. This, not the diffs, is the source for posting lifetimes and survival curves.
 - **Integrity.** Every part carries a sha256 (in the sidecar and in `index.json`); a diff's `content_sha256`
@@ -327,7 +360,7 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   chain from any bootstrap day forward breaks loudly if a file goes missing or is truncated. `schema_version`
   is in every sidecar and index. Published diffs and ledger days are never rewritten (a re-run of a diff that
   was not final is fine, since it was never listed).
-- **Published** (`scripts/upload-history.py`, step 5b): both go to R2 under `diffs/` and `ledger/`, public at
+- **Published** (`scripts/upload-history.py`, the `history` stage): both go to R2 under `diffs/` and `ledger/`, public at
   `GET /data/diffs/<prev>__<date>/data_N.parquet` (or `.../lite/data_N.parquet`) and `GET /data/ledger/<date>/data_N.parquet`; `GET /data/diffs/index.json`
   and `/data/ledger/index.json` list what is available with the parts and the sidecar counts (the bucket listing
   itself is admin-only). DuckDB reads them in place: `read_parquet(['https://backend.dehnbostele.workers.dev/data/diffs/<a>__<b>/data_0.parquet', ...])`.
@@ -341,65 +374,35 @@ export/ledger/2026-09-07/data_*.parquet   every job the crawler has ever recorde
   export is overwritten daily; the group files are rewritten daily under the same names. A mirror bootstraps
   from `groups/` once and replays diffs from that day. Not yet done: a periodic full anchor (a monthly published
   `jobs/` parquet), which would bound replay for someone reconstructing an arbitrary past day.
-- **Retention** (step 6): once today's diff exists and passes its sanity check (`ok_to_prune`: job
+- **Retention** (the `retention` stage): once today's diff exists and passes its sanity check (`ok_to_prune`: job
   count within 10% and removals under 15%), every older full export that has a successor diff is
   deleted, listed first. `--keep-full` keeps them; a failed or skipped diff keeps them too.
 
-### The stages, and what each one taught us
+### What the stages taught us (the parts that still apply)
 
-1. **Ingest local-only ATSes** (`fetch-local.mjs --ingest`). Jobscore 403s Cloudflare IPs, so the
-   laptop fetches it and POSTs each snapshot to `/boards/jobscore/:slug/ingest`; the Board DO then
-   runs the normal diff/embed/enrich pipeline. Do this *first* so those jobs are embedded and land
-   in the same pull as everything else. ~1 min for 106 boards.
-
-2. **Pull** (`pull-pool.py … -- --status=open --embed --resume`). All 22 ATSes at once: each board
-   is its own DO and the Worker scales, so the only limits are the laptop's disk/CPU. Observed:
-   ~35 GB of NDJSON for 1.96M jobs with JD bodies and 1536-float vectors; workday alone is 32 GB
-   and ~30 min, everything else finishes inside that. Things that bit us, all fixed in code but
-   worth knowing:
-   - Vector pages are **5 boards** (`export.mjs` picks this when `--embed`); big boards are paged
-     **300 jobs per DO call** and emitted as multi-part lines (`part`, `more`), because a single
-     board's jobs with vectors exceed the DO RPC response limit (~32 MB).
-   - The export stream is **pull-driven** (`ReadableStream.pull`, one-board lookahead). Pushing
-     chunks eagerly OOMed the 128 MB isolate on pages of big boards; the client's read pace now
-     bounds Worker memory.
-   - The Worker's CPU limit is raised to **5 min** (`limits.cpu_ms`); a page of JD + vector JSON is
-     seconds of `JSON.stringify`, and the default 30 s cut streams off with "other side closed".
-   - `export.mjs` verifies each page's distinct-board count against `x-page-boards` and retries;
-     a board that fails inside the Worker is emitted as `{error}` rather than killing the stream.
-   - `--resume` streams the existing file (never loads it into one string: Node caps strings at
-     512 MB), truncates after the last complete page, and continues; the page size used is kept
-     in `<file>.page`. Use `NODE_OPTIONS=--max-old-space-size=16384` for multi-GB files.
-   - Don't use `xargs -I{}` with long commands on macOS ("command line cannot be assembled");
-     `pull-pool.py` is a plain Python worker pool. Don't run two pools on the same output dir.
-   - Never `rm` an export you haven't listed first. Each day is its own directory precisely so
-     cleanup is a deliberate, separate step (`ls export/`, then remove old days by hand).
-
-3. **Parquet** (`build-parquet.py`, `EXPORT_DIR=<dir>`). Streams each ATS: a Python pre-pass splits
-   per-board lines into per-job JSONL (a board line can be 100+ MB; DuckDB's reader can't take
-   that), then DuckDB writes `jobs/<ats>.parquet` and `boards/<ats>.parquet` with an explicit
-   `columns=` schema (no struct inference; missing keys become NULL). Bounded memory
-   (`memory_limit 10GB`, 2 threads, 20k-row groups); ~25 min for the full set, 8.1 GB out.
-   Multi-part boards repeat `meta` on every part; the board row is emitted from `part 0` only.
-   Query with `read_parquet('export/latest/jobs/*.parquet')`.
-
-4. **Manifest** (`build-manifest.py`, `EXPORT_DIR=<dir>`). Streams all `is_open AND embed_status =
-   done AND embed_model = <dominant recipe>` vectors in record batches into a preallocated float32
-   array (~12 GB for 2M × 1536; text columns stay in Arrow; peak ~20 GB — never copies the full
-   matrix, big nodes use chunked dot products and sampled sub-medoids), PCA-256 on a 50k sample, recursive 2-means bisection (stop at ≤ 400
-   members or radius ≤ 0.30), DFS row order, then per node: label (top title words), medoid,
-   sub-cluster medoids as exemplars (title-distinct), radius, `distinct_titles`. Writes
-   `web/manifest.json`, `web/centroids.bin` (float16), `web/groups/<leaf>.json` (jobs with JD text
-   ≤ 4k chars and exact float32 vectors, base64). Tree stats worth eyeballing in the log: leaf
-   count (expect ~3–5k), median leaf size, max leaf size (a huge leaf under the radius rule = one
-   employer's location-replicated postings, harmless), purity if you run
-   `scripts/experiments/hull.py` on a sample.
-
-5. **Upload** (`publish-web.py`, `EXPORT_DIR=<dir>`). Reconciles `groups/*` first, then `centroids.bin`,
-   then `manifest.json` last, so a client never sees a manifest whose groups aren't there yet.
-   Objects are served at `/data/*` with `cache-control: max-age=3600`; group ids change every
-   build, so stale caches only ever miss, never mismatch. (Old group files accumulate in the
-   bucket; prune by listing keys not referenced by the current manifest.)
+- **Ingest** (`fetch-local.mjs --ingest`): jobscore and governmentjobs block or IP-pin Cloudflare, so
+  the laptop fetches them and POSTs each snapshot to `/boards/:ats/:slug/ingest`; the Board DO then runs
+  the normal diff/embed/enrich pipeline and writes its R2 snapshot like any other board. It only needs
+  the Worker, so it runs on its own schedule; the container's run starts at `pull`. ~15 min.
+- **Pull** is 62k R2 snapshot objects (`pull-snapshots.mjs`, 24 concurrent, etag skip; ~35 GB, ~17 min),
+  or nothing at all under `--source r2`, where `build-parquet.py` reads them from the bucket in place
+  (~46 files/s from a laptop, faster inside Cloudflare). The `/export` JSON path survives for the two
+  local-only providers and for the ledger, and everything learned about it still holds: it is
+  **pull-driven** with one-board lookahead so the client's read pace bounds Worker memory; every query
+  is paged (2,000 jobs, 150 with vectors) because a 30k-job history in one response blew the DO's
+  memory; `export.mjs` verifies each page's board count and retries; `--resume` never loads a file into
+  one string. Don't run two pools on the same output dir.
+- **Parquet** (`build-parquet.py`): from snapshots, DuckDB reads the columnar files and the footer meta
+  directly (~6 min for 3.1M jobs); from ndjson, a Python pre-pass splits per-board lines into per-job
+  JSONL first (a board line can be 100+ MB). Explicit `columns=` schema, bounded memory, 20k-row groups.
+  Dedups by (ats, slug, id) and drops dark boards naming more than two hiring organizations.
+- **Tree** (`build-manifest.py`): see the next section. Streams every group file to R2 as it is written.
+- **Finalize** (`publish-web.py`): reconcile `groups/` in R2 by size (a failed background upload never
+  reaches the manifest), then the estimator JSONs, `centroids.bin`, and `manifest.json` last, so a
+  client never sees a manifest whose groups aren't there yet. Group ids change every build, so a stale
+  cache only ever misses, never mismatches. Old group files above the current leaf count accumulate;
+  leaving them is harmless and deliberate.
+- Never `rm` an export you haven't listed first. Retention lists, then deletes, in separate steps.
 
 ### The manifest build (`scripts/build-manifest.py`)
 Two passes over `jobs/*.parquet`. Pass 1 loads every embedded open job's vector into a float16 memmap
@@ -423,8 +426,10 @@ at 3.1M jobs. `BUILD_MANIFEST_STOP_AFTER=load` exits after loading (memory probe
   backfill first (~5 h at the 10M TPM embeddings cap).
 - Disk: ~80 GB for the one full export, plus ~0.5 GB per day of diffs and ~0.3 GB per day of
   ledger. While a run is in progress two full exports exist (~160 GB); step 6 drops the older one.
-- Time: ~3 h end to end at 2M jobs (pull ~70 min with the 8.7k-job Oracle tenants and Workday,
-  parquet ~25, manifest ~10, upload ~85 min for ~7k group files at 16 workers).
+- Time, measured 2026-09-08 at 3.1M jobs: ingest 15 min, pull 19, ledger 14, parquet 6, diff 1, tree 19
+  (group files stream up during it), estimators 59, finalize seconds when the tree published (26 min
+  when it did not), history 2, feed a few minutes per day (the one-time bootstrap was 45), retention
+  seconds. About 2.5 h end to end.
 
 ### Verifying a build
 ```sql
@@ -438,9 +443,10 @@ watch: paylocity, eightfold, crelate, gohire (detail endpoints returning "unavai
 expected — investigate before trusting those slices).
 
 ### When something breaks mid-run
-- A single ATS failed in the pull: just re-run `consolidate.sh` (or `pull-pool.py --ats <a> … --resume`); markers skip the rest.
-- Parquet failed on one ATS: fix, re-run `build-parquet.py`; outputs newer than their NDJSON are skipped.
-- Manifest OOM: it needs ~15 GB free; close DuckDB/other builders first.
+- Any stage: fix, then `scripts/consolidate.sh --from <stage>` (or `uv run scripts/stage.py <stage> --date <date>`;
+  in the container, `scripts/container-run.sh <stage> --date <date>`). Stages are idempotent and skip work
+  already done (etag-skipped snapshots, `.done` markers, per-file upload markers, the reconcile).
+- Tree OOM: it peaks near 10 GB of real memory; close other DuckDB/numpy processes first.
 - Never chain a delete after an unverified guard; list, then delete, in separate steps.
 
 ### Pull everything to the laptop → parquet (manual pieces)
@@ -452,7 +458,7 @@ npm run export -- greenhouse https://backend.dehnbostele.workers.dev --status=op
 # env:   ADMIN_TOKEN=...  WORKER_URL=... (default base)
 uv run scripts/build-parquet.py                    # export/*.ndjson -> export/jobs.parquet + boards.parquet
 ```
-Providers in `localOnlyAts` (`src/ats/index.ts`; currently jobscore, which 403s Cloudflare IPs) are
+Providers in `localOnlyAts` (`src/ats/index.ts`; jobscore, which 403s Cloudflare IPs, and governmentjobs, whose pagination is IP-pinned) are
 not fetched by the Worker fleet. `scripts/fetch-local.mjs --ingest=<worker-url>` runs their
 fetchers on this machine and POSTs each snapshot to `/boards/:ats/:slug/ingest`; the Board DO then
 runs the **same pipeline as an online fetch** (diff, `runs`, company resolution, embeddings,
@@ -460,9 +466,11 @@ enrichment queue) and is exported from the Worker like any other board. Such boa
 `meta.localOnly` so their daily alarm never tries to fetch — it only drains backlogs. `pull-all.sh`
 does the ingest before exporting. Keep `LOCAL_ONLY` in that script in sync with `localOnlyAts`.
 
-`jobs.parquet`: one row per job (`ats, slug, id, title, location, url, departments[], published_at,
-updated_at, content, raw_json, content_hash, first/last_seen_at, changed_at, removed_at, is_open,
-enrich_status, enriched_at, enrichment_json`). `boards/*.parquet`: one row per board with fetch meta and `company_*` columns.
+`jobs/<ats>.parquet`: one row per job (`ats, slug, id, title, location, url, departments[], published_at,
+updated_at, content, raw_json, detail_raw_json, detail_status, content_hash, first/last_seen_at, changed_at,
+removed_at, is_open, enrich_status, enriched_at, enrichment_json, embed_status, embed_model, embedding FLOAT[]`;
+from snapshots the raw JSON columns are NULL and only open jobs are present). `boards/<ats>.parquet`: one row
+per board with fetch meta and `company_*` columns.
 Incremental: pass `--since=<last pull ms>`; removed jobs come through with `removed_at` set.
 
 ### Inspect / debug one board
@@ -513,31 +521,45 @@ npx wrangler secret put ADMIN_TOKEN     # required; there must be no ADMIN_TOKEN
 
 ## Files
 ```
-src/index.ts         Worker: scheduled() + HTTP API
-src/board.ts         Board DO (schedule, fetch, diff, enrichment queue, queries)
+src/index.ts         Worker: scheduled() + HTTP API; serves ../site as static assets at /
+src/board.ts         Board DO (schedule, fetch, diff, detail, embed, enrichment queue, queries, snapshot trigger)
+src/snapshot.ts      per-board R2 parquet snapshot (hyparquet-writer; open jobs + vectors, meta in the footer)
 src/registry.ts      Registry DO (chunked arming sweep)
-src/ratelimit.ts     per-IP fixed-window RateLimit DO (used by /embed)
-src/budget.ts        per-IP USD meter (hour/day windows) for /enrich; src/pricing.ts has the rates
-web/                 JobScream client (index.html, app.js)
-scripts/build-manifest.py  tree manifest + centroids + group files for the client
-scripts/publish-web.py     finalize: reconcile groups/ in R2, then models, centroids, manifest
-scripts/stage.py           one consolidation stage per invocation (the container unit)
-scripts/r2.py              R2 through the S3 API (boto3, multipart); DuckDB S3 config
+src/ratelimit.ts     per-IP fixed-window RateLimit DO (/status, /probe, /embed, /jd, /ideas)
+src/budget.ts        per-IP USD meter (hour/day windows) for /enrich and /jd; src/pricing.ts has the rates
+src/jd.ts            POST /jd: the ideal-JD writer (structured output on luna, astra opt-in)
+src/probe.ts         GET /probe: job URL -> ats/slug/id
 src/enrich.ts        job enrichment (structured extraction) + JD text cleanup
 src/jobschema.ts     job_v1 strict JSON schema + instructions (FIELDS.md §2)
 src/company.ts       board/company resolver (schema, candidate derivation, prompt)
-src/openai.ts        Responses API structured-output client
+src/openai.ts        Responses API structured-output client + embeddings
 FIELDS.md            enrichment field spec (board + job + embeddings)
-src/ats/*.ts         one fetcher per provider; index.ts registers them
+JOB-CHANGES.md       the paged consumer feed (publisher, consumer protocol, recovery)
+CONTAINER.md         the consolidation container: run it, what lives in R2, what remains
+src/ats/*.ts         one fetcher per provider; index.ts registers them (localOnlyAts, enabledAts)
 src/boards.json      generated: { ats: slug[] }
 src/comeet-uids.json generated: comeet slug → {name, uid} | null
-scripts/build-boards.mjs   slugs.json → boards.json
+../site/index.html   the hosted search page (served at /)
+Dockerfile           the consolidation image (build from the repo root)
+scripts/consolidate.sh     laptop wrapper: stage.py stages in order; --from resumes; --source r2
+scripts/container-run.sh   the same stages in the image: build | all | <stage> | shell
+scripts/stage.py           one consolidation stage per invocation (ingest pull ledger parquet diff tree estimators finalize history feed retention report)
+scripts/r2.py              R2 through the S3 API (boto3, multipart) + DuckDB S3 config
+scripts/pull-snapshots.mjs per-board R2 snapshots -> export/<date>/snapshots/ (etag skip)
+scripts/export.mjs         /export JSON pull -> <ats>.ndjson (local-only providers, ledger); paged, resumable
+scripts/pull-pool.py       worker pool over export.mjs with .done markers
+scripts/fetch-local.mjs    run local-only fetchers on this machine and --ingest them
+scripts/build-parquet.py   snapshots or ndjson -> jobs/<ats>.parquet + boards/<ats>.parquet (SNAPSHOT_SOURCE=r2, --publish)
+scripts/build-ledger.py    slim status=all export -> export/ledger/<date>/ (every job ever, with dates)
+scripts/build-diff.py      today vs previous export -> export/diffs/<prev>__<date>/ (+ lite, sidecar, carry-forward)
+scripts/build-manifest.py  tree manifest + centroids + group files (two-pass, key-sorted, --publish)
+scripts/train-*.py, build-city-table.py, build-location-table.py   the estimators (web/*.json; location cache in state/)
+scripts/publish-web.py     finalize: reconcile groups/, then models, centroids, manifest
+scripts/upload-history.py  diffs + ledger + index.json (--remote-index rebuilds from the bucket)
+scripts/build-job-changes.py, test_job_changes.py   the feed publisher and its tests (PR #7)
+scripts/build-boards.mjs   slugs.json -> boards.json
 scripts/build-comeet.mjs   comeet uid resolver (--via worker)
-scripts/export.mjs         laptop pull → export/<ats>.ndjson
-scripts/fetch-local.mjs    run local-only fetchers on this machine → export/<ats>.ndjson
-scripts/consolidate.sh     the daily workflow: ingest → pull (all ATSes, resumable) → parquet → manifest → R2
-scripts/pull-pool.py       worker-pool exporter with .done markers (used by consolidate.sh)
-scripts/pull-all.sh        older sequential pull (superseded by consolidate.sh)
-scripts/build-parquet.py   export/*.ndjson → export/jobs/*.parquet + export/boards/*.parquet (uv run, per-ATS streaming)
+scripts/discover-careers.py  career-site discovery for the dark pool
 scripts/try-fetcher.mjs    run a fetcher directly in Node
+scripts/pull-all.sh        the old sequential pull (superseded by consolidate.sh)
 ```
