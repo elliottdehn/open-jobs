@@ -103,10 +103,10 @@ tbody tr:nth-child(even) { background: #fafcf8; }
 tbody tr:hover { background: #eff5e9; }
 td.n, th.n { text-align: right; }
 td a { font-family: var(--mono); font-size: 12px; }
-.dls { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 14px; }
-.dls .dl { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 9px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); text-decoration: none; color: var(--ink); }
+.dls { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-top: 14px; }
+.dls .dl { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 9px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); text-decoration: none; color: var(--ink); }
 .dls .dl:hover { border-color: var(--acc); text-decoration: none; }
-.dls .dl b { font: 500 13px/1.4 var(--mono); }
+.dls .dl b { font: 500 13px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dls .dl span { font: 11px/1.4 var(--mono); color: var(--soft); white-space: nowrap; }
 .dls .dl span:before { content: '↓ '; color: var(--acc); }
 td .part-link { display: block; padding-top: 3px; }
