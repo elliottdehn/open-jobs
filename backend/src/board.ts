@@ -32,6 +32,20 @@ const EMBED_BATCH = 100;
  * API caps a request well below 100 × that; ~240k chars ≈ 60k tokens stays comfortably under.
  */
 const EMBED_BATCH_CHARS = 240_000;
+/** Per-input ceiling for the embedding model (hard limit 8192 tokens). Estimated conservatively: ASCII at 4 chars per
+ *  token, everything else (CJK, accents) at 1.5 tokens per char. One over-long input rejects the whole batch. */
+const EMBED_MAX_TOKENS = 7_000;
+function clampTokens(s: string, maxTokens: number): string {
+	let t = 0;
+	for (let i = 0; i < s.length; i++) {
+		t += s.charCodeAt(i) < 128 ? 0.25 : 1.5;
+		if (t > maxTokens) return s.slice(0, i);
+	}
+	return s;
+}
+/** Rows the embed stage still owes: never embedded, pending, a stale recipe, or an error older than a day. A permanent
+ *  400 retried every minute kept 13 boards alive around the clock (September 2026). Params: EMBED_TAG, now - DAY. */
+const EMBED_TODO = `(embed_status IS NULL OR embed_status = 'pending' OR embed_model != ? OR (embed_status = 'error' AND (embed_tried_at IS NULL OR embed_tried_at < ?)))`;
 /**
  * Chars of JD text that go into the embedding. text-embedding-3-small accepts 8,191 tokens per
  * input; ~28k chars of English stays under that. Everything about the job is embedded (company,
@@ -175,6 +189,7 @@ type JobRow = {
 	embed_model: string | null;
 	embed_status: string | null;
 	embed_error: string | null;
+	embed_tried_at: number | null;
 	[k: string]: SqlStorageValue;
 };
 
@@ -312,6 +327,7 @@ export class Board extends DurableObject<Env> {
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_error TEXT`);
 				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_embed ON jobs (embed_status, removed_at)`);
 			}
+			if (!cols.has("embed_tried_at")) ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_tried_at INTEGER`);
 		});
 	}
 
@@ -830,15 +846,19 @@ export class Board extends DurableObject<Env> {
 		return this.ctx.storage.sql
 			.exec<{ n: number }>(
 				`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL
-				   AND (embed_status IS NULL OR embed_status IN ('pending', 'error') OR embed_model != ?)
+				   AND ${EMBED_TODO}
 				   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`,
-				EMBED_TAG,
+				EMBED_TAG, Date.now() - DAY,
 			)
 			.one().n;
 	}
 
 	/** Everything we know about the job, as labelled lines, then the full JD text (capped). */
 	private embedText(job: Job, meta: BoardMeta): string {
+		return clampTokens(this.embedTextRaw(job, meta), EMBED_MAX_TOKENS);
+	}
+
+	private embedTextRaw(job: Job, meta: BoardMeta): string {
 		const company = meta.company?.name ?? deriveCandidates(meta.slug, []).candidate_name;
 		const lines = [
 			`Company: ${company}`,
@@ -870,10 +890,10 @@ export class Board extends DurableObject<Env> {
 			const rows = this.ctx.storage.sql
 				.exec<JobRow>(
 					`SELECT * FROM jobs WHERE removed_at IS NULL
-					   AND (embed_status IS NULL OR embed_status IN ('pending', 'error') OR embed_model != ?)
+					   AND ${EMBED_TODO}
 					   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)
 					 ORDER BY CASE WHEN embed_status = 'error' THEN 1 ELSE 0 END, first_seen_at LIMIT ?`,
-					EMBED_TAG,
+					EMBED_TAG, Date.now() - DAY,
 					EMBED_BATCH,
 				)
 				.toArray();
@@ -882,7 +902,7 @@ export class Board extends DurableObject<Env> {
 		}
 	}
 
-	private async embedRows(allRows: JobRow[], meta: BoardMeta): Promise<void> {
+	private async embedRows(allRows: JobRow[], meta: BoardMeta, depth = 0): Promise<void> {
 		// Trim the batch to the request char budget (always at least one row).
 		const rows: JobRow[] = [];
 		const texts: string[] = [];
@@ -914,7 +934,14 @@ export class Board extends DurableObject<Env> {
 				meta.embedBackoffUntil = Date.now() + MINUTE + Math.floor(Math.random() * 4 * MINUTE);
 				return;
 			}
-			for (const r of rows) this.ctx.storage.sql.exec(`UPDATE jobs SET embed_status = 'error', embed_error = ? WHERE id = ?`, msg, r.id);
+			const now = Date.now();
+			const bad = /input\[(\d+)\]/.exec(msg); // OpenAI names the offending input: park that row, embed the rest now
+			const k = bad ? Number(bad[1]) : -1;
+			if (k >= 0 && k < rows.length && rows.length > 1 && depth < 8) {
+				this.ctx.storage.sql.exec(`UPDATE jobs SET embed_status = 'error', embed_error = ?, embed_tried_at = ? WHERE id = ?`, msg, now, rows[k].id);
+				return this.embedRows(rows.filter((_, i) => i !== k), meta, depth + 1);
+			}
+			for (const r of rows) this.ctx.storage.sql.exec(`UPDATE jobs SET embed_status = 'error', embed_error = ?, embed_tried_at = ? WHERE id = ?`, msg, now, r.id);
 		}
 	}
 
@@ -934,6 +961,38 @@ export class Board extends DurableObject<Env> {
 			await this.ctx.storage.put("meta", meta);
 		}
 		return { details, embeds, enrich, kicked };
+	}
+
+	/** Diagnostic: meta + recent runs + backlog counts (temporary). */
+	async debugState(): Promise<unknown> {
+		const meta = await this.meta();
+		const runs = this.ctx.storage.sql.exec(`SELECT * FROM runs ORDER BY id DESC LIMIT 12`).toArray();
+		const nRuns24h = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM runs WHERE run_at > ?`, Date.now() - 86_400_000).one().n;
+		const jobs = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
+		const embedErrors = this.ctx.storage.sql.exec(`SELECT embed_status, substr(embed_error, 1, 160) AS err, COUNT(*) AS n, MAX(length(data)) AS max_data FROM jobs WHERE removed_at IS NULL AND embed_status != 'done' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 6`).toArray();
+		return { embedErrors, meta, nRuns24h, jobs, pendingDetail: this.pendingDetailCount(), pendingEmbed: this.pendingEmbedCount(), pendingEnrich: this.pendingCount(), alarm: await this.ctx.storage.getAlarm(), runs };
+	}
+
+	/** Diagnostic: metered rows written per statement shape, on a scratch row (temporary). */
+	async rowMeter(): Promise<Record<string, number>> {
+		const sql = this.ctx.storage.sql; const out: Record<string, number> = {}; const now = Date.now();
+		const big = "x".repeat(25_000); const small = "x".repeat(500);
+		const w = (k: string, q: string, ...a: SqlStorageValue[]) => { out[k] = sql.exec(q, ...a).rowsWritten; };
+		w("insert_big", `INSERT INTO jobs (id, data, content_hash, first_seen_at, last_seen_at, changed_at, enrich_status, detail_status) VALUES ('t1', ?, 'h', ?, ?, ?, 'pending', 'pending')`, big, now, now, now);
+		w("insert_small", `INSERT INTO jobs (id, data, content_hash, first_seen_at, last_seen_at, changed_at, enrich_status, detail_status) VALUES ('t2', ?, 'h', ?, ?, ?, 'pending', 'pending')`, small, now, now, now);
+		w("seen_big", `UPDATE jobs SET last_seen_at = ?, removed_at = NULL WHERE id = 't1'`, now + 1);
+		w("seen_small", `UPDATE jobs SET last_seen_at = ?, removed_at = NULL WHERE id = 't2'`, now + 1);
+		w("removed_big", `UPDATE jobs SET removed_at = ? WHERE id = 't1'`, now);
+		w("relist_big", `UPDATE jobs SET last_seen_at = ?, removed_at = NULL WHERE id = 't1'`, now + 2);
+		w("detail_big", `UPDATE jobs SET detail_status = 'done', detail = ?, detail_error = NULL, detail_fetched_at = ? WHERE id = 't1'`, "y".repeat(20_000), now);
+		w("embed_big", `UPDATE jobs SET embedding = ?, embed_model = 'm', embed_status = 'done', embed_error = NULL WHERE id = 't1'`, new Uint8Array(6144).buffer);
+		w("enrich_big", `UPDATE jobs SET enrich_status = 'done', enriched_at = ?, enrichment = ?, enrich_error = NULL WHERE id = 't1'`, now, "z".repeat(2000));
+		w("small_col_big", `UPDATE jobs SET enrich_error = 'e' WHERE id = 't1'`);
+		w("data_rewrite_big", `UPDATE jobs SET data = ?, content_hash = 'h2', last_seen_at = ?, changed_at = ?, removed_at = NULL WHERE id = 't1'`, big + "1", now, now);
+		w("run_insert", `INSERT INTO runs (run_at, status, added, changed, removed, unchanged, error) VALUES (?, 'ok', 0, 0, 0, 0, NULL)`, now);
+		w("delete_two", `DELETE FROM jobs WHERE id IN ('t1','t2')`);
+		w("delete_run", `DELETE FROM runs WHERE run_at = ?`, now);
+		return out;
 	}
 
 	/** Admin: embed everything pending on this board now (all batches), regardless of the EMBED var. */

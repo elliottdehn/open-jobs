@@ -368,6 +368,10 @@ export default {
 			});
 		}
 
+		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
+		if (parts[0] === "rowmeter" && request.method === "POST") return Response.json(await env.BOARD.getByName("rowmeter/scratch").rowMeter());
+		if (parts[0] === "rowmeter" && request.method === "GET") return Response.json(await env.BOARD.getByName(url.searchParams.get("board") ?? "rowmeter/scratch").debugState());
+
 		// POST /backfill[?ats=a,b] -> kick every board with a detail/embed/enrich backlog so it drains now
 		//   (minute ticks per board, 150 detail requests / 100 embeddings per tick). Progress: GET /sync/:ats
 		//   (`fetched` = boards kicked, `skipped` = boards with nothing to do).
