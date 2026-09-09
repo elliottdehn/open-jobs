@@ -65,7 +65,7 @@ LOCK_TTL_MS = 4 * 3600 * 1000
 LOCKFILE = os.path.join(work, "lock.json")
 def lock_call(action, body=None):
     req = urllib.request.Request(f"{a.worker}/lock" + (f"/{action}" if action else ""), data=json.dumps(body).encode() if body is not None else None,
-                                 method="POST" if body is not None else "GET", headers={"authorization": f"Bearer {token}", "content-type": "application/json"})
+                                 method="POST" if body is not None else "GET", headers={"authorization": f"Bearer {token}", "content-type": "application/json", "user-agent": "open-jobs-stage/1"})  # the default urllib UA is bot-blocked at the edge
     with urllib.request.urlopen(req, timeout=60) as r: return json.load(r)
 def lock_holder():
     if os.path.exists(LOCKFILE): return json.load(open(LOCKFILE))["holder"]
