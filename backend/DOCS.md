@@ -208,6 +208,7 @@ bot rules 403 the default Python `urllib` user agent — send any custom UA (cur
 | POST | `/embed` | **public**, IP rate-limited (`EMBED_RATE_LIMIT` per `EMBED_RATE_WINDOW_MS`, default 10 / 10 min): body `{text, title?, location?}` → `{vector[1536], recipe}`; 429 with `retry-after` when limited, 503 when the embeddings API is saturated |
 | POST | `/jd` | **public**, 20 / 10 min per IP and metered against the same per-IP USD windows as `/enrich`: body `{title, location, blurb, model?: "luna"\|"astra"}` → `{jd, sections, model, usage, costUsd, budget}`. Expands a person's short description of the job they want into the *ideal* JD in the shape of a real posting (`src/jd.ts`, structured output, no tools), ready for `/embed`. `luna` (gpt-5.6-luna, default, ~$0.003/call) or `astra` (gpt-6-astra, ~$0.1/call) |
 | GET | `/data/` | **public**: HTML index of the public files (ledger days, diffs, snapshot, feed head) rendered from the indexes below, `max-age=3600` |
+| GET | `/data/exports/[<date>/[jobs/\|boards/]]` | **public**: JSON listing of that prefix (`dirs`, `files[{file,bytes}]`); the full export has no index file of its own |
 | GET | `/data/<key>` | **public**: any object in the `jobscream-data` R2 bucket (manifest, centroids, group files, estimator models, `diffs/`, `ledger/`, `changes/`), Range + CORS, `max-age=3600` |
 | GET | `/ats[?all=1]` | providers fetched by the Worker fleet → slug counts; `all=1` includes local-only ones |
 | POST | `/sync` | start a Registry sweep for every enabled ATS (what the cron does) |

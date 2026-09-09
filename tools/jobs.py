@@ -15,6 +15,8 @@
   uv run tools/jobs.py top    [--n 50] [--notes work/top-notes.json] -> work/top.html + work/top.md: the top eligible fresh matches
                                                                   by cosine, as a static page (no browser/serve needed: cloud agents)
   uv run tools/jobs.py status                                     -> what's in work/
+  uv run tools/jobs.py export [--only ashby,lever] [--out DIR]    -> today's full export: work/export/<date>/{jobs,boards}/<ats>.parquet
+                                                                  (13 GB; resumes; skips files already complete)
 
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
 """
@@ -790,6 +792,44 @@ def cmd_status(a):
 
 TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read()
 
+def cmd_export(a):
+    """Download today's full export (one parquet per ATS, jobs + boards) with resume; the dataset behind everything else."""
+    date = a.date
+    if not date:
+        try: date = get("/data/diffs/index.json").get("head")
+        except Exception: date = None
+        dates = get("/data/exports/")["dirs"]
+        if not dates: sys.exit("no export published")
+        if not date or f"{date}/" not in dates: date = sorted(dates)[-1].rstrip("/")
+    out = a.out or os.path.join(WORK, "export", date); only = set(x.strip() for x in a.only.split(",")) if a.only else None
+    plan = []
+    for sub_ in ("jobs", "boards"):
+        for f in get(f"/data/exports/{date}/{sub_}/")["files"]:
+            if only and f["file"].rsplit(".", 1)[0] not in only: continue
+            plan.append((f"/data/exports/{date}/{sub_}/{f['file']}", os.path.join(out, sub_, f["file"]), f["bytes"]))
+    total = sum(b for _, _, b in plan); print(f"export {date}: {len(plan)} files, {total / 1e9:.1f} GB -> {out}")
+    done = 0; t0 = time.time()
+    for path, dest, size in plan:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        have = os.path.getsize(dest) if os.path.exists(dest) else 0
+        if have == size: done += size; continue
+        if have > size: os.remove(dest); have = 0
+        for attempt in range(5):
+            try:
+                req = urllib.request.Request(f"{DATA}{path}", headers={**UA, **({"range": f"bytes={have}-"} if have else {})})
+                with urllib.request.urlopen(req, timeout=300) as r, open(dest, "ab" if have else "wb") as w:
+                    while True:
+                        chunk = r.read(8 << 20)
+                        if not chunk: break
+                        w.write(chunk); have += len(chunk); done += len(chunk)
+                        el = time.time() - t0; print(f"\r  {os.path.relpath(dest, out)}  {done / 1e9:.2f}/{total / 1e9:.1f} GB  {done / el / 1e6:.0f} MB/s", end="", flush=True)
+                break
+            except Exception as e:
+                if attempt == 4: sys.exit(f"\nfailed: {path}: {e}")
+                time.sleep(2 * (attempt + 1))
+        if have != size: sys.exit(f"\nshort file: {dest} ({have} of {size} bytes)")
+    print(f"\ndone: {out}  ({time.time() - t0:.0f}s)\n  duckdb: SELECT ats, count(*) FROM read_parquet('{os.path.join(out, 'jobs', '*.parquet')}') GROUP BY 1")
+
 ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")
 s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add_argument("--min-sim", type=float, default=0.0)
@@ -800,6 +840,7 @@ s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.
 s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))
 s = sub.add_parser("top", help="static shortlist: top N eligible fresh matches by cosine (for agents without a browser)"); s.add_argument("--n", type=int, default=50); s.add_argument("--out"); s.add_argument("--notes", help="JSON {key: why it fits}"); s.add_argument("--freshness", default="fresh", help="comma list of verdicts to keep: fresh,stale,re-stamped,ghost,unknown")
 s = sub.add_parser("probe", help="why isn't this posting in my list?"); s.add_argument("url"); s.add_argument("--board", help="ats/slug when the URL doesn't name the board (workable, paylocity)")
+s = sub.add_parser("export", help="download today's full export (jobs + boards parquet per ATS), resumable"); s.add_argument("--date"); s.add_argument("--only", help="comma-separated ATS names"); s.add_argument("--out")
 sub.add_parser("status")
 args = ap.parse_args()
-{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "top": cmd_top, "probe": cmd_probe, "status": cmd_status}[args.cmd](args)
+{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "top": cmd_top, "probe": cmd_probe, "status": cmd_status, "export": cmd_export}[args.cmd](args)

@@ -126,6 +126,15 @@ Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md). Enrichment 
 
 ## Take the data
 
+```
+git clone https://github.com/elliottdehn/open-jobs && cd open-jobs
+uv run tools/jobs.py export      # today's full export: work/export/<date>/{jobs,boards}/<ats>.parquet, ~13 GB, resumable
+```
+
+Every open posting, one parquet per applicant tracking system, with the description text and a
+1536-dim embedding per row. [`/data/`](https://backend.dehnbostele.workers.dev/data/) lists every
+published file with sizes, build dates, and how to read each in place.
+
 The corpus is published as static files: a manifest (a tree of a few thousand groups of similar
 jobs, with labels and exemplars), centroids, and one JSON per group with titles, companies,
 locations, URLs, full description text, and float32 vectors. `tools/jobs.py fetch` pulls any set

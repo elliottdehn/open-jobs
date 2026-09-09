@@ -306,6 +306,14 @@ export default {
 		// GET /data/  -> HTML index of the public files (rendered from the same indexes a mirror reads)
 		if (parts[0] === "data" && parts.length === 1 && request.method === "GET") return dataIndex(env, cors);
 
+		// GET /data/exports/[<date>/[jobs/|boards/]]  -> JSON listing of that prefix (the full export has no index file of its own)
+		if (parts[0] === "data" && parts[1] === "exports" && url.pathname.endsWith("/") && request.method === "GET") {
+			const prefix = parts.slice(1).join("/") + "/";
+			const r = await env.DATA.list({ prefix, delimiter: "/" });
+			const body = { prefix, dirs: r.delimitedPrefixes.map((d) => d.slice(prefix.length)), files: r.objects.map((o) => ({ file: o.key.slice(prefix.length), bytes: o.size })) };
+			return Response.json(body, { headers: { ...cors, "cache-control": "public, max-age=3600" } });
+		}
+
 		// GET /data/<key>  -> object from the DATA R2 bucket (manifest, group files, parquet) with Range support
 		if (parts[0] === "data" && (parts.length >= 2) && (request.method === "GET" || request.method === "HEAD")) {
 			const key = parts.slice(1).join("/");
