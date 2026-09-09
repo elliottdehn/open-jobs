@@ -82,6 +82,7 @@ p{max-width:72ch;margin:8px 0}.soft{color:var(--soft)}
 code{font:13.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel);padding:1px 5px;border-radius:4px}
 pre.hero{font-size:17px;line-height:1.9;padding:22px 26px;border-left:3px solid var(--acc);margin:16px 0 18px}
 .ln{display:inline-block;width:2.2em;color:var(--soft);user-select:none}
+.inc{display:grid;gap:14px;margin-top:12px}.inc figure{margin:0}.inc figcaption{font-size:14px;margin:0 0 4px}.inc pre{margin:0;white-space:pre-wrap;word-break:break-word}
 pre{font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel);padding:14px 16px;border-radius:6px;overflow-x:auto;margin:12px 0 0;max-width:100%}
 .wrap{overflow-x:auto;margin-top:12px}
 table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
@@ -119,6 +120,27 @@ ${esc(manifest.recipe)} embedding, and the company fields, as ${num(atsList.leng
 posting with the description text and its ${esc(manifest.recipe)} embedding, plus <code>boards/</code> with one row per
 career site and its company fields. The files live at <a href="/data/exports/${esc(head)}/jobs/">exports/${esc(head)}/jobs/</a>;
 tomorrow's export replaces today's under tomorrow's date, and the previous day stays up for one more night.</p>
+<h3>Then, to confirm you have it</h3>
+<p class="soft">Each is one command. <code>jobs</code> and <code>boards</code> are views over the export you just pulled.</p>
+<div class="inc">
+<figure><figcaption>Count what landed</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT count(*) postings, count(DISTINCT slug) career_sites, count(*) FILTER (embedding IS NOT NULL) with_vectors FROM jobs"</pre></figure>
+<figure><figcaption>Ads still posted as open a year after the date they show</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT title, url, published_at::date AS says_posted FROM jobs WHERE published_at &lt; now() - INTERVAL 1 YEAR ORDER BY 3 LIMIT 20"</pre></figure>
+<figure><figcaption>What the boards claim, by month</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT date_trunc('month', published_at)::date AS month, count(*) FROM jobs GROUP BY 1 ORDER BY 1 DESC LIMIT 12"</pre></figure>
+<figure><figcaption>The most common titles</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT title, count(*) n FROM jobs GROUP BY 1 ORDER BY 2 DESC LIMIT 25"</pre></figure>
+<figure><figcaption>Career sites with the most open roles</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT ats, slug, count(*) open_roles FROM jobs GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25"</pre></figure>
+<figure><figcaption>How many postings state a dollar figure</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT ats, round(100.0 * count(*) FILTER (regexp_matches(content, '[$][0-9]{2,3},[0-9]{3}')) / count(*), 1) pct_with_pay FROM jobs GROUP BY 1 ORDER BY 2 DESC"</pre></figure>
+<figure><figcaption>Full-text search across every description</figcaption>
+<pre>uv run tools/jobs.py sql "SELECT title, url FROM jobs WHERE content ILIKE '%kubernetes%' AND title ILIKE '%engineer%' LIMIT 20"</pre></figure>
+<figure><figcaption>Nearest postings by vector, no index needed</figcaption>
+<pre>uv run tools/jobs.py sql "WITH q AS (SELECT embedding FROM jobs WHERE title ILIKE '%data engineer%' AND embedding IS NOT NULL LIMIT 1) SELECT title, round(list_cosine_similarity(embedding, (SELECT embedding FROM q)), 3) sim FROM jobs WHERE embedding IS NOT NULL ORDER BY 2 DESC LIMIT 20"</pre></figure>
+</div>
+<h3>Columns</h3>
 <p class="cols">ats, slug, id, title, location, url, departments[], published_at, updated_at, content, detail_status,
 content_hash, first_seen_at, last_seen_at, changed_at, removed_at, is_open, enrich_status, enriched_at,
 enrichment_json, embed_status, embed_model, embedding FLOAT[${esc(manifest.dims)}]</p>
