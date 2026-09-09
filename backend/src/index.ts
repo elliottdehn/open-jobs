@@ -3,6 +3,7 @@ import { resolveJobUrl } from "./probe";
 export { Board } from "./board";
 export { RateLimit } from "./ratelimit";
 export { Budget } from "./budget";
+export { Lock } from "./lock";
 import type { BoardState, EnrichJobsResult, JobQuery, StoredJob } from "./board";
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
@@ -371,6 +372,19 @@ export default {
 		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
 		if (parts[0] === "rowmeter" && request.method === "POST") return Response.json(await env.BOARD.getByName("rowmeter/scratch").rowMeter());
 		if (parts[0] === "rowmeter" && request.method === "GET") return Response.json(await env.BOARD.getByName(url.searchParams.get("board") ?? "rowmeter/scratch").debugState());
+
+		// GET /lock | POST /lock/acquire|renew|release {holder, ttlMs?, note?, force?} -> the consolidation publisher
+		// mutex (src/lock.ts): stage.py takes it for every publishing stage so only one run writes the bucket at a time
+		if (parts[0] === "lock") {
+			const lock = env.LOCK.getByName("consolidate");
+			if (parts.length === 1 && request.method === "GET") return Response.json(await lock.status());
+			const b = (await request.json().catch(() => ({}))) as { holder?: string; ttlMs?: number; note?: string; force?: boolean };
+			if (request.method !== "POST" || !b.holder) return new Response("POST {holder, ...}", { status: 400 });
+			const ttl = b.ttlMs ?? 4 * 3_600_000;
+			if (parts[1] === "acquire") return Response.json(await lock.acquire(b.holder, ttl, b.note, !!b.force));
+			if (parts[1] === "renew") return Response.json(await lock.renew(b.holder, ttl));
+			if (parts[1] === "release") return Response.json(await lock.release(b.holder, !!b.force));
+		}
 
 		// POST /backfill[?ats=a,b] -> kick every board with a detail/embed/enrich backlog so it drains now
 		//   (minute ticks per board, 150 detail requests / 100 embeddings per tick). Progress: GET /sync/:ats

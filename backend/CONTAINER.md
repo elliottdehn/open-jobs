@@ -109,6 +109,8 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
 - **Secrets:** `ADMIN_TOKEN` (Worker admin endpoints for `/export` and the vanished-board check),
   R2 S3 credentials scoped to `jobscream-data`, `OPENAI_KEY` only for `build-location-table.py`
   (it embeds new location strings; pennies).
+- **One publisher at a time.** Done (2026-09-09): the Worker's `/lock` Durable Object; stage.py acquires it for every
+  publishing stage, renews it, and retention releases it. Laptop and container cannot both write the bucket.
 - **Observability, a requirement not a nicety.** The point of the container is that the project
   runs for a week with nobody watching. So: a final step posts one line per run to Slack (date, jobs
   in the manifest, diff added/removed/changed, ledger size, feed generation, and which stages

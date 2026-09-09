@@ -26,11 +26,11 @@ snapshots and the previous export from the bucket in place and writes jobs/board
 (exports/<date>/); local scratch goes under --work (default <backend>/work-<date>/). State between stages is
 only files: local dirs or R2 prefixes. Env: ADMIN_TOKEN (admin endpoints), R2_* (bucket), OPENAI_KEY (location table).
 """
-import argparse, glob, json, os, subprocess, sys, time
+import argparse, atexit, glob, json, os, socket, subprocess, sys, threading, time, urllib.request, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__)); BACKEND = os.path.normpath(os.path.join(HERE, ".."))
 ap = argparse.ArgumentParser()
-ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention", "report"])
+ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention", "report", "unlock"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
 ap.add_argument("--publish", action="store_true", help="write parquet to R2 as produced (always on for --source r2); group files always stream up during the tree stage unless --no-publish")
@@ -41,6 +41,7 @@ ap.add_argument("--prev", help="previous export for the diff (default: export/la
 ap.add_argument("--skip-models", action="store_true"); ap.add_argument("--keep-full", action="store_true")
 ap.add_argument("--only", help="parquet: restrict to these ATSes (comma list; tests)")
 ap.add_argument("--dry-run", action="store_true", help="report: print the line, post nothing")
+ap.add_argument("--force-lock", action="store_true", help="take the publisher lock even if another run holds it (you are sure it is dead)")
 a = ap.parse_args()
 os.chdir(BACKEND)
 r2_mode = a.source == "r2"; publish = a.publish or r2_mode
@@ -55,6 +56,44 @@ token = os.environ.get("ADMIN_TOKEN") or (open("admin_token.txt").read().strip()
 if token: os.environ["ADMIN_TOKEN"] = token
 env = dict(os.environ, EXPORT_DIR=export_root, WORK_DIR=work, WORKER_URL=a.worker)
 t0 = time.time()
+
+# ---- the publisher lock: one consolidation run at a time, laptop or container (Worker /lock, src/lock.ts) ----
+# Every publishing stage acquires it under this run's holder id (kept in <work>/lock.json so the stages of one run,
+# separate processes, share it), renews it in the background, and retention releases it. Unrenewed, it expires in
+# LOCK_TTL so a crashed run cannot block tomorrow's. `stage.py unlock` releases by hand; --force-lock takes it over.
+LOCK_TTL_MS = 4 * 3600 * 1000
+LOCKFILE = os.path.join(work, "lock.json")
+def lock_call(action, body=None):
+    req = urllib.request.Request(f"{a.worker}/lock" + (f"/{action}" if action else ""), data=json.dumps(body).encode() if body is not None else None,
+                                 method="POST" if body is not None else "GET", headers={"authorization": f"Bearer {token}", "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r: return json.load(r)
+def lock_holder():
+    if os.path.exists(LOCKFILE): return json.load(open(LOCKFILE))["holder"]
+    h = f"{socket.gethostname()}:{a.date}:{uuid.uuid4().hex[:8]}"; json.dump({"holder": h, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, open(LOCKFILE, "w")); return h
+def when(ms): return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ms / 1000))
+def lock_release(force=False):
+    try:
+        r = lock_call("release", {"holder": lock_holder(), "force": force})
+        print("publisher lock released" if r["ok"] else f"lock NOT released: held by {r['lock']['holder']} since {when(r['lock']['since'])}", flush=True)
+        if r["ok"] and os.path.exists(LOCKFILE): os.remove(LOCKFILE)
+    except Exception as e: print(f"WARNING: lock release failed: {e}", flush=True)
+if a.stage == "unlock":
+    lock_release(force=True); sys.exit(0)
+if a.stage not in ("ingest", "report") and not a.dry_run:
+    if not token: sys.exit("ADMIN_TOKEN is required: the publisher lock lives behind the admin endpoints")
+    holder = lock_holder()
+    r = lock_call("acquire", {"holder": holder, "ttlMs": LOCK_TTL_MS, "note": f"{a.stage} on {socket.gethostname()}", "force": a.force_lock})
+    if not r["ok"]:
+        L = r["lock"]; sys.exit(f"another publisher holds the lock: {L['holder']} ({L.get('note','')}) since {when(L['since'])}, expires {when(L['until'])} unless renewed.\n"
+                                f"Wait for it, or if it is dead: uv run scripts/stage.py unlock --date {a.date}  (or re-run with --force-lock)")
+    print(f"publisher lock: {holder} (since {when(r['lock']['since'])})", flush=True)
+    def _renew():
+        while True:
+            time.sleep(300)
+            try: lock_call("renew", {"holder": holder, "ttlMs": LOCK_TTL_MS})
+            except Exception as e: print(f"WARNING: lock renew failed: {e}", flush=True)
+    threading.Thread(target=_renew, daemon=True).start()
+    if a.stage == "retention": atexit.register(lock_release)
 RUNLOG = os.path.join(work, "run.jsonl")   # one line per stage outcome; the report stage reads it
 def record(ok, msg):
     with open(RUNLOG, "a") as f: f.write(json.dumps({"stage": a.stage, "date": a.date, "ok": ok, "seconds": round(time.time() - t0), "msg": msg, "at": time.strftime("%H:%M:%S")}) + "\n")

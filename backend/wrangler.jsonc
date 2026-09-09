@@ -11,14 +11,16 @@
 		{ "tag": "v1", "new_sqlite_classes": ["MyDurableObject"] },
 		{ "tag": "v2", "deleted_classes": ["MyDurableObject"], "new_sqlite_classes": ["Board", "Registry"] },
 		{ "tag": "v3", "new_sqlite_classes": ["RateLimit"] },
-		{ "tag": "v4", "new_sqlite_classes": ["Budget"] }
+		{ "tag": "v4", "new_sqlite_classes": ["Budget"] },
+		{ "tag": "v5", "new_sqlite_classes": ["Lock"] }
 	],
 	"durable_objects": {
 		"bindings": [
 			{ "class_name": "Board", "name": "BOARD" },
 			{ "class_name": "Registry", "name": "REGISTRY" },
 			{ "class_name": "RateLimit", "name": "RATELIMIT" },
-			{ "class_name": "Budget", "name": "BUDGET" }
+			{ "class_name": "Budget", "name": "BUDGET" },
+			{ "class_name": "Lock", "name": "LOCK" }
 		]
 	},
 	// Static data for the local-first client: tree manifest, group files, parquet. Served via GET /data/*.
