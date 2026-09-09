@@ -503,6 +503,10 @@ enrichment queue) and is exported from the Worker like any other board. Such boa
 `meta.localOnly` so their daily alarm never tries to fetch — it only drains backlogs. `pull-all.sh`
 does the ingest before exporting. Keep `LOCAL_ONLY` in that script in sync with `localOnlyAts`.
 
+`content_hash` covers title, location, url, departments, dates, and description text, not the raw provider
+payload (changed 2026-09-10; values now start with `s`). Do not diff on it across that date; the diff stage and the
+change feed use their own change key and are unaffected.
+
 `last_seen_at` of an open job is derived at read time as max(stored value, the board's last successful fetch):
 a daily fetch does not rewrite unchanged rows (that was ~40M DO row writes a day, the largest Cloudflare
 line item in September 2026); only added, changed, removed, and re-listed rows are written.

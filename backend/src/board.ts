@@ -222,9 +222,15 @@ function hash32(s: string, seed = 0x811c9dc5): number {
 }
 
 /** 64-bit-ish content hash (two FNV-1a passes with different seeds), hex. */
+/**
+ * What the crawler considers the posting. The provider's raw payload is deliberately excluded: Workday and the
+ * crawled career sites carry fields like "posted 3 days ago" that churn every night and rewrote most of their
+ * rows daily (4 metered rows each). Prefixed "s" so a stored pre-2026-09-10 hash (whole-JSON, 16 hex) is
+ * recognisable and upgraded in place instead of being reported as a change.
+ */
 function contentHash(job: Job): string {
-	const s = JSON.stringify(job);
-	return hash32(s).toString(16).padStart(8, "0") + hash32(s, 0x9747b28c).toString(16).padStart(8, "0");
+	const s = JSON.stringify([job.title, job.location, job.url, job.departments, job.publishedAt, job.updatedAt, job.content]);
+	return "s" + hash32(s).toString(16).padStart(8, "0") + hash32(s, 0x9747b28c).toString(16).padStart(8, "0");
 }
 
 function isFresh(meta: BoardMeta, windowMs: number, now = Date.now()): boolean {
@@ -584,7 +590,7 @@ export class Board extends DurableObject<Env> {
 						hasDetail && (job.content ?? "").length < DETAIL_MIN_CONTENT ? "pending" : "na",
 					);
 					diff.added.push(job);
-				} else if (prev.hash !== hash) {
+				} else if (!this.sameContent(prev.hash, hash, job.id)) {
 					// Content changed. Enrichment is one-shot: a job that is already 'done' is never re-enriched;
 					// only never-enriched jobs go (back) to 'pending'.
 					sql.exec(
@@ -607,6 +613,20 @@ export class Board extends DurableObject<Env> {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Is the stored row the same posting? A legacy whole-JSON hash never equals a new one, so re-hash the stored
+	 * row the new way before calling it a change; when it matches, upgrade the stored hash (one metered row,
+	 * no changed_at bump) so the next fetch compares directly.
+	 */
+	private sameContent(prevHash: string, hash: string, id: string): boolean {
+		if (prevHash === hash) return true;
+		if (prevHash.startsWith("s")) return false;
+		const row = this.ctx.storage.sql.exec<{ data: string }>(`SELECT data FROM jobs WHERE id = ?`, id).toArray()[0];
+		if (!row || contentHash(JSON.parse(row.data) as Job) !== hash) return false;
+		this.ctx.storage.sql.exec(`UPDATE jobs SET content_hash = ? WHERE id = ?`, hash, id);
+		return true;
 	}
 
 	private recordRun(runAt: number, status: RunSummary["status"], diff: Diff | null, error: string | null): void {
