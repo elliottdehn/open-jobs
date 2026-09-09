@@ -259,6 +259,39 @@ Migrations: `v1` created the scaffold's `MyDurableObject`; `v2` deleted it and c
 `v3` added `RateLimit`, `v4` `Budget`.
 Adding a DO class = new migration tag. Deploying mid-sweep is safe: Registry/Board state is in storage.
 
+### Self-host the search page
+
+`../site/index.html` is one self-contained file with no build step. It decides where to talk to at load time:
+served over HTTP it uses its own origin for both the API and the data; opened from disk it uses production.
+Two query parameters override that, and they are the whole self-hosting story:
+
+- `?api=<origin>`: where `POST /jd` and `POST /embed` go. Those are the page's only API calls; freshness is
+  computed in the browser from each job's first-seen date in the group file and `age-model.json`.
+- `?data=<origin>`: where `/data/*` comes from: `manifest.json`, `centroids.bin`, `groups/<id>.json`,
+  `age-model.json`. Defaults to the API origin.
+
+Copying the file onto another host **without** `?api=` breaks it: every request goes to that host and 404s.
+Three ways to host it, from least to most independent:
+
+1. **Front door only.** Serve the file and link to it as `/?api=https://backend.dehnbostele.workers.dev`
+   (or edit the `API` constant near the top of the script). Search, freshness, and data all still come from
+   this Worker and its bucket. Nothing to run; reads are free on this side.
+2. **Own data, shared brain.** Mirror the bucket (`tools/jobs.py export` nightly, or replay `diffs/` or the
+   [change feed](JOB-CHANGES.md)), serve your copy of `manifest.json`, `centroids.bin`, `groups/`, and
+   `age-model.json` under some `/data/` with CORS and HTTP Range enabled (the tree walk is byte-range reads
+   into `centroids.bin`), and load the page with `?data=<your origin>&api=https://backend.dehnbostele.workers.dev`.
+   The data files are rewritten nightly under the same names, so the mirror must refresh `manifest.json`,
+   `centroids.bin`, and `groups/` together, from the same build (`manifest.built_at` names it).
+3. **Fully independent.** Also run the two endpoints that call OpenAI. `/embed` turns the typed JD into a
+   query vector and `/jd` expands a short description into an ideal JD; both spend on the key of whoever
+   hosts them, rate-limited and metered per visitor IP (see the API table). A hosted board with real
+   traffic is many IPs, each with its own allowance, so a third party's board should point `?api=` at
+   their own deployment of this Worker (`npx wrangler deploy` with their `OPENAI_KEY`; the fleet bindings
+   can stay empty for that use) or at a small proxy of their own that holds their key.
+
+Cost exposure, in one line: `/data/*` costs the origin nothing per read (R2 has no egress fee); only `/jd`
+and `/embed` spend money, on whoever's key the `api` origin holds.
+
 ### Bootstrap / re-arm the fleet
 ```sh
 curl -X POST https://backend.dehnbostele.workers.dev/sync
