@@ -119,7 +119,9 @@ def timestamp(value):
     if value is None:
         return None
     if not isinstance(value, datetime):
-        raise ValueError('expected parquet timestamp')
+        # Two postings in the 2026-09-08 export carry board-supplied dates outside the datetime range (year 202,
+        # and 2 BC, which DuckDB returns as a string). A date that cannot be represented is no date.
+        return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)  # normalized by parquet_rows
     return value.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
