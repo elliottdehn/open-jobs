@@ -109,9 +109,12 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
 - **Secrets:** `ADMIN_TOKEN` (Worker admin endpoints for `/export` and the vanished-board check),
   R2 S3 credentials scoped to `jobscream-data`, `OPENAI_KEY` only for `build-location-table.py`
   (it embeds new location strings; pennies).
-- **Observability:** each stage prints the same summary lines it does today; the Workflow keeps
-  them, and a final step posts the run summary (counts, diff line, ledger line) to the ideas Slack
-  webhook or a new one, so a failed night is noticed without reading logs.
+- **Observability, a requirement not a nicety.** The point of the container is that the project
+  runs for a week with nobody watching. So: a final step posts one line per run to Slack (date, jobs
+  in the manifest, diff added/removed/changed, ledger size, feed generation, and which stages
+  passed), and a second scheduled check posts the next morning if no line arrived. Anyone can read
+  either in ten seconds. Each stage keeps printing the summary lines it does today; the Workflow
+  keeps them for when the line says something failed.
 
 ## Status (2026-09-08)
 
@@ -153,8 +156,9 @@ Each step is useful on its own and lands on the laptop first, so nothing is a bi
 3. **Read snapshots and exports from R2 in place** — DONE 2026-09-08 as `--source r2` (see Status).
    With it the run needs ~15 GB of local disk (memmap + staging) and ~10 GB of memory.
 4. **Split `consolidate.sh` into stage commands** — DONE 2026-09-08 (`scripts/stage.py`; see Status).
-5. **Container image + Workflow + cron.** Run it in parallel with the laptop for a week, diffing
-   the two manifests, then switch.
+5. **Container image + Workflow + cron + the Slack line.** Run it in parallel with the laptop for
+   a week, diffing the two manifests, then switch. The Slack summary and the missed-run check ship
+   with it, not after.
 6. **Ingest** for the local-only ATSes: a separate small job outside Cloudflare, or drop them.
 
 Until step 5, a `launchd` job on the laptop at a fixed hour makes the current script hands-off:
