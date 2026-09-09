@@ -471,6 +471,10 @@ enrichment queue) and is exported from the Worker like any other board. Such boa
 `meta.localOnly` so their daily alarm never tries to fetch — it only drains backlogs. `pull-all.sh`
 does the ingest before exporting. Keep `LOCAL_ONLY` in that script in sync with `localOnlyAts`.
 
+`last_seen_at` of an open job is derived at read time as max(stored value, the board's last successful fetch):
+a daily fetch does not rewrite unchanged rows (that was ~40M DO row writes a day, the largest Cloudflare
+line item in September 2026); only added, changed, removed, and re-listed rows are written.
+
 `jobs/<ats>.parquet`: one row per job (`ats, slug, id, title, location, url, departments[], published_at,
 updated_at, content, raw_json, detail_raw_json, detail_status, content_hash, first/last_seen_at, changed_at,
 removed_at, is_open, enrich_status, enriched_at, enrichment_json, embed_status, embed_model, embedding FLOAT[]`;

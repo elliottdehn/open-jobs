@@ -222,7 +222,12 @@ function nextSlotAfter(now: number, slotMs: number): number {
 	return today > now ? today : today + DAY;
 }
 
-function rowToJob(r: JobRow, withEmbedding = false): StoredJob {
+/**
+ * `seenFloor` = the board's last successful fetch (meta.lastOkAt). An open job that survived that fetch was seen
+ * then, but its row is not rewritten to say so (3M unchanged rows a day was the dominant DO cost), so the stored
+ * `last_seen_at` only moves when the row changes; the true value for an open job is max(stored, floor).
+ */
+function rowToJob(r: JobRow, withEmbedding = false, seenFloor = 0): StoredJob {
 	const job = JSON.parse(r.data) as Job;
 	// Detail data (fetched once per job) overrides the listing where present.
 	const detail = r.detail === null ? null : (JSON.parse(r.detail) as JobDetail);
@@ -246,7 +251,7 @@ function rowToJob(r: JobRow, withEmbedding = false): StoredJob {
 		detailRaw: detail?.raw ?? null,
 		contentHash: r.content_hash,
 		firstSeenAt: r.first_seen_at,
-		lastSeenAt: r.last_seen_at,
+		lastSeenAt: r.removed_at == null ? Math.max(r.last_seen_at, seenFloor) : r.last_seen_at,
 		changedAt: r.changed_at,
 		removedAt: r.removed_at,
 		enrichStatus: r.enrich_status as EnrichStatus,
@@ -578,10 +583,11 @@ export class Board extends DurableObject<Env> {
 						job.id,
 					);
 					diff.changed.push(job);
-				} else {
+				} else if (prev.removed) {
 					sql.exec(`UPDATE jobs SET last_seen_at = ?, removed_at = NULL WHERE id = ?`, now, job.id);
-					if (prev.removed) diff.added.push(job);
-					else diff.unchanged++;
+					diff.added.push(job); // re-listed after removal
+				} else {
+					diff.unchanged++; // no write: an open row's last-seen is the board's lastOkAt (see rowToJob)
 				}
 			}
 		}
@@ -980,6 +986,7 @@ export class Board extends DurableObject<Env> {
 	 * @param opts.slim    drop `raw` and `content` from each job (much smaller payloads)
 	 */
 	async getJobs(opts: JobQuery = {}): Promise<StoredJob[]> {
+		const floor = (await this.meta())?.lastOkAt ?? 0;
 		const where: string[] = [];
 		const params: SqlStorageValue[] = [];
 		if (opts.status === "open") where.push(`removed_at IS NULL`);
@@ -989,7 +996,8 @@ export class Board extends DurableObject<Env> {
 			params.push(opts.enrich);
 		}
 		if (opts.since !== undefined) {
-			where.push(`(last_seen_at >= ? OR changed_at >= ? OR removed_at >= ?)`);
+			// open rows are not rewritten per fetch: if the board fetched OK since `since`, every open job was seen then
+			where.push(floor >= opts.since ? `(removed_at IS NULL OR last_seen_at >= ? OR changed_at >= ? OR removed_at >= ?)` : `(last_seen_at >= ? OR changed_at >= ? OR removed_at >= ?)`);
 			params.push(opts.since, opts.since, opts.since);
 		}
 		if (opts.ids?.length) {
@@ -1001,7 +1009,7 @@ export class Board extends DurableObject<Env> {
 			sql += ` LIMIT ? OFFSET ?`;
 			params.push(opts.jobLimit, opts.jobOffset ?? 0);
 		}
-		const jobs = this.ctx.storage.sql.exec<JobRow>(sql, ...params).toArray().map((r) => rowToJob(r, opts.embed));
+		const jobs = this.ctx.storage.sql.exec<JobRow>(sql, ...params).toArray().map((r) => rowToJob(r, opts.embed, floor));
 		if (opts.slim) for (const j of jobs) { j.raw = undefined; j.content = null; }
 		if (!opts.detailRaw) for (const j of jobs) j.detailRaw = null;
 		return jobs;
@@ -1019,7 +1027,7 @@ export class Board extends DurableObject<Env> {
 			r = this.ctx.storage.sql.exec<JobRow>(`SELECT * FROM jobs WHERE instr(json_extract(data, '$.url'), ?1) > 0 LIMIT 5`, tail).toArray().find((x) => clean((JSON.parse(x.data) as Job).url) === want) ?? null;
 		}
 		if (!r) return null;
-		const j = rowToJob(r, true); j.raw = undefined; j.content = null; j.detailRaw = null; return j;
+		const j = rowToJob(r, true, (await this.meta())?.lastOkAt ?? 0); j.raw = undefined; j.content = null; j.detailRaw = null; return j;
 	}
 
 	/** Drop every job row and reset counters; the next fetch repopulates from scratch. Recovery for
@@ -1058,7 +1066,7 @@ export class Board extends DurableObject<Env> {
 				const cursor = this.ctx.storage.sql.exec(`SELECT * FROM jobs WHERE removed_at IS NULL`);
 				function* rows(): Iterable<StoredJob & { embeddingBuf?: ArrayBuffer | null }> {
 					for (const r of cursor) {
-						const j = rowToJob(r as unknown as JobRow) as StoredJob & { embeddingBuf?: ArrayBuffer | null };
+						const j = rowToJob(r as unknown as JobRow, false, meta.lastOkAt ?? 0) as StoredJob & { embeddingBuf?: ArrayBuffer | null };
 						j.embeddingBuf = (r as unknown as JobRow).embedding ?? null;
 						yield j;
 					}
@@ -1075,11 +1083,12 @@ export class Board extends DurableObject<Env> {
 	/** Force a snapshot write now (admin/backfill). */
 	async jobStatuses(ids: string[]): Promise<Record<string, { status: "open" | "removed"; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }>> {
 		const out: Record<string, { status: "open" | "removed"; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }> = {};
+		const floor = (await this.meta())?.lastOkAt ?? 0;
 		for (let i = 0; i < ids.length; i += 100) {
 			const batch = ids.slice(i, i + 100);
 			const rows = this.ctx.storage.sql.exec<{ id: string; first_seen_at: number | null; removed_at: number | null; last_seen_at: number | null; published_at: string | null }>(
 				`SELECT id, first_seen_at, removed_at, last_seen_at, json_extract(data, '$.publishedAt') AS published_at FROM jobs WHERE id IN (${batch.map(() => "?").join(",")})`, ...batch);
-			for (const r of rows) out[r.id] = { status: r.removed_at == null ? "open" : "removed", first_seen_at: r.first_seen_at, removed_at: r.removed_at, last_seen_at: r.last_seen_at, published_at: r.published_at };
+			for (const r of rows) out[r.id] = { status: r.removed_at == null ? "open" : "removed", first_seen_at: r.first_seen_at, removed_at: r.removed_at, last_seen_at: r.removed_at == null ? Math.max(r.last_seen_at ?? 0, floor) : r.last_seen_at, published_at: r.published_at };
 		}
 		return out;
 	}
