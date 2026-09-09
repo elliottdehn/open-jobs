@@ -132,6 +132,9 @@ cd open-jobs
 uv run tools/jobs.py export
 ```
 
+Needs [uv](https://docs.astral.sh/uv/), one line to install: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+(or `brew install uv`; on Windows `winget install astral-sh.uv`).
+
 Three commands and the whole dataset is on your disk: every open posting with its full description,
 a 1536-dim embedding, and company fields, as one parquet file per applicant tracking system (~13 GB,
 resumable). Then `uv run tools/jobs.py sql "SELECT title, company, location FROM jobs LIMIT 20"`

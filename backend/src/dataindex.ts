@@ -90,6 +90,7 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 <pre class="hero"><span class="ln">1</span>git clone ${REPO}
 <span class="ln">2</span>cd open-jobs
 <span class="ln">3</span>uv run tools/jobs.py export</pre>
+<p class="soft">Needs <a href="https://docs.astral.sh/uv/">uv</a>, one line to install: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code> (or <code>brew install uv</code>; on Windows <code>winget install astral-sh.uv</code>).</p>
 <div class="export-note"><span><b>${gb(jobsBytes) || "Not published"}</b> · ${num(atsList.length)} parquet files</span><span>Resumes interrupted downloads</span></div>
 <p>The full export puts every open posting on your disk, with description text, available vectors, and
 company fields. One jobs file per applicant tracking system, plus <code>boards/</code> for the company records.</p>
