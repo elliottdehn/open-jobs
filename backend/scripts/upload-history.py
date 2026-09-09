@@ -21,6 +21,8 @@ from r2 import R2
 ap = argparse.ArgumentParser()
 ap.add_argument("--diffs", default="export/diffs"); ap.add_argument("--ledger", default="export/ledger")
 ap.add_argument("--marks", default="export/.uploaded-history"); ap.add_argument("--force", action="store_true", help="re-upload everything")
+ap.add_argument("--remote-index", action="store_true", help="build the indexes from what is in the bucket (plus what was just uploaded), not from local dirs: the container keeps no history locally")
+ap.add_argument("--manifest", help="manifest.json whose built_at is the index's snapshot_built_at (default export/latest/web/manifest.json)")
 a = ap.parse_args()
 os.makedirs(a.marks, exist_ok=True)
 r2 = R2()
@@ -37,7 +39,9 @@ def sync(key, path, ctype):
     if ok: open(mark_of(key), "w").close(); stats["uploaded"] += 1; print(f"  {key} ({os.path.getsize(path) / 1e6:.0f} MB, {time.time() - t0:.0f}s)", flush=True)
     else: stats["failed"] += 1
     return ok
-def uploaded(key): return os.path.exists(mark_of(key))
+REMOTE = {k: s for k, s, _ in r2.list("diffs/")} if a.remote_index else {}
+REMOTE.update({k: s for k, s, _ in r2.list("ledger/")} if a.remote_index else {})
+def uploaded(key): return os.path.exists(mark_of(key)) or key in REMOTE
 def sha256_of(path):
     """Cached per file under the marks dir; the sidecar's hash wins when present."""
     c = mark_of("sha256__" + path.replace("/", "__"))
@@ -57,6 +61,23 @@ def final(d):
     try: return json.load(open(d + ".json")).get("carry_done") is True
     except Exception: return False
 diff_dirs = sorted(d for d in glob.glob(os.path.join(a.diffs, "*__*")) if os.path.isdir(d))
+if a.remote_index:
+    # sidecars of diffs already in the bucket, mirrored locally (empty placeholder parts; sizes and hashes come from
+    # the sidecar) so the index code below sees them exactly like local diffs
+    mirror = os.path.join(a.marks, "remote-diffs"); os.makedirs(mirror, exist_ok=True)
+    for k in sorted(k for k in REMOTE if k.startswith("diffs/") and k.endswith(".json") and k != "diffs/index.json"):
+        name = os.path.basename(k)[:-5]
+        if any(os.path.basename(d) == name for d in diff_dirs): continue
+        d = os.path.join(mirror, name); os.makedirs(os.path.join(d, "lite"), exist_ok=True)
+        if not os.path.exists(d + ".json"): r2.get_file(k, d + ".json")
+        side = json.load(open(d + ".json"))
+        for part in side.get("parts", []): open(os.path.join(d, part["file"]), "a").close()
+        for part in (side.get("lite") or {}).get("parts", []): open(os.path.join(d, "lite", part["file"]), "a").close()
+        diff_dirs.append(d)
+    diff_dirs.sort(key=os.path.basename)
+    lmirror = os.path.join(a.marks, "remote-ledger")
+    for k in sorted(k for k in REMOTE if k.startswith("ledger/") and k.endswith(".parquet")):
+        d = os.path.join(lmirror, k.split("/")[1]); os.makedirs(d, exist_ok=True); open(os.path.join(d, os.path.basename(k)), "a").close()
 for d in diff_dirs:
     name = os.path.basename(d)
     if not final(d): print(f"  skip diffs/{name}: not final (no sidecar, or carry_done != true); re-run build-diff.py", flush=True); continue
@@ -64,6 +85,9 @@ for d in diff_dirs:
     for part in sorted(glob.glob(os.path.join(d, "lite", "*.parquet"))): sync(f"diffs/{name}/lite/{os.path.basename(part)}", part, "application/octet-stream")
     sync(f"diffs/{name}.json", d + ".json", "application/json")
 ledger_dirs = sorted(d for d in glob.glob(os.path.join(a.ledger, "20*")) if os.path.isdir(d))
+if a.remote_index:
+    have = {os.path.basename(d) for d in ledger_dirs}
+    ledger_dirs += sorted(d for d in glob.glob(os.path.join(a.marks, "remote-ledger", "20*")) if os.path.basename(d) not in have); ledger_dirs.sort(key=os.path.basename)
 for d in ledger_dirs:
     name = os.path.basename(d)
     for part in sorted(glob.glob(os.path.join(d, "*.parquet"))): sync(f"ledger/{name}/{os.path.basename(part)}", part, "application/octet-stream")
@@ -82,16 +106,25 @@ def entry(prefix, d, extra):
     if not parts or not all(uploaded(f"{prefix}/{name}/{os.path.basename(p)}") for p in parts): return None
     if prefix == "diffs" and not (final(d) and uploaded(f"diffs/{name}.json")): return None
     fh = side_hashes(d) if prefix == "diffs" else {}
-    e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p), "sha256": fh.get(os.path.basename(p)) or sha256_of(p)} for p in parts], "bytes": sum(os.path.getsize(p) for p in parts), **extra(name, d)}
+    def size_of(p, sub=""):
+        if os.path.getsize(p): return os.path.getsize(p)
+        if prefix == "ledger": return REMOTE.get(f"ledger/{name}/{os.path.basename(p)}", 0)
+        try:
+            j = json.load(open(d + ".json")); lst = (j.get("lite") or {}).get("parts") if sub else j.get("parts")
+            return next(x["bytes"] for x in lst if x["file"] == os.path.basename(p))
+        except Exception: return REMOTE.get(f"{prefix}/{name}/{sub}{os.path.basename(p)}", 0)
+    e = {"dir": f"{prefix}/{name}/", "parts": [{"file": os.path.basename(p), "bytes": size_of(p), "sha256": fh.get(os.path.basename(p)) or (sha256_of(p) if os.path.getsize(p) else None)} for p in parts], "bytes": sum(size_of(p) for p in parts), **extra(name, d)}
     lparts = sorted(glob.glob(os.path.join(d, "lite", "*.parquet")))
     if prefix == "diffs" and lparts and all(uploaded(f"diffs/{name}/lite/{os.path.basename(p)}") for p in lparts):
         lh = side_hashes(d, "lite")
-        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": os.path.getsize(p), "sha256": lh.get(os.path.basename(p)) or sha256_of(p)} for p in lparts], "bytes": sum(os.path.getsize(p) for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
+        e["lite"] = {"dir": f"diffs/{name}/lite/", "parts": [{"file": os.path.basename(p), "bytes": size_of(p, "lite/"), "sha256": lh.get(os.path.basename(p)) or (sha256_of(p) if os.path.getsize(p) else None)} for p in lparts], "bytes": sum(size_of(p, "lite/") for p in lparts), "drops": ["raw_json", "detail_raw_json", "enrichment_json", "embedding"], "content_on": ["added", "changed"]}
     return e
 def snapshot_built_at():
-    try: return json.load(open("export/latest/web/manifest.json")).get("built_at")
+    try: return json.load(open(a.manifest or "export/latest/web/manifest.json")).get("built_at")
     except Exception: return None
 latest_date = os.path.basename(os.path.realpath("export/latest")) if os.path.exists("export/latest") else None
+if a.remote_index and not latest_date:
+    heads = sorted({os.path.basename(d).split("__")[1] for d in diff_dirs}); latest_date = heads[-1] if heads else None
 diffs_index = {"schema_version": 2, "built_at": int(time.time() * 1000), "base": "/data/", "retention": RETENTION,
                "head": latest_date, "snapshot_built_at": snapshot_built_at(),
                "bootstrap": "groups/ and manifest.json are the export named by `head` when manifest.built_at == snapshot_built_at. Bootstrap from them, record head, then apply every diff whose `from` == your head, in order, verifying each part's sha256 and each diff's parent. History is never expired; a broken chain means re-bootstrap.",

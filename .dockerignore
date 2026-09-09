@@ -1,0 +1,11 @@
+*
+!backend/scripts/
+!backend/src/boards.json
+!backend/package.json
+!tools/*.py
+!tools/*.json
+backend/scripts/__pycache__/
+backend/scripts/experiments/
+backend/scripts/*.orig
+backend/scripts/.build-*
+tools/__pycache__/

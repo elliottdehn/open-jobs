@@ -30,7 +30,7 @@ import argparse, glob, json, os, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); BACKEND = os.path.normpath(os.path.join(HERE, ".."))
 ap = argparse.ArgumentParser()
-ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention"])
+ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention", "report"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
 ap.add_argument("--publish", action="store_true", help="write parquet to R2 as produced (always on for --source r2); group files always stream up during the tree stage unless --no-publish")
@@ -39,23 +39,35 @@ ap.add_argument("--worker", default=os.environ.get("WORKER_URL", "https://backen
 ap.add_argument("--work", help="local scratch dir (default <backend>/export/<date> for local, <backend>/work-<date> for r2)")
 ap.add_argument("--prev", help="previous export for the diff (default: export/latest for local, the newest exports/<date> before --date for r2)")
 ap.add_argument("--skip-models", action="store_true"); ap.add_argument("--keep-full", action="store_true")
+ap.add_argument("--only", help="parquet: restrict to these ATSes (comma list; tests)")
+ap.add_argument("--dry-run", action="store_true", help="report: print the line, post nothing")
 a = ap.parse_args()
 os.chdir(BACKEND)
 r2_mode = a.source == "r2"; publish = a.publish or r2_mode
 BUCKET = os.environ.get("R2_BUCKET", "jobscream-data")
 export_local = os.path.join("export", a.date)
-work = a.work or (os.path.join("work-" + a.date) if r2_mode else export_local)
+WORK_ROOT = os.environ.get("WORK_ROOT", ".")                    # the container mounts its scratch volume here
+work = a.work or (os.path.join(WORK_ROOT, "work-" + a.date) if r2_mode else export_local)
 export_root = f"s3://{BUCKET}/exports/{a.date}" if r2_mode else export_local   # what downstream stages read
+os.makedirs(os.path.realpath("export"), exist_ok=True)   # in the container, export/ is a symlink into the scratch volume
 os.makedirs(work, exist_ok=True); os.makedirs(export_local, exist_ok=True)
 token = os.environ.get("ADMIN_TOKEN") or (open("admin_token.txt").read().strip() if os.path.exists("admin_token.txt") else "")
 if token: os.environ["ADMIN_TOKEN"] = token
 env = dict(os.environ, EXPORT_DIR=export_root, WORK_DIR=work, WORKER_URL=a.worker)
 t0 = time.time()
+RUNLOG = os.path.join(work, "run.jsonl")   # one line per stage outcome; the report stage reads it
+def record(ok, msg):
+    with open(RUNLOG, "a") as f: f.write(json.dumps({"stage": a.stage, "date": a.date, "ok": ok, "seconds": round(time.time() - t0), "msg": msg, "at": time.strftime("%H:%M:%S")}) + "\n")
 def run(cmd, **kw):
     print(f"$ {' '.join(cmd)}", flush=True)
     r = subprocess.run(cmd, env={**env, **kw.pop("env", {})}, **kw)
-    if r.returncode != 0: sys.exit(f"stage {a.stage}: `{cmd[1] if len(cmd) > 1 else cmd[0]}` exited {r.returncode}")
-def stamp(msg): print(f"=== {a.stage} {a.date}: {msg} ({time.time() - t0:.0f}s)", flush=True)
+    if r.returncode != 0:
+        record(False, f"`{cmd[1] if len(cmd) > 1 else cmd[0]}` exited {r.returncode}")
+        sys.exit(f"stage {a.stage}: `{cmd[1] if len(cmd) > 1 else cmd[0]}` exited {r.returncode}")
+def stamp(msg):
+    print(f"=== {a.stage} {a.date}: {msg} ({time.time() - t0:.0f}s)", flush=True); record(True, msg)
+def r2c():
+    sys.path.insert(0, HERE); from r2 import R2; return R2()
 
 if a.stage == "ingest":
     run(["node", "--experimental-strip-types", "scripts/fetch-local.mjs", f"--ingest={a.worker}"])
@@ -72,13 +84,12 @@ elif a.stage == "parquet":
     missing = sorted(x for x in boards if not glob.glob(os.path.join(export_local, "snapshots", x, "*.parquet"))) if not r2_mode else ["jobscore", "governmentjobs"]
     if missing:
         run(["python3", "-u", "scripts/pull-pool.py", "--base", a.worker, "--out", export_local, "--ats", " ".join(missing), "--", "--status=open", "--embed", "--resume"], env={"NODE_OPTIONS": "--max-old-space-size=16384"})
-    cmd = ["uv", "run", "scripts/build-parquet.py"] + (["--publish"] if publish else [])
+    cmd = ["uv", "run", "scripts/build-parquet.py"] + (["--publish"] if publish else []) + ([f"--ats={a.only}"] if a.only else [])
     run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
 elif a.stage == "diff":
     if a.prev: prev = a.prev
     elif r2_mode:
-        sys.path.insert(0, HERE); from r2 import R2
-        dates = sorted({k.split("/")[1] for k, _, _ in R2().list("exports/") if k.count("/") >= 2})
+        dates = sorted({k.split("/")[1] for k, _, _ in r2c().list("exports/") if k.count("/") >= 2})
         older = [d for d in dates if d < a.date]; prev = f"s3://{BUCKET}/exports/{older[-1]}" if older else ""
     else:
         prev = os.path.realpath("export/latest") if os.path.exists("export/latest") else ""
@@ -99,34 +110,80 @@ elif a.stage == "finalize":
         if os.path.islink("export/latest") or os.path.exists("export/latest"): os.unlink("export/latest")
         os.symlink(a.date, "export/latest"); print(f"export/latest -> {a.date}", flush=True)
 elif a.stage == "history":
-    run(["uv", "run", "scripts/upload-history.py"])
+    # in r2 mode the indexes are rebuilt from the bucket (local state holds only today's parts) and the snapshot
+    # build time comes from this run's manifest
+    run(["uv", "run", "scripts/upload-history.py"] + (["--remote-index", "--manifest", os.path.join(work, "web", "manifest.json")] if r2_mode else []))
 elif a.stage == "feed":
     # JOB-CHANGES.md, automated: first run bootstraps from today's completed export against the index the history
     # stage just published; later runs project today's diff onto the last published generation. Local-source
     # only: the bootstrap reads export/<date>/jobs and web/manifest.json.
-    if r2_mode: stamp("feed needs the local export layout (bootstrap reads jobs/ + web/manifest.json); skipped under --source r2"); sys.exit(0)
+    # The receipt (last published generation) is the only state between runs; in r2 mode it lives in the bucket
+    # under state/feed/published.json and is fetched before and stored after. The bootstrap needs a local export
+    # (jobs/ + web/manifest.json), so in r2 mode a missing receipt means "bootstrap by hand once, locally".
     import urllib.request
-    feed = "export/feed"; os.makedirs(feed, exist_ok=True)
+    feed = os.path.join(WORK_ROOT, "export", "feed") if r2_mode else "export/feed"; os.makedirs(feed, exist_ok=True)
+    receipt = os.path.join(feed, "published.json")
+    if r2_mode:
+        r2 = r2c()
+        if r2.head("state/feed/published.json"): r2.get_file("state/feed/published.json", receipt)
+        elif not os.path.exists(receipt): stamp("no feed receipt in state/feed/published.json; bootstrap once from a local export (JOB-CHANGES.md), then upload the receipt"); sys.exit(0)
     idx = os.path.join(feed, "diffs-index.json")
     # a User-Agent is required: the Worker's edge returns 403 to the default urllib agent
     with urllib.request.urlopen(urllib.request.Request(f"{a.worker}/data/diffs/index.json?check={int(time.time())}", headers={"cache-control": "no-cache", "user-agent": "open-jobs-tools/0.1"}), timeout=60) as r: open(idx, "wb").write(r.read())
-    receipt = os.path.join(feed, "published.json")
     if os.path.exists(receipt):
         side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
         if not side: stamp("no diff ending today; nothing to project"); sys.exit(0)
         run(["uv", "run", "scripts/build-job-changes.py", "--out", feed, "--diff", side[-1], "--previous", receipt, "--publish-base", a.worker])
     else:
         run(["uv", "run", "scripts/build-job-changes.py", "--out", feed, "--snapshot", export_local, "--index", idx, "--publish-base", a.worker])
+    if r2_mode: r2.put_file("state/feed/published.json", receipt, "application/json")
 elif a.stage == "retention":
-    if r2_mode or a.keep_full: stamp("no local exports to prune" if r2_mode else "kept (--keep-full)"); sys.exit(0)
+    if a.keep_full: stamp("kept (--keep-full)"); sys.exit(0)
     side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
     ok = bool(side) and json.load(open(side[-1])).get("ok_to_prune") and json.load(open(side[-1])).get("carry_done")
     if not ok: stamp("today's diff is missing or failed its sanity check; older full exports kept"); sys.exit(0)
     import shutil
+    if r2_mode:
+        # exports/<date>/ in the bucket: keep today and the previous one (tomorrow's diff needs it), drop the rest
+        r2 = r2c(); dates = sorted({k.split("/")[1] for k, _, _ in r2.list("exports/") if k.count("/") >= 2})
+        for d in [d for d in dates if d < a.date][:-1]:
+            keys = [k for k, _, _ in r2.list(f"exports/{d}/")]
+            print(f"  delete exports/{d}/ ({len(keys)} objects; a newer export and its diff exist)", flush=True)
+            for k in keys: r2.delete(k)
+        for d in glob.glob(os.path.join(WORK_ROOT, "work-20*")):
+            if os.path.basename(d)[5:] < a.date: shutil.rmtree(d, ignore_errors=True); print(f"  removed scratch {d}", flush=True)
+        stamp("done"); sys.exit(0)
     for d in sorted(glob.glob("export/20*-*-*")):
         b = os.path.basename(d)
         if b >= a.date or not os.path.isdir(d): continue
         if not glob.glob(f"export/diffs/{b}__*/"): print(f"  keep {d}: no diff was ever taken from it", flush=True); continue
         size = subprocess.run(["du", "-sh", d], capture_output=True, text=True).stdout.split()[0]
         print(f"  delete {d} ({size}; its successor diff exists)", flush=True); shutil.rmtree(d)
+elif a.stage == "report":
+    # One line a person can read in ten seconds, posted to Slack: what ran, what passed, the numbers. SLACK_RUN_WEBHOOK
+    # (an incoming webhook) if set; otherwise the Worker's /ideas relay, which reaches the shared channel.
+    import urllib.request
+    rows = [json.loads(l) for l in open(RUNLOG)] if os.path.exists(RUNLOG) else []
+    seen = {}
+    for r in rows: seen[r["stage"]] = r          # last outcome per stage
+    failed = [s for s, r in seen.items() if not r["ok"]]
+    mf = os.path.join(work, "web", "manifest.json"); jobs = json.load(open(mf))["jobs"] if os.path.exists(mf) else None
+    side = sorted(glob.glob(f"export/diffs/*__{a.date}.json")); d = json.load(open(side[-1])) if side else {}
+    fr = os.path.join(WORK_ROOT if r2_mode else ".", "export", "feed", "published.json"); gen = json.load(open(fr))["generation"][:8] if os.path.exists(fr) else None
+    total = sum(r["seconds"] for r in seen.values())
+    line = (f"{'✅' if not failed else '❌'} consolidation {a.date} ({'container' if r2_mode else 'laptop'}): "
+            + (f"{jobs:,} jobs in the index; " if jobs else "no manifest; ")
+            + (f"diff +{d['counts']['added']:,} -{d['counts']['removed']:,} ~{d['counts']['changed']:,}; " if d else "no diff; ")
+            + (f"feed {gen}; " if gen else "feed not advanced; ")
+            + f"{len(seen)} stages in {total // 60} min"
+            + (f"; FAILED: {', '.join(failed)}" if failed else ""))
+    print(line, flush=True)
+    if a.dry_run: sys.exit(1 if failed else 0)
+    hook = os.environ.get("SLACK_RUN_WEBHOOK")
+    try:
+        if hook: urllib.request.urlopen(urllib.request.Request(hook, data=json.dumps({"text": line}).encode(), headers={"content-type": "application/json"}), timeout=30)
+        else: urllib.request.urlopen(urllib.request.Request(f"{a.worker}/ideas", data=json.dumps({"file": "backend/scripts/stage.py", "idea": line, "tags": ["run"]}).encode(), headers={"content-type": "application/json", "user-agent": "open-jobs-tools/0.1"}), timeout=30)
+        print("posted", flush=True)
+    except Exception as e: print(f"WARNING: could not post the run line: {e}", flush=True)
+    sys.exit(1 if failed else 0)
 stamp("done")

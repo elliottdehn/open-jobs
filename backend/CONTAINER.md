@@ -134,6 +134,27 @@ Not yet: ingest still runs from the laptop (step 6), and no image, Workflow, or 
 Reading 62k snapshots from a laptop through DuckDB's S3 client is ~46 files/s (about 22 min for the
 fleet), comparable to the current pull; inside Cloudflare it should be well under that.
 
+## Running the container locally (2026-09-09)
+
+```sh
+scripts/container-run.sh build                 # image for this machine (arm64); build-amd64 for Cloudflare
+scripts/container-run.sh all                   # the nightly run: pull .. report, one container per stage
+scripts/container-run.sh parquet --only jazzhr # one stage
+scripts/container-run.sh shell                 # look around inside
+```
+Secrets come from `backend/.dev.vars` (R2_*, OPENAI_KEY) and `admin_token.txt`; nothing is in the image.
+Scratch is the named volume `open-jobs-work`, mounted at `/work`: `work-<date>/` (memmap, staging, web/),
+`export/diffs`, `export/ledger`, `export/feed`. State between runs lives in the bucket, not on disk:
+`exports/<date>/` (the parquet the next diff needs), `state/feed/published.json` (the feed cursor),
+`state/location-embeddings.npz` (the estimator's embedding cache). Docker Desktop needs at least 14 GB of
+memory for the tree stage; `container-run.sh` warns if it has less.
+
+What differs from the laptop run: no ingest (a laptop command), no local export dir (snapshots are read from
+the bucket), the history indexes are rebuilt from the bucket's own listing plus today's parts, retention
+prunes `exports/<date>/` prefixes older than the previous one, and a final `report` stage posts one line
+(date, jobs, diff counts, feed generation, stages passed) to `SLACK_RUN_WEBHOOK` or, without one, to the
+ideas relay. Each stage appends its outcome to `work-<date>/run.jsonl`; that is what the report reads.
+
 ## Order of work
 
 Each step is useful on its own and lands on the laptop first, so nothing is a big-bang move.

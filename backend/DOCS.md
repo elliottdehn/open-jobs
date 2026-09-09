@@ -272,11 +272,12 @@ It is a thin wrapper: the work is ten stages in `scripts/stage.py`, each one an 
 | finalize | `scripts/publish-web.py`: reconcile `groups/` in R2 by size, then models, centroids, manifest last; repoint `export/latest` | `web/` | R2 |
 | history | `scripts/upload-history.py`: diff and ledger parts + `index.json` | local | R2 |
 | feed | `scripts/build-job-changes.py` ([JOB-CHANGES.md](JOB-CHANGES.md)): the paged consumer feed. First run bootstraps from today's export against the index just published; after that, one generation per diff. Receipt in `export/feed/published.json` | local, R2 index | R2 `changes/` |
-| retention | delete older full exports that have a successor diff (local only) | | local |
+| retention | delete older full exports that have a successor diff; in r2 mode, `exports/<date>/` prefixes older than the previous one | | local or R2 |
+| report | one line per run (jobs, diff counts, feed generation, stages passed) to `SLACK_RUN_WEBHOOK`, else the ideas relay; reads `run.jsonl` | scratch | Slack |
 
 All uploads go through the S3 API (`scripts/r2.py`: boto3, multipart, retries; credentials `R2_*` in the
 environment or `.dev.vars`), so there is no 300 MiB per-object cap and no `wrangler` in the pipeline.
-`--source r2` is the container layout: snapshots and the previous export are read from the bucket in
+The container: `Dockerfile` + `scripts/container-run.sh` (see [CONTAINER.md](CONTAINER.md)). `--source r2` is the container layout: snapshots and the previous export are read from the bucket in
 place through DuckDB's S3 client, parquet is written to `exports/<date>/`, and only scratch
 (`work-<date>/`: vector memmap, staging, DuckDB spill) is local. Every script that reads an export takes
 `EXPORT_DIR` as a local dir or an `s3://bucket/exports/<date>` prefix, with `WORK_DIR` for local scratch.
