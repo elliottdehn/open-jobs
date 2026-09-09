@@ -8,6 +8,7 @@ import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
 import { EMBED_TAG, embedQueryText } from "./openai";
 import { JD_ESTIMATE_USD, JD_MODELS, expandJd, type JdModel } from "./jd";
+import { dataIndex } from "./dataindex";
 export { Registry } from "./registry";
 
 const EXPORT_CONCURRENCY = 20;
@@ -301,6 +302,9 @@ export default {
 			const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
 			return Response.json(await env.BUDGET.getByName(`ip:${ip}`).status(Number(env.ENRICH_HOUR_USD || 5), Number(env.ENRICH_DAY_USD || 50)), { headers: cors });
 		}
+
+		// GET /data/  -> HTML index of the public files (rendered from the same indexes a mirror reads)
+		if (parts[0] === "data" && parts.length === 1 && request.method === "GET") return dataIndex(env, cors);
 
 		// GET /data/<key>  -> object from the DATA R2 bucket (manifest, group files, parquet) with Range support
 		if (parts[0] === "data" && (parts.length >= 2) && (request.method === "GET" || request.method === "HEAD")) {
