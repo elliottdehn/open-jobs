@@ -11,9 +11,13 @@ Account id from `wrangler whoami` (CLOUDFLARE_ACCOUNT_ID overrides).
 """
 import argparse, datetime, json, os, re, subprocess, sys, urllib.request
 
-ap = argparse.ArgumentParser(); ap.add_argument("--days", type=int, default=31); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("--days", type=int, default=31); ap.add_argument("--hours", type=int, help="per-hour view of the last N hours instead of per-day (steady-state check)"); a = ap.parse_args()
+HERE = os.path.dirname(os.path.abspath(__file__))
 tok = os.environ.get("CLOUDFLARE_API_TOKEN")
+whoami = ""
 if not tok:
+    # wrangler refreshes its OAuth token on use; run it first so the token on disk is current
+    whoami = subprocess.run(["npx", "wrangler", "whoami"], capture_output=True, text=True, cwd=os.path.join(HERE, "..")).stdout
     for p in (os.path.expanduser("~/Library/Preferences/.wrangler/config/default.toml"), os.path.expanduser("~/.wrangler/config/default.toml"), os.path.expanduser("~/.config/.wrangler/config/default.toml")):
         if os.path.exists(p):
             m = re.search(r'oauth_token\s*=\s*"([^"]+)"', open(p).read())
@@ -21,7 +25,7 @@ if not tok:
 if not tok: sys.exit("no CLOUDFLARE_API_TOKEN and no wrangler login found")
 acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
 if not acc:
-    out = subprocess.run(["npx", "wrangler", "whoami"], capture_output=True, text=True, cwd=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")).stdout
+    out = whoami or subprocess.run(["npx", "wrangler", "whoami"], capture_output=True, text=True, cwd=os.path.join(HERE, "..")).stdout
     m = re.search(r"([0-9a-f]{32})", out); acc = m.group(1) if m else sys.exit("account id not found; set CLOUDFLARE_ACCOUNT_ID")
 
 def gql(q):
@@ -29,6 +33,21 @@ def gql(q):
     d = json.load(urllib.request.urlopen(r, timeout=120))
     if d.get("errors"): sys.exit(json.dumps(d["errors"])[:800])
     return d["data"]["viewer"]["accounts"][0]
+if a.hours:
+    t0 = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=a.hours)).replace(minute=0, second=0, microsecond=0)
+    f = f'datetime_geq:"{t0.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+    h = gql(f'''{{ viewer {{ accounts(filter:{{accountTag:"{acc}"}}) {{
+      per: durableObjectsPeriodicGroups(limit:200, filter:{{{f}}}, orderBy:[datetimeHour_ASC]) {{ dimensions {{ datetimeHour }} sum {{ duration rowsRead rowsWritten }} }}
+      inv: durableObjectsInvocationsAdaptiveGroups(limit:200, filter:{{{f}}}, orderBy:[datetimeHour_ASC]) {{ dimensions {{ datetimeHour }} sum {{ requests }} }}
+    }} }} }}''')
+    inv = {x["dimensions"]["datetimeHour"]: x["sum"]["requests"] for x in h["inv"]}
+    print(f"{'hour (UTC)':16}  {'GB-s':>8}  {'rowsW(M)':>8}  {'rowsR(M)':>8}  {'reqs(k)':>7}  {'$/hour':>6}  {'=> $/day':>8}")
+    for x in h["per"]:
+        s_ = x["sum"]; dt = x["dimensions"]["datetimeHour"]
+        cost = s_["duration"] * 12.5 / 1e6 + s_["rowsWritten"] / 1e6 + s_["rowsRead"] * 0.001 / 1e6 + inv.get(dt, 0) * 0.15 / 1e6
+        print(f"{dt[:13]:16}  {s_['duration']:>8.0f}  {s_['rowsWritten']/1e6:>8.2f}  {s_['rowsRead']/1e6:>8.1f}  {inv.get(dt,0)/1e3:>7.1f}  {cost:>6.2f}  {cost*24:>8.2f}")
+    print("the current hour is partial; analytics lag a few minutes. Storage (~$0.03/hour) is not in these rows.")
+    sys.exit(0)
 since = (datetime.date.today() - datetime.timedelta(days=a.days)).isoformat()
 d = gql(f'''{{ viewer {{ accounts(filter:{{accountTag:"{acc}"}}) {{
   per: durableObjectsPeriodicGroups(limit:400, filter:{{date_geq:"{since}"}}, orderBy:[date_ASC]) {{ dimensions {{ date }} sum {{ duration rowsRead rowsWritten storageReadUnits storageWriteUnits storageDeletes }} }}
