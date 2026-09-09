@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="372" height="48" viewBox="0 0 372 48" role="img" aria-label="Support: tell me what you are building">
+  <rect x="1" y="1" width="370" height="46" rx="23" fill="#177A45" stroke="#0F5A32" stroke-width="2"/>
+  <g transform="translate(22 24)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round">
+    <circle r="9"/>
+    <circle r="3.6"/>
+    <path d="M-6.4 -6.4 L-2.6 -2.6 M6.4 -6.4 L2.6 -2.6 M-6.4 6.4 L-2.6 2.6 M6.4 6.4 L2.6 2.6"/>
+  </g>
+  <text x="44" y="29.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#FFFFFF" letter-spacing="0.2">Support: tell me what you're building</text>
+  <text x="352" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" fill="#D3EFB4" text-anchor="middle">→</text>
+</svg>

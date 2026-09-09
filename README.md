@@ -26,6 +26,11 @@
   <a href="#take-the-data">Take the data</a>
 </p>
 
+<p align="center">
+  <a href="https://forms.gle/S1mZXwLZ1ZzrXbv37"><img alt="Support: tell me what you're building" src=".github/assets/support.svg" width="372"></a><br>
+  <sub>Building something on this? Say what. If you need it there every morning, say so, and I'll tell you honestly what I can commit to.</sub>
+</p>
+
 <br>
 
 ## Every listing wears its verdict
