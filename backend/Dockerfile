@@ -29,7 +29,7 @@ COPY tools/*.py tools/*.json /tools/
 # DuckDB's httpfs extension (read_parquet over S3) so a stage never needs the extension repo at run time.
 RUN for s in stage build-parquet build-diff build-ledger build-manifest publish-web upload-history \
              train-salary train-arrangement train-seniority train-age build-city-table build-location-table \
-             build-job-changes; do uv sync --script /app/scripts/$s.py || exit 1; done \
+             build-job-changes publish-hf; do uv sync --script /app/scripts/$s.py || exit 1; done \
  && uv run --with duckdb python -c "import duckdb; duckdb.connect().execute('INSTALL httpfs'); print('httpfs installed')"
 
 # scratch and state

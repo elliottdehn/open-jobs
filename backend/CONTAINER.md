@@ -108,7 +108,7 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
   stage is an argument. `standard-4` for tree and parquet, `standard-2` for the rest.
 - **Secrets:** `ADMIN_TOKEN` (Worker admin endpoints for `/export` and the vanished-board check),
   R2 S3 credentials scoped to `jobscream-data`, `OPENAI_KEY` only for `build-location-table.py`
-  (it embeds new location strings; pennies).
+  (it embeds new location strings; pennies), `HF_TOKEN` + `HF_REPO` for the Hugging Face mirror.
 - **Observability, a requirement not a nicety.** The point of the container is that the project
   runs for a week with nobody watching. So: a final step posts one line per run to Slack (date, jobs
   in the manifest, diff added/removed/changed, ledger size, feed generation, and which stages

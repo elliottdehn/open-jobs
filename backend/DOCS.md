@@ -306,6 +306,7 @@ It is a thin wrapper: the work is twelve stages in `scripts/stage.py`, each one 
 | finalize | `scripts/publish-web.py`: reconcile `groups/` in R2 by size, then models, centroids, manifest last; repoint `export/latest` | `web/` | R2 |
 | history | `scripts/upload-history.py`: diff and ledger parts + `index.json` | local | R2 |
 | feed | `scripts/build-job-changes.py` ([JOB-CHANGES.md](JOB-CHANGES.md)): the paged consumer feed. First run bootstraps from today's export against the index just published; after that, one generation per diff. Receipt in `export/feed/published.json` | local, R2 index | R2 `changes/` |
+| mirror | `scripts/publish-hf.py`: the Hugging Face dataset mirror, newest ledger day + every diff's lite parts + a dataset card (`HF_TOKEN`, `HF_REPO`; a no-op without them) | local | huggingface.co |
 | retention | delete older full exports that have a successor diff; in r2 mode, `exports/<date>/` prefixes older than the previous one | | local or R2 |
 | report | one line per run (jobs, diff counts, feed generation, stages passed) to `SLACK_RUN_WEBHOOK`, else the ideas relay; reads `run.jsonl` | scratch | Slack |
 

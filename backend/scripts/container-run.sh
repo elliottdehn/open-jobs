@@ -20,7 +20,7 @@ case "$cmd" in
 esac
 [ -f .dev.vars ] || { echo "backend/.dev.vars missing (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, OPENAI_KEY)"; exit 1; }
 ENVARGS=(--env-file .dev.vars -e "ADMIN_TOKEN=${ADMIN_TOKEN:-$(tr -d '[:space:]' < admin_token.txt)}" -e "WORKER_URL=${WORKER_URL:-https://backend.dehnbostele.workers.dev}")
-for v in SLACK_RUN_WEBHOOK GROUPS_PREFIX ROOT_PREFIX DIFF_MEMORY FEED_DUCKDB_MEMORY; do [ -n "${!v:-}" ] && ENVARGS+=(-e "$v=${!v}"); done
+for v in SLACK_RUN_WEBHOOK HF_TOKEN HF_REPO GROUPS_PREFIX ROOT_PREFIX DIFF_MEMORY FEED_DUCKDB_MEMORY; do [ -n "${!v:-}" ] && ENVARGS+=(-e "$v=${!v}"); done
 DATE="$(date +%Y-%m-%d)"; ARGS=()
 while [ $# -gt 0 ]; do case "$1" in --date) DATE="$2"; shift 2;; *) ARGS+=("$1"); shift;; esac; done
 mem=$("$DOCKER" info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
@@ -34,9 +34,9 @@ case "$cmd" in
   all)
     mkdir -p logs; LOG="logs/container-$DATE.log"; exec > >(tee -a "$LOG") 2>&1
     echo "=== container consolidation $DATE $(date '+%H:%M:%S')"
-    for st in pull ledger parquet diff tree estimators finalize history feed retention; do
+    for st in pull ledger parquet diff tree estimators finalize history feed mirror retention; do
       if ! stage "$st" "${ARGS[@]}"; then
-        case "$st" in ledger|diff|history|feed) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
+        case "$st" in ledger|diff|history|feed|mirror) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
       fi
     done
     stage report || true; echo "=== done $(date '+%H:%M:%S')" ;;

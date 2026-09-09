@@ -19,6 +19,8 @@ Stages, in pipeline order:
   history     diffs + ledger parts + index.json to R2
   feed        the paged consumer feed (JOB-CHANGES.md): bootstrap from today's export the first time, then one
               generation per diff; publishes under changes/ and keeps export/feed/published.json as the receipt
+  mirror      the Hugging Face dataset mirror (scripts/publish-hf.py): newest ledger day + every diff's lite parts;
+              needs HF_TOKEN + HF_REPO, a no-op without them
   retention   (local only) delete older full exports that have a successor diff
 
 Layout: --source local keeps today's layout (<backend>/export/<date>/ holds everything). --source r2 reads
@@ -30,7 +32,7 @@ import argparse, glob, json, os, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__)); BACKEND = os.path.normpath(os.path.join(HERE, ".."))
 ap = argparse.ArgumentParser()
-ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention", "report"])
+ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "mirror", "retention", "report"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
 ap.add_argument("--publish", action="store_true", help="write parquet to R2 as produced (always on for --source r2); group files always stream up during the tree stage unless --no-publish")
@@ -137,6 +139,8 @@ elif a.stage == "feed":
     else:
         run(["uv", "run", "scripts/build-job-changes.py", "--out", feed, "--snapshot", export_local, "--index", idx, "--publish-base", a.worker])
     if r2_mode: r2.put_file("state/feed/published.json", receipt, "application/json")
+elif a.stage == "mirror":
+    run(["uv", "run", "scripts/publish-hf.py", "--diffs", "export/diffs", "--ledger", "export/ledger"])
 elif a.stage == "retention":
     if a.keep_full: stamp("kept (--keep-full)"); sys.exit(0)
     side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
