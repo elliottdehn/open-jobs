@@ -17,6 +17,7 @@
   uv run tools/jobs.py status                                     -> what's in work/
   uv run tools/jobs.py export [--only ashby,lever] [--out DIR]    -> today's full export: work/export/<date>/{jobs,boards}/<ats>.parquet
                                                                   (13 GB; resumes; skips files already complete)
+  uv run tools/jobs.py sql "SELECT ats, count(*) FROM jobs GROUP BY 1"  -> query it: views `jobs` and `boards` over the newest export
 
 Env: WORKER_URL (default https://backend.dehnbostele.workers.dev), WORK (default work/).
 """
@@ -792,6 +793,17 @@ def cmd_status(a):
 
 TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read()
 
+def cmd_sql(a):
+    """Run SQL over the downloaded export: `jobs` and `boards` are views over work/export/<newest date>/."""
+    import duckdb
+    root = a.export or (sorted(glob.glob(os.path.join(WORK, "export", "20*"))) or [None])[-1]
+    if not root or not glob.glob(os.path.join(root, "jobs", "*.parquet")): sys.exit("no export in work/export/ — run `export` first")
+    con = duckdb.connect()
+    for v in ("jobs", "boards"): con.execute(f"CREATE VIEW {v} AS SELECT * FROM read_parquet('{os.path.join(root, v, '*.parquet')}')")
+    q = a.query or sys.stdin.read()
+    if not q.strip(): sys.exit("usage: sql \"SELECT ...\"  (or pipe a query on stdin)")
+    print(con.sql(q).limit(a.limit) if a.limit else con.sql(q))
+
 def cmd_export(a):
     """Download today's full export (one parquet per ATS, jobs + boards) with resume; the dataset behind everything else."""
     date = a.date
@@ -841,6 +853,7 @@ s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK
 s = sub.add_parser("top", help="static shortlist: top N eligible fresh matches by cosine (for agents without a browser)"); s.add_argument("--n", type=int, default=50); s.add_argument("--out"); s.add_argument("--notes", help="JSON {key: why it fits}"); s.add_argument("--freshness", default="fresh", help="comma list of verdicts to keep: fresh,stale,re-stamped,ghost,unknown")
 s = sub.add_parser("probe", help="why isn't this posting in my list?"); s.add_argument("url"); s.add_argument("--board", help="ats/slug when the URL doesn't name the board (workable, paylocity)")
 s = sub.add_parser("export", help="download today's full export (jobs + boards parquet per ATS), resumable"); s.add_argument("--date"); s.add_argument("--only", help="comma-separated ATS names"); s.add_argument("--out")
+s = sub.add_parser("sql", help="run SQL over the downloaded export: views `jobs` and `boards`"); s.add_argument("query", nargs="?"); s.add_argument("--export", help="export dir (default: newest under work/export/)"); s.add_argument("--limit", type=int, default=0)
 sub.add_parser("status")
 args = ap.parse_args()
-{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "top": cmd_top, "probe": cmd_probe, "status": cmd_status, "export": cmd_export}[args.cmd](args)
+{"embed": cmd_embed, "groups": cmd_groups, "fetch": cmd_fetch, "html": cmd_html, "serve": cmd_serve, "enrich": cmd_enrich, "rank": cmd_rank, "top": cmd_top, "probe": cmd_probe, "status": cmd_status, "export": cmd_export, "sql": cmd_sql}[args.cmd](args)

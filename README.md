@@ -128,7 +128,8 @@ Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md). Enrichment 
 
 ```
 git clone https://github.com/elliottdehn/open-jobs && cd open-jobs
-uv run tools/jobs.py export      # today's full export: work/export/<date>/{jobs,boards}/<ats>.parquet, ~13 GB, resumable
+uv run tools/jobs.py export
+uv run tools/jobs.py sql "SELECT ats, count(*) FROM jobs GROUP BY 1 ORDER BY 2 DESC"
 ```
 
 Every open posting, one parquet per applicant tracking system, with the description text and a

@@ -101,8 +101,10 @@ and pandas read them in place.</p>
 <p class="eyebrow">Start here</p>
 <h2>Take all of today's data</h2>
 <pre>git clone ${REPO} && cd open-jobs
-uv run tools/jobs.py export          # -> work/export/${esc(head)}/{jobs,boards}/&lt;ats&gt;.parquet  (${gb(jobsBytes)}, resumable)
-uv run --with duckdb python -c "import duckdb; print(duckdb.sql(\\"SELECT ats, count(*) n FROM 'work/export/${esc(head)}/jobs/*.parquet' GROUP BY 1 ORDER BY 2 DESC\\"))"</pre>
+uv run tools/jobs.py export
+uv run tools/jobs.py sql "SELECT ats, count(*) FROM jobs GROUP BY 1 ORDER BY 2 DESC"</pre>
+<p><code>export</code> pulls today's ${gb(jobsBytes)} into <code>work/export/${esc(head)}/</code> and resumes if interrupted;
+<code>sql</code> runs DuckDB over it with <code>jobs</code> and <code>boards</code> as views.</p>
 <p>That is the full export: one parquet file per applicant tracking system, ${num(atsList.length)} files, one row per open
 posting with the description text and its ${esc(manifest.recipe)} embedding, plus <code>boards/</code> with one row per
 career site and its company fields. The files live at <a href="/data/exports/${esc(head)}/jobs/">exports/${esc(head)}/jobs/</a>;
