@@ -66,7 +66,11 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:1080px;margin:0 auto;padding:48px 24px 80px}
 a{color:var(--acc-ink);text-decoration:none;border-bottom:1px solid transparent}a:hover{border-bottom-color:currentColor}
-h1{font-size:34px;line-height:1.15;margin:0 0 10px;letter-spacing:-.01em}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 10px}
+.gh{display:inline-flex;align-items:center;gap:9px;padding:9px 13px;border:1px solid var(--rule);border-radius:6px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.gh:hover{border-color:var(--acc);border-bottom-color:var(--acc)}.gh svg{width:16px;height:16px;fill:currentColor}
+.gh b{font-weight:500;color:var(--acc-ink);border-left:1px solid var(--rule);padding-left:9px;font-variant-numeric:tabular-nums}
+h1{font-size:34px;line-height:1.15;margin:0;letter-spacing:-.01em}
 .lede{font-size:18px;max-width:68ch;margin:0 0 22px;color:var(--ink)}
 .stats{display:flex;flex-wrap:wrap;gap:0 36px;margin:0 0 48px;padding:16px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
 .stats div{padding:4px 0}.stats b{display:block;font-size:22px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}.stats span{font-size:13px;color:var(--soft);text-transform:uppercase;letter-spacing:.06em}
@@ -88,7 +92,8 @@ details{margin-top:12px}summary{cursor:pointer;color:var(--acc-ink)}
 .cols{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--soft);max-width:none}
 footer{border-top:1px solid var(--rule);padding-top:20px;font-size:14px;color:var(--soft)}footer p{max-width:none}
 </style></head><body><main>
-<h1>Open Jobs data</h1>
+<div class="top"><h1>Open Jobs data</h1>
+<a class="gh" href="${REPO}" target="_blank" rel="noopener" title="Open Jobs on GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Star on GitHub</span><b id="stars">★</b></a></div>
 <p class="lede">Every job posting on about 65,000 company career sites, crawled every night, with full descriptions and
 an embedding for each. Static files under CC0. No key, no account. Every URL supports CORS and HTTP Range, so DuckDB
 and pandas read them in place.</p>
@@ -189,6 +194,18 @@ These files are rewritten nightly under the same names. Layout and API: <a href=
 <p>Fields and enrichment: <a href="${REPO}/blob/main/backend/FIELDS.md">FIELDS.md</a>. Search page: <a href="/">backend.dehnbostele.workers.dev</a>.
 Source and issues: <a href="${REPO}">${REPO.replace("https://", "")}</a>. CC0 1.0.</p>
 </footer>
-</main></body></html>`;
+</main>
+<script>
+(async () => {
+  const el = document.getElementById("stars"), KEY = "open-jobs-stars", fmt = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n);
+  try { const c = JSON.parse(localStorage.getItem(KEY) || "null"); if (c && Date.now() - c.at < 3600e3) { el.textContent = "★ " + fmt(c.n); return; } } catch {}
+  try {
+    const r = await fetch("https://api.github.com/repos/elliottdehn/open-jobs", { headers: { accept: "application/vnd.github+json" } });
+    const n = (await r.json()).stargazers_count;
+    if (typeof n === "number") { el.textContent = "★ " + fmt(n); try { localStorage.setItem(KEY, JSON.stringify({ n, at: Date.now() })); } catch {} }
+  } catch {}
+})();
+</script>
+</body></html>`;
 	return new Response(html, { headers: { ...cors, "content-type": "text/html;charset=UTF-8", "cache-control": "public, max-age=3600" } });
 }
