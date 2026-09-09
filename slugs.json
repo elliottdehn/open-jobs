@@ -1,7 +1,7 @@
 {
 "schema": 2,
 "generated_at": "2026-09-09",
-"source": "the fleet's own board metadata (ledger export of 2026-09-08); rebuild with backend/scripts/build-slugs.py",
+"source": "the open-jobs fleet itself: every board the Worker runs, as of its ledger export of 2026-09-08 (rebuild: backend/scripts/build-slugs.py)",
 "counts": {
 "ashby": {
 "live": 3048,

@@ -29,7 +29,7 @@ for f in sorted(glob.glob(os.path.join(a.ledger, "*.ndjson"))):
             if d.get("part"): continue
             meta[(ats, d["slug"])] = ((d.get("meta") or {}).get("lastStatus")) or "never"
 date = os.path.basename(os.path.dirname(os.path.abspath(a.ledger)))
-out = {"schema": 2, "generated_at": time.strftime("%Y-%m-%d"), "source": f"the fleet's own board metadata (ledger export of {date}); rebuild with backend/scripts/build-slugs.py",
+out = {"schema": 2, "generated_at": time.strftime("%Y-%m-%d"), "source": "the open-jobs fleet itself: every board the Worker runs, as of its ledger export of " + date + " (rebuild: backend/scripts/build-slugs.py)",
        "counts": {}, "ats": {}, "gone": {}}
 dist = collections.Counter()
 for ats, slugs in sorted(boards.items()):
