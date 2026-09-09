@@ -33,7 +33,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "feed", "retention"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
-ap.add_argument("--publish", action="store_true", help="write parquet / group files to R2 as produced (always on for --source r2)")
+ap.add_argument("--publish", action="store_true", help="write parquet to R2 as produced (always on for --source r2); group files always stream up during the tree stage unless --no-publish")
+ap.add_argument("--no-publish", action="store_true", help="tree stage: keep group files local only (validation builds)")
 ap.add_argument("--worker", default=os.environ.get("WORKER_URL", "https://backend.dehnbostele.workers.dev"))
 ap.add_argument("--work", help="local scratch dir (default <backend>/export/<date> for local, <backend>/work-<date> for r2)")
 ap.add_argument("--prev", help="previous export for the diff (default: export/latest for local, the newest exports/<date> before --date for r2)")
@@ -85,7 +86,9 @@ elif a.stage == "diff":
     if not prev: stamp("no previous export to diff against; skipping"); sys.exit(0)
     run(["uv", "run", "scripts/build-diff.py", "--prev", prev, "--new", export_root, "--base", a.worker, "--out", "export/diffs"])
 elif a.stage == "tree":
-    run(["uv", "run", "scripts/build-manifest.py", "--out", os.path.join(work, "web")] + (["--publish"] if publish else []))
+    # group files stream to R2 while the tree writes them (the 2026-09-08 run skipped this and finalize spent 26 min
+    # uploading 37 GB instead); finalize still reconciles by size, so a missed upload here is caught there
+    run(["uv", "run", "scripts/build-manifest.py", "--out", os.path.join(work, "web")] + ([] if a.no_publish else ["--publish"]))
 elif a.stage == "estimators":
     if a.skip_models: stamp("skipped (--skip-models)"); sys.exit(0)
     for s in ("train-salary", "train-arrangement", "train-seniority", "train-age", "build-city-table", "build-location-table"):

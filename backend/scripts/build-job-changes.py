@@ -100,7 +100,9 @@ def parquet_rows(paths, columns):
     # DuckDB reads only the allowlisted columns (no vectors/raw JSON). No corpus-sized Python list.
     import duckdb
     with closing(duckdb.connect()) as con:
-        con.execute("SET memory_limit='512MB'")
+        # Bounded, but a real per-provider parquet needs room for one row group of description text: 512 MB failed
+        # on the first production bootstrap (2026-09-08) with a 128 MiB allocation. 2 GB still fits a 12 GiB container.
+        con.execute(f"SET memory_limit='{os.environ.get('FEED_DUCKDB_MEMORY', '2GB')}'"); con.execute("SET threads=2")
         for path in paths:
             # Return UTC-naive datetime values so DuckDB does not require optional pytz.
             expressions = [(f'"{c}" AT TIME ZONE \'UTC\'' if c in
