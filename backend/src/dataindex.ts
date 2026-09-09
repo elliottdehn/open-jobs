@@ -51,8 +51,9 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 	const feedBytes = feedPages.reduce((a, p) => a + (p.bytes ?? 0), 0);
 	const atsList = jobs.map((f) => f.name.replace(/\.parquet$/, ""));
 
-	const jobRows = jobs.map((f) => `<tr><td><a href="/data/exports/${esc(head)}/jobs/${esc(f.name)}">${esc(f.name)}</a></td><td class="n">${gb(f.size)}</td>` +
-		`<td><a href="/data/exports/${esc(head)}/boards/${esc(f.name)}">boards/${esc(f.name)}</a></td></tr>`).join("");
+	const pills = jobs.map((f) => `<a class="dl" href="/data/exports/${esc(head)}/jobs/${esc(f.name)}" download><b>${esc(f.name.replace(/\.parquet$/, ""))}</b><span>${gb(f.size)}</span></a>`).join("");
+	const jobRows = jobs.map((f) => `<tr><td><a href="/data/exports/${esc(head)}/jobs/${esc(f.name)}" download>${esc(f.name)}</a></td><td class="n">${gb(f.size)}</td>` +
+		`<td><a href="/data/exports/${esc(head)}/boards/${esc(f.name)}" download>boards/${esc(f.name)}</a></td></tr>`).join("");
 	const diffRows = diffEntries.map((e) =>
 		`<tr><td class="diff-date">${esc(e.to)}<small>from ${esc(e.from)}</small></td><td class="n added">${num(e.counts?.added)}</td><td class="n removed">${num(e.counts?.removed)}</td><td class="n">${num(e.counts?.changed)}</td>` +
 		`<td><span class="file-size">${gb(e.lite?.bytes)}</span>${parts(e.lite?.dir ?? "", e.lite?.parts)}</td><td><span class="file-size">${gb(e.bytes)}</span>${parts(e.dir, e.parts)}</td>` +
@@ -97,6 +98,9 @@ company fields. One jobs file per applicant tracking system, plus <code>boards/<
 <p>The command saves to <code>work/export/${esc(head)}/</code> and makes <code>jobs</code> and <code>boards</code>
 available as DuckDB views. The files also live at <a href="/data/exports/${esc(head)}/jobs/">exports/${esc(head)}/jobs/</a>.
 Each new export gets its own date; the previous day stays up for one more night.</p>
+<h3>Or click, one file at a time</h3>
+<p class="soft">Each file is every open posting on one applicant tracking system, as of ${esc(head)}, parquet, no account. Company records for each are in the table below.</p>
+<div class="dls">${pills || '<span class="soft">Not published yet.</span>'}</div>
 <h3>A few things to ask it</h3>
 <p class="soft">Each is one command. <code>jobs</code> and <code>boards</code> are views over the export you just pulled.</p>
 <div class="inc">
@@ -125,7 +129,7 @@ enrichment_json, embed_status, embed_model, embedding FLOAT[${esc(manifest.dims)
 <p class="soft">Too big? The <a href="#history">ledger</a> has every posting's dates and status without text or vectors
 in ${gb(ledgerEntries[0]?.bytes)}. The <a href="#index">group files</a> have text plus vectors for open postings in
 pieces of a few MB.</p>
-<details><summary>Read remotely, or choose individual files</summary>
+<details><summary>Read remotely, or the company records per ATS</summary>
 <p class="soft" style="padding-inline:20px">Every file supports CORS and HTTP Range. DuckDB and pandas can read the URLs directly.</p>
 <pre>import duckdb
 base = "${BASE}exports/${esc(head)}/jobs/"
