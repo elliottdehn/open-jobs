@@ -47,7 +47,9 @@ recipe = con.execute(f"SELECT embed_model, count(*) FROM read_parquet('{J}') WHE
 print("recipes:", recipe)
 tag = recipe[0][0]
 # first-party postings only in the search tree for now: the aggregator tier has no age curve of its own yet
-WHERE_ = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}' AND coalesce(tier, 'first_party') = 'first_party'"
+# (exports before 2026-09-10 have no tier column at all)
+_has_tier = any(r[0] == "tier" for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{J}', union_by_name=true)").fetchall())
+WHERE_ = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'" + (" AND coalesce(tier, 'first_party') = 'first_party'" if _has_tier else "")
 # The exact key string per row ties the vector-loading pass to the group-writing pass without relying on parquet
 # scan order (which is not stable across queries). Not a hash: 3.1M keys produced one 64-bit collision on 2026-09-08.
 HKEY = "ats || '/' || slug || '#' || id AS h"
