@@ -154,8 +154,14 @@ elif a.stage == "tree":
     run(["uv", "run", "scripts/build-manifest.py", "--out", os.path.join(work, "web")] + ([] if a.no_publish else ["--publish"]), env={"GROUPS_PREFIX": GROUPS_PREFIX})
 elif a.stage == "estimators":
     if a.skip_models: stamp("skipped (--skip-models)"); sys.exit(0)
+    # The parquet stage leaves a complete local copy of jobs/ and boards/ under export/<date>/ even in r2 mode; the
+    # trainers scan the whole corpus (content + vectors), which over the S3 API inside the 16 GB VM crawled and was
+    # OOM-killed (2026-09-10). Read the local copy when it is complete.
+    local_jobs = glob.glob(os.path.join(export_local, "jobs", "*.parquet")); est_env = {}
+    if r2_mode and local_jobs and len(local_jobs) >= 30:
+        est_env = {"EXPORT_DIR": export_local}; print(f"estimators read the local export copy ({len(local_jobs)} jobs files)", flush=True)
     for s in ("train-salary", "train-arrangement", "train-seniority", "train-age", "build-city-table", "build-location-table"):
-        run(["uv", "run", f"scripts/{s}.py"])
+        run(["uv", "run", f"scripts/{s}.py"], env=est_env)
 elif a.stage == "finalize":
     run(["uv", "run", "scripts/publish-web.py", "--web", os.path.join(work, "web")], env={"GROUPS_PREFIX": GROUPS_PREFIX})
     if not r2_mode:
@@ -212,6 +218,9 @@ elif a.stage == "retention":
             for k in keys: r2.delete(k)
         for d in glob.glob(os.path.join(WORK_ROOT, "work-20*")):
             if os.path.basename(d)[5:] < a.date: shutil.rmtree(d, ignore_errors=True); print(f"  removed scratch {d}", flush=True)
+        # the local export copies on the volume (13 GB a night): keep today's, drop older ones
+        for d in glob.glob("export/20*-*-*"):
+            if os.path.isdir(d) and os.path.basename(d) < a.date: shutil.rmtree(d, ignore_errors=True); print(f"  removed local export copy {d}", flush=True)
         stamp("done"); sys.exit(0)
     for d in sorted(glob.glob("export/20*-*-*")):
         b = os.path.basename(d)
