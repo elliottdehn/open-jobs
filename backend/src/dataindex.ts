@@ -38,7 +38,7 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 	if (manifestHead) {
 		const o = await env.DATA.get("manifest.json", { range: { offset: 0, length: 400 } });
 		const text = o ? await o.text() : "";
-		for (const k of ["recipe", "dims", "jobs", "nodes", "leaves", "built_at"]) {
+		for (const k of ["recipe", "dims", "jobs", "nodes", "leaves", "groups", "built_at"]) {
 			const m = text.match(new RegExp(`"${k}"\\s*:\\s*("[^"]*"|\\d+)`));
 			if (m) manifest[k] = m[1].startsWith('"') ? m[1].slice(1, -1) : Number(m[1]);
 		}
@@ -189,7 +189,7 @@ Download a few groups of related postings, or walk the tree with byte-range read
 <div class="file-index">
 <div class="file-entry"><a href="/data/manifest.json">manifest.json ↗</a><p>${gb(manifestHead?.size) || "Not published"} · A tree of ${num(manifest.nodes)} nodes across ${num(manifest.leaves)} groups.</p></div>
 <div class="file-entry"><a href="/data/centroids.bin">centroids.bin ↗</a><p>Unit centroids as float16, in tree order. Read only the ranges you need.</p></div>
-<div class="file-entry"><code>groups/&lt;id&gt;.json</code><p>One group of postings with text, fields, company data, and exact float32 vectors. A few MB per file.</p></div>
+<div class="file-entry"><code>${esc(manifest.groups ?? "groups/")}&lt;id&gt;.json</code><p>One group of postings with text, fields, company data, and exact float32 vectors. A few MB per file.</p></div>
 </div>
 <h3>Client estimators</h3>
 <div class="estimators"><a href="/data/age-model.json">Age</a><a href="/data/salary-model.json">Salary</a><a href="/data/arrangement-model.json">Arrangement</a><a href="/data/seniority-model.json">Seniority</a><a href="/data/location-countries.json">Locations</a></div>

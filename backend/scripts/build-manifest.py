@@ -247,6 +247,7 @@ C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
 C.tofile(os.path.join(out, "centroids.bin"))
 manifest = {
     "recipe": tag, "dims": D, "jobs": N, "nodes": len(nodes), "leaves": len(leaves),
+    "groups": args.groups_prefix,   # where this build's group files live under /data/ (per-build prefix; readers must use it)
     "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
     "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
 }

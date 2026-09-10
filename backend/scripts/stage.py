@@ -50,6 +50,9 @@ export_local = os.path.join("export", a.date)
 WORK_ROOT = os.environ.get("WORK_ROOT", ".")                    # the container mounts its scratch volume here
 work = a.work or (os.path.join(WORK_ROOT, "work-" + a.date) if r2_mode else export_local)
 export_root = f"s3://{BUCKET}/exports/{a.date}" if r2_mode else export_local   # what downstream stages read
+# Group files go under a per-build prefix so the manifest swap at finalize is atomic for readers (a manifest cached for
+# an hour keeps finding its files); retention keeps this build and the previous one. GROUPS_PREFIX overrides (tests).
+GROUPS_PREFIX = os.environ.get("GROUPS_PREFIX") or f"groups/{a.date}/"
 os.makedirs(os.path.realpath("export"), exist_ok=True)   # in the container, export/ is a symlink into the scratch volume
 os.makedirs(work, exist_ok=True); os.makedirs(export_local, exist_ok=True)
 token = os.environ.get("ADMIN_TOKEN") or (open("admin_token.txt").read().strip() if os.path.exists("admin_token.txt") else "")
@@ -148,13 +151,13 @@ elif a.stage == "diff":
 elif a.stage == "tree":
     # group files stream to R2 while the tree writes them (the 2026-09-08 run skipped this and finalize spent 26 min
     # uploading 37 GB instead); finalize still reconciles by size, so a missed upload here is caught there
-    run(["uv", "run", "scripts/build-manifest.py", "--out", os.path.join(work, "web")] + ([] if a.no_publish else ["--publish"]))
+    run(["uv", "run", "scripts/build-manifest.py", "--out", os.path.join(work, "web")] + ([] if a.no_publish else ["--publish"]), env={"GROUPS_PREFIX": GROUPS_PREFIX})
 elif a.stage == "estimators":
     if a.skip_models: stamp("skipped (--skip-models)"); sys.exit(0)
     for s in ("train-salary", "train-arrangement", "train-seniority", "train-age", "build-city-table", "build-location-table"):
         run(["uv", "run", f"scripts/{s}.py"])
 elif a.stage == "finalize":
-    run(["uv", "run", "scripts/publish-web.py", "--web", os.path.join(work, "web")])
+    run(["uv", "run", "scripts/publish-web.py", "--web", os.path.join(work, "web")], env={"GROUPS_PREFIX": GROUPS_PREFIX})
     if not r2_mode:
         if os.path.islink("export/latest") or os.path.exists("export/latest"): os.unlink("export/latest")
         os.symlink(a.date, "export/latest"); print(f"export/latest -> {a.date}", flush=True)
@@ -198,6 +201,14 @@ elif a.stage == "retention":
         for d in [d for d in dates if d < a.date][:-1]:
             keys = [k for k, _, _ in r2.list(f"exports/{d}/")]
             print(f"  delete exports/{d}/ ({len(keys)} objects; a newer export and its diff exist)", flush=True)
+            for k in keys: r2.delete(k)
+        # groups/<date>/ prefixes: keep this build and the previous one (a manifest cached for an hour must still find
+        # its files); the flat legacy groups/<id>.json files are not dated and are left alone
+        res = r2.client.list_objects_v2(Bucket=r2.bucket, Prefix="groups/", Delimiter="/")
+        gdates = sorted(p["Prefix"][len("groups/"):-1] for p in res.get("CommonPrefixes", []))
+        for d in [d for d in gdates if d < a.date][:-1]:
+            keys = [k for k, _, _ in r2.list(f"groups/{d}/")]
+            print(f"  delete groups/{d}/ ({len(keys)} objects; two newer builds exist)", flush=True)
             for k in keys: r2.delete(k)
         for d in glob.glob(os.path.join(WORK_ROOT, "work-20*")):
             if os.path.basename(d)[5:] < a.date: shutil.rmtree(d, ignore_errors=True); print(f"  removed scratch {d}", flush=True)

@@ -117,7 +117,7 @@ def cmd_fetch(a):
     rows = []; total = 0
     for li, leaf in enumerate(leaves):
         p = os.path.join(gdir, f"{leaf['id']}.json")
-        if not os.path.exists(p): open(p, "wb").write(get(f"/data/groups/{leaf['id']}.json", binary=True))
+        if not os.path.exists(p): open(p, "wb").write(get(f"/data/{m.get('groups', 'groups/')}{leaf['id']}.json", binary=True))  # per-build prefix named by the manifest
         g = json.load(open(p, encoding="utf-8"))
         for j in g["jobs"]:
             vec = np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32)

@@ -799,7 +799,7 @@ function makeLocparse(L) {
     const g = GROUPS.get(id) || { status: 'queued', jobs: 0, sim: 0 };
     GROUPS.set(id, g); g.status = 'loading'; if (reason) g.reason = reason; renderGroups();
     try {
-      const r = await fetch(`${DATA}/data/groups/${id}.json`);
+      const r = await fetch(`${DATA}/data/${M.groups || 'groups/'}${id}.json`);  // per-build prefix named by the manifest
       if (!r.ok) throw new Error(`group ${id}: ${r.status}`);
       const data = await r.json();
       const fresh = [];

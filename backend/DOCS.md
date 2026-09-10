@@ -179,10 +179,12 @@ of cache), rebuilt nightly:
 - `centroids.bin` — float16 `[nodes × dims]` unit centroids, same order as `manifest.tree`; a client
   walks the tree with byte-range reads (each subtree is contiguous in DFS order) instead of
   downloading the 69 MB file.
-- `groups/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen, pub,
+- `groups/<date>/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen, pub,
   jd text ≤ 4k chars, enrichment and company when known) with exact float32 embeddings (`v`, base64
-  little-endian). Leaf ids restart at 0 every build; old files above the current count linger,
-  unreferenced and harmless.
+  little-endian). Each build writes its own dated prefix, named in the manifest's `groups` field, and the
+  manifest is published last, so the swap is atomic for readers; retention keeps two builds (the manifest is
+  cached for an hour). Readers must use `manifest.groups`, never a hardcoded path. The flat pre-2026-09-10
+  `groups/<id>.json` files are unreferenced and left alone.
 - `age-model.json`, `salary-model.json`, `arrangement-model.json`, `seniority-model.json`,
   `location-countries.json` — the estimators (`FIELDS.md`, `scripts/train-*.py`), applied client-side.
 - `diffs/`, `ledger/`, `changes/` — history: see "Layout and retention" below and JOB-CHANGES.md.
