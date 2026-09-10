@@ -18,7 +18,8 @@ import { fetchRetry } from "./http.ts";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) open-jobs-crawler/0.1 (+github.com/elliottdehn/open-jobs)";
 const PAGE = 500;              // job URLs per streamed page (the Board applies each page to SQLite as it arrives)
 const MAX_SITEMAPS = 400;      // sitemaps followed per board (an aggregator index can list hundreds)
-const MAX_URLS = 250_000;      // hard safety on one board; the Board keeps one id per row in memory for the diff
+const MAX_URLS = 20_000;       // per-board discovery cap. Uncapped, 69 boards inserted 300k-450k postings each in one day (hh.ru,
+                               // flagma.com, ...): ~$300 of embeddings and ~$90/month of storage nobody approved (2026-09-10)
 const DISCOVERY_BUDGET_MS = 15 * 60_000; // best effort: stop here, keep what was found, report partial
 // Static/asset URLs that pattern-match a job path (career.css, /feed/, bundle.js) but aren't jobs.
 const ASSET = /\.(css|js|mjs|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|pdf|xml|json|rss|zip|mp4|webm)(\?|#|$)/i;

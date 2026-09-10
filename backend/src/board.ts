@@ -62,6 +62,9 @@ const DETAIL_TICK_WALL_MS = 50_000;     // an alarm invocation's wall budget for
 const DETAIL_TICK_SUBREQUESTS = 800;    // under the platform's 1000 subrequests per invocation
 const DETAIL_CONC_MIN = 2, DETAIL_CONC_START = 8, DETAIL_CONC_MAX = 32;
 const DETAIL_GROW_EVERY = 25;           // clean responses before concurrency grows by half
+/** A crawled board with more open rows than this is a national job board, not an employer: it is paused (no fetch,
+ *  details, or embeddings) until someone decides what to do with it. Rows already stored stay. */
+const DARK_BOARD_MAX_OPEN = 20_000;
 
 export interface BoardMeta {
 	name: string;
@@ -421,6 +424,15 @@ export class Board extends DurableObject<Env> {
 		const meta = await this.meta();
 		if (!meta) return; // never initialized; nothing to do
 		const now = Date.now();
+		if (meta.ats === "dark") {
+			const open = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
+			if (open > DARK_BOARD_MAX_OPEN) {
+				meta.lastError = `paused: ${open.toLocaleString("en-US")} open rows exceeds the per-board cap ${DARK_BOARD_MAX_OPEN.toLocaleString("en-US")} (national job board)`;
+				meta.nextFetchAt = nextSlotAfter(now, meta.slotMs); meta.nextAlarmAt = meta.nextFetchAt;
+				await this.ctx.storage.setAlarm(meta.nextFetchAt); await this.ctx.storage.put("meta", meta);
+				return;
+			}
+		}
 		if (meta.nextFetchAt !== null && now >= meta.nextFetchAt - 1000) {
 			if (meta.localOnly) {
 				meta.nextFetchAt = nextSlotAfter(now, meta.slotMs); // snapshots come from the laptop; just keep ticking
