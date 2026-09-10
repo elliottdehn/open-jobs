@@ -593,8 +593,8 @@ export class Board extends DurableObject<Env> {
 	/** Which of these ids does the board already hold, and in what state? One query per page instead of a map of the board. */
 	private lookupExisting(ids: string[]): Map<string, { hash: string; removed: boolean }> {
 		const out = new Map<string, { hash: string; removed: boolean }>();
-		for (let i = 0; i < ids.length; i += 500) {
-			const chunk = ids.slice(i, i + 500);
+		for (let i = 0; i < ids.length; i += 100) { // the object's SQLite allows 100 bound parameters per statement
+			const chunk = ids.slice(i, i + 100);
 			for (const r of this.ctx.storage.sql.exec<{ id: string; content_hash: string; removed_at: number | null }>(
 				`SELECT id, content_hash, removed_at FROM jobs WHERE id IN (${chunk.map(() => "?").join(",")})`, ...chunk,
 			)) out.set(r.id, { hash: r.content_hash, removed: r.removed_at !== null });
