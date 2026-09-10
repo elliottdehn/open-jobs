@@ -513,10 +513,11 @@ export class Board extends DurableObject<Env> {
 					meta.lastStatus = "gone"; meta.lastError = null; meta.consecutiveFailures++;
 					this.recordRun(now, "gone", null, null);
 				} else {
-					this.ctx.storage.transactionSync(() => this.sweepUnseen(existing, seen, now, diff));
-					meta.lastStatus = "ok"; meta.lastOkAt = now; meta.lastError = null; meta.consecutiveFailures = 0;
-					meta.jobCount = seen.size;
-					this.recordRun(now, "ok", diff, null);
+					// a partial walk (budget spent) keeps what it found but says nothing about the rest: no removal sweep
+					if (!res.partial) this.ctx.storage.transactionSync(() => this.sweepUnseen(existing, seen, now, diff));
+					meta.lastStatus = "ok"; meta.lastOkAt = now; meta.lastError = res.partial ? "partial listing: discovery budget spent; unseen rows kept" : null; meta.consecutiveFailures = 0;
+					meta.jobCount = res.partial ? Math.max(seen.size, meta.jobCount ?? 0) : seen.size;
+					this.recordRun(now, "ok", diff, res.partial ? "partial" : null);
 					this.markSnapshotDirty(meta, diff, now);
 				}
 				let next0 = nextSlotAfter(now, meta.slotMs);

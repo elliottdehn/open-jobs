@@ -43,7 +43,9 @@ export interface AtsFetcher {
 	 * is handed to `sink` and applied to storage immediately, so peak memory is one page instead of
 	 * the whole snapshot (a 10k-job board OOMs a 128 MB DO isolate otherwise).
 	 */
-	fetchJobsStream?(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }>;
+	fetchJobsStream?(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok"; partial?: boolean } | { status: "gone" }>;
+	/** `partial`: the listing walk spent its budget; what was streamed is kept, but it is not the whole board, so the
+	 *  Board must not treat unseen rows as removed. Best effort, not failure. */
 	/** Optional: wall budget for one listing fetch (default 5 min). A sitemap walk over hundreds of files needs more;
 	 *  if it is cut short the run fails and no removal sweep happens, so the budget must fit a full walk. */
 	fetchTimeoutMs?: number;
