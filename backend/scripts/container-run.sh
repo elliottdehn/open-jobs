@@ -15,8 +15,8 @@ DOCKER="${DOCKER:-$(command -v docker || echo /Applications/Docker.app/Contents/
 IMAGE="${IMAGE:-open-jobs-consolidate}"; VOL="${VOL:-open-jobs-work}"
 cmd="${1:-all}"; shift || true
 case "$cmd" in
-  build) exec "$DOCKER" build -f backend/Dockerfile -t "$IMAGE" .. ;;
-  build-amd64) exec "$DOCKER" build -f backend/Dockerfile --platform linux/amd64 -t "$IMAGE:amd64" .. ;;
+  build) exec "$DOCKER" build -f Dockerfile -t "$IMAGE" .. ;;                                   # cwd is backend/; context is the repo root
+  build-amd64) exec "$DOCKER" build -f Dockerfile --platform linux/amd64 -t "$IMAGE:amd64" .. ;;
 esac
 [ -f .dev.vars ] || { echo "backend/.dev.vars missing (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, OPENAI_KEY)"; exit 1; }
 ENVARGS=(--env-file .dev.vars -e "ADMIN_TOKEN=${ADMIN_TOKEN:-$(tr -d '[:space:]' < admin_token.txt)}" -e "WORKER_URL=${WORKER_URL:-https://backend.dehnbostele.workers.dev}")
