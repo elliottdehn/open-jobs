@@ -88,6 +88,8 @@ export interface BoardMeta {
 	/** Adaptive detail-fetch concurrency for this board, and the site-imposed pause (Retry-After, 429, bot wall). */
 	detailConc?: number;
 	detailBackoffUntil?: number | null;
+	/** Last detail tick: fetched, ok, errors, wall ms, mean latency ms, concurrency at the end (diagnostics). */
+	detailTick?: { at: number; fetched: number; ok: number; errors: number; wallMs: number; meanMs: number; conc: number };
 	/** How many snapshot part files this board last wrote (so shrinking boards delete the leftovers). */
 	snapshotParts?: number;
 	/**
@@ -677,7 +679,7 @@ export class Board extends DurableObject<Env> {
 		if (meta.detailBackoffUntil && meta.detailBackoffUntil > Date.now()) return; // the site asked us to wait
 		const start = Date.now(); const deadline = start + DETAIL_TICK_WALL_MS;
 		let conc = Math.min(DETAIL_CONC_MAX, Math.max(DETAIL_CONC_MIN, meta.detailConc ?? DETAIL_CONC_START));
-		let used = 0, okStreak = 0, walls = 0, timeouts = 0, stop: string | null = null;
+		let used = 0, okStreak = 0, walls = 0, timeouts = 0, stop: string | null = null, oks = 0, errs = 0, latSum = 0, latN = 0;
 		const backoff = (ms: number, why: string) => { conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2)); meta.detailBackoffUntil = Date.now() + ms; stop = why; };
 		while (!stop && Date.now() < deadline && used < DETAIL_TICK_SUBREQUESTS) {
 			const rows = this.ctx.storage.sql
@@ -702,8 +704,10 @@ export class Board extends DurableObject<Env> {
 						continue;
 					}
 					used++;
+					const t0 = Date.now();
 					try {
 						const d = await withTimeout(fetcher.fetchDetail!(meta.slug, job), FETCH_DETAIL_TIMEOUT_MS, `fetchDetail ${meta.name}/${r.id}`);
+						latSum += Date.now() - t0; latN++; oks++;
 						this.ctx.storage.sql.exec(
 							`UPDATE jobs SET detail_status = ?, detail = ?, detail_error = NULL, detail_fetched_at = ? WHERE id = ?`,
 							d ? "done" : "na",
@@ -712,11 +716,17 @@ export class Board extends DurableObject<Env> {
 							r.id,
 						);
 						walls = 0; timeouts = 0;
-						if (++okStreak % DETAIL_GROW_EVERY === 0 && conc < DETAIL_CONC_MAX) conc = Math.min(DETAIL_CONC_MAX, Math.ceil(conc * 1.5));
+						// slow answers are the site's way of saying "less": ease off above 4 s mean, grow only while it is snappy
+						if (++okStreak % DETAIL_GROW_EVERY === 0) {
+							const mean = latSum / Math.max(1, latN);
+							if (mean > 4000) conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2));
+							else if (mean < 1500 && conc < DETAIL_CONC_MAX) conc = Math.min(DETAIL_CONC_MAX, Math.ceil(conc * 1.5));
+							latSum = 0; latN = 0;
+						}
 					} catch (e) {
 						const msg = e instanceof Error ? e.message : String(e);
 						const status = e instanceof HttpError ? e.status : 0;
-						okStreak = 0;
+						okStreak = 0; errs++;
 						if (status === 429 || status === 503 || status === 502 || status === 504) {
 							// the site is pacing us: leave the row pending, halve, and sleep until Retry-After (or a minute, doubling per wall)
 							const ra = Number(/retry-after=(\d+)/.exec(msg)?.[1]);
@@ -741,6 +751,7 @@ export class Board extends DurableObject<Env> {
 			await Promise.all(Array.from({ length: Math.min(conc, queue.length) }, worker));
 		}
 		meta.detailConc = conc;
+		meta.detailTick = { at: start, fetched: used, ok: oks, errors: errs, wallMs: Date.now() - start, meanMs: Math.round(latSum / Math.max(1, latN)), conc };
 		if (stop) meta.lastError = `details paused: ${stop}; concurrency now ${conc}`;
 	}
 
