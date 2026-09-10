@@ -88,6 +88,8 @@ export interface BoardMeta {
 	/** Adaptive detail-fetch concurrency for this board, and the site-imposed pause (Retry-After, 429, bot wall). */
 	detailConc?: number;
 	detailBackoffUntil?: number | null;
+	/** The board's best observed mean page latency (ms): the reference for "is the site slowing under our load". */
+	detailBaseMs?: number;
 	/** Last detail tick: fetched, ok, errors, wall ms, mean latency ms, concurrency at the end (diagnostics). */
 	detailTick?: { at: number; fetched: number; ok: number; errors: number; wallMs: number; meanMs: number; conc: number };
 	/** How many snapshot part files this board last wrote (so shrinking boards delete the leftovers). */
@@ -716,11 +718,14 @@ export class Board extends DurableObject<Env> {
 							r.id,
 						);
 						walls = 0; timeouts = 0;
-						// slow answers are the site's way of saying "less": ease off above 4 s mean, grow only while it is snappy
+						// Slowing under our load is the site's way of saying "less". The reference is this board's own best
+						// mean latency, so a site that is simply slow keeps its concurrency; one that gets 2.5x slower than
+						// its best halves, and one answering near its best grows.
 						if (++okStreak % DETAIL_GROW_EVERY === 0) {
 							const mean = latSum / Math.max(1, latN);
-							if (mean > 4000) conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2));
-							else if (mean < 1500 && conc < DETAIL_CONC_MAX) conc = Math.min(DETAIL_CONC_MAX, Math.ceil(conc * 1.5));
+							const base = Math.min(meta.detailBaseMs ?? mean, mean); meta.detailBaseMs = base;
+							if (mean > 2.5 * base && mean > 1000) conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2));
+							else if (mean < 1.3 * base && conc < DETAIL_CONC_MAX) conc = Math.min(DETAIL_CONC_MAX, Math.ceil(conc * 1.5));
 							latSum = 0; latN = 0;
 						}
 					} catch (e) {
