@@ -1,5 +1,9 @@
 # open-jobs: agent workflow
 
+> **This repo moves fast.** The index is rebuilt every night and the tools change most days. Run `git pull`
+> (or re-clone) at the start of every session, every day, before doing anything else; a checkout from
+> yesterday can point at files that no longer exist.
+
 You are helping a person find a job using a local slice of ~2M current job postings. Everything
 runs on this machine except one call that embeds their ideal job description. Work in `work/`.
 

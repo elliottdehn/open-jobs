@@ -288,9 +288,20 @@ footer a:last-child { text-underline-offset: 4px; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+dialog#fresh { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 26px 28px; max-width: 460px; width: calc(100% - 40px); }
+dialog#fresh::backdrop { background: rgba(0, 0, 0, .55); }
+dialog#fresh h2 { margin: 0 0 10px; font-size: 20px; }
+dialog#fresh p { margin: 0 0 18px; line-height: 1.55; color: var(--text); }
+dialog#fresh code { background: var(--line); padding: 1px 5px; border-radius: 4px; }
+dialog#fresh button { background: var(--green); color: #142a20; border: 0; border-radius: 6px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
 <body>
+<dialog id="fresh" aria-labelledby="fresh-title">
+  <h2 id="fresh-title">This project moves fast</h2>
+  <p>The index is rebuilt every night and the code changes most days. If this page came from a checkout, run <code>git pull</code> and rebuild it; if you are on the hosted page, a reload is enough. Agents: fetch the latest repo before each session.</p>
+  <button type="button" id="fresh-ok">Got it, once a day is fine</button>
+</dialog>
 <a class="skip" href="#title">Skip to job search</a>
 <header class="wrap top">
   <a class="brand" href="/" aria-label="Open Jobs home"><span class="brand-mark" aria-hidden="true"></span>open<em>jobs</em></a>
@@ -1084,6 +1095,18 @@ function makeLocparse(L) {
   })();
 
   // ---------- remember the form and labels in this browser ----------
+  // ---------- once-a-day reminder to fetch the latest code and index ----------
+  (() => {
+    const K = 'open-jobs-fresh-at', dlg = $('#fresh');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    let last = 0; try { last = Number(localStorage.getItem(K) || 0); } catch {}
+    if (Date.now() - last < 86400e3) return;
+    const stamp = () => { try { localStorage.setItem(K, String(Date.now())); } catch {} };
+    $('#fresh-ok').addEventListener('click', () => { stamp(); dlg.close(); });
+    dlg.addEventListener('close', stamp);
+    dlg.showModal();
+  })();
+
   const LS = 'open-jobs-simple';
   function saveLocal() { try { localStorage.setItem(LS, JSON.stringify({ title: $('#title').value, loc: $('#loc').value, blurb: $('#blurb').value, labels: LABELS })); } catch {} }
   try {

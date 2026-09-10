@@ -5,6 +5,9 @@ description: Find real, current job openings matched to the user. Use when someo
 
 # Job search over the Open Jobs dataset
 
+> **This repo moves fast.** Run `git pull` (or re-clone) at the start of every session, every day, before
+> anything else: the index is rebuilt nightly and the tools change most days.
+
 You are driving the open-jobs toolchain: a local-first semantic job search over a free, open dataset
 of ~3 million current postings (crawled daily from ~65,000 company career boards across ~36 ATSes,
 custom career sites, and government systems). Everything runs on this machine except one call that
