@@ -322,7 +322,8 @@ def dedup_aggregators():
         SELECT * EXCLUDE (k_org, k_t, k_loc) FROM (
           SELECT d.*, norm(d.org) AS k_org, ntitle(d.title) AS k_t, norm(d.location) AS k_loc FROM read_parquet('{dj}') d)
         WHERE tier = 'first_party'
-           OR (NOT EXISTS (SELECT 1 FROM fp_keys f WHERE f.org = k_org AND f.t = k_t AND f.loc = k_loc))
+           OR (coalesce(embed_status, '') != 'dup'   -- the crawler's dedup index already called it a copy
+               AND NOT EXISTS (SELECT 1 FROM fp_keys f WHERE f.org = k_org AND f.t = k_t AND f.loc = k_loc))
         QUALIFY tier = 'first_party' OR row_number() OVER (PARTITION BY tier, k_org, k_t, k_loc ORDER BY first_seen_at, slug, id) = 1
       ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
     os.replace(tmp, dj)
