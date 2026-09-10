@@ -35,6 +35,7 @@ RUN for s in stage build-parquet build-diff build-ledger build-manifest publish-
 # scratch and state
 RUN mkdir -p /work && ln -s /work/export /app/export && ln -s /work/logs /app/logs
 VOLUME ["/work"]
-ENV CONSOLIDATE_SOURCE=r2 WORK_ROOT=/work
+# DuckDB caps inside the image: the VM is 16 GB and a 20 GB default let the diff get OOM-killed (exit 137) on 2026-09-10
+ENV CONSOLIDATE_SOURCE=r2 WORK_ROOT=/work DIFF_MEMORY=10GB FEED_DUCKDB_MEMORY=2GB
 ENTRYPOINT ["uv", "run", "--script", "/app/scripts/stage.py"]
 CMD ["--help"]
