@@ -21,9 +21,12 @@ _ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://
 root = _ed.rstrip("/") if _s3 else os.path.join(here, "..", _ed)
 work = os.environ.get("WORK_DIR") or (os.path.join(here, "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 cache_path = os.path.join(here, "..", "export", "location-embeddings.npz")
-# the container has no export/ between runs: keep the cache in the bucket (state/location-embeddings.npz)
-_r2 = R2() if _s3 else None
-if _s3:
+# the container has no export/ between runs: keep the cache in the bucket (state/location-embeddings.npz). The
+# estimators may read a local export copy in the container (EXPORT_DIR local, CONSOLIDATE_SOURCE=r2): the cache
+# still lives in the bucket, else every run re-embeds ~440k strings (2026-09-10).
+_bucket = _s3 or os.environ.get("CONSOLIDATE_SOURCE") == "r2"
+_r2 = R2() if _bucket else None
+if _bucket:
     cache_path = os.path.join(work, "location-embeddings.npz")
     if not os.path.exists(cache_path) and _r2.head("state/location-embeddings.npz"): _r2.get_file("state/location-embeddings.npz", cache_path)
 DIMS, MODEL = 256, "text-embedding-3-small"
@@ -113,4 +116,4 @@ out = os.path.join(work, "web", "location-countries.json"); os.makedirs(os.path.
 json.dump({"model": f"{MODEL}:{DIMS}", "min_sim": MIN_SIM, "min_conf": MIN_CONF, "holdout_accuracy": acc, "n": len(table), "built_at": int(time.time() * 1000), "table": table}, open(out, "w", encoding="utf-8"), ensure_ascii=False)
 print(f"wrote {out}: {len(table):,} of {len(unplaced):,} unplaced strings get a country ({covered:,} of {unplaced_jobs:,} unplaced postings = {covered / max(unplaced_jobs, 1):.0%}); "
       f"top: {collections.Counter(v[0] for v in table.values()).most_common(6)}; tokens {usage[0]:,} (${usage[0] * 0.02 / 1e6:.2f}); {time.time() - t0:.0f}s")
-if _s3 and os.path.exists(cache_path): _r2.put_file("state/location-embeddings.npz", cache_path); print("cache -> state/location-embeddings.npz", flush=True)
+if _bucket and os.path.exists(cache_path): _r2.put_file("state/location-embeddings.npz", cache_path); print("cache -> state/location-embeddings.npz", flush=True)
