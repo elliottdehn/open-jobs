@@ -36,6 +36,8 @@ RUN for s in stage build-parquet build-diff build-ledger build-manifest publish-
 RUN mkdir -p /work && ln -s /work/export /app/export && ln -s /work/logs /app/logs
 VOLUME ["/work"]
 # DuckDB caps inside the image: the VM is 16 GB and a 20 GB default let the diff get OOM-killed (exit 137) on 2026-09-10
-ENV CONSOLIDATE_SOURCE=r2 WORK_ROOT=/work DIFF_MEMORY=10GB FEED_DUCKDB_MEMORY=2GB
+# LOW_DISK / STAGE_TO_BUCKET: the image behaves as it must on a 20 GB cloud instance, on the laptop too, so the
+# cloud path is exercised every night (pass -e LOW_DISK=0 -e STAGE_TO_BUCKET=0 to opt out)
+ENV CONSOLIDATE_SOURCE=r2 WORK_ROOT=/work DIFF_MEMORY=10GB FEED_DUCKDB_MEMORY=2GB LOW_DISK=1 STAGE_TO_BUCKET=1
 ENTRYPOINT ["uv", "run", "--script", "/app/scripts/stage.py"]
 CMD ["--help"]

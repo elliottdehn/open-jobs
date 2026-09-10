@@ -21,7 +21,7 @@ root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..",
 work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 J = f"{root}/jobs/*.parquet"
 SAMPLE = int(os.environ.get("SAMPLE", "250000"))
-con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='8GB'"); con.execute("SET arrow_large_buffer_size=true")
+con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute(f"SET memory_limit='{'4GB' if _s3 else '8GB'}'")  # bucket reads buffer on top of the cap; con.execute("SET arrow_large_buffer_size=true")
 q = f"""SELECT embed_model, title, location, content, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL USING SAMPLE {SAMPLE} ROWS"""
 CLASSES = ["remote", "hybrid", "onsite"]

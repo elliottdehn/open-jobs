@@ -21,7 +21,7 @@ J = f"{root}/jobs/*.parquet"
 TARGET_N = int(os.environ.get("AGE_MAX_ROWS", "250000"))  # plenty for a 1536-d head; 800k (~5 GB + the solver's copies) was OOM-killed in the 16 GB VM
 CAP_DAYS = 3650.0   # fossils beyond 10y say "ancient", not "12.7y exactly"
 
-con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")
+con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute(f"SET memory_limit='{'4GB' if _s3 else '6GB'}'")  # bucket reads buffer on top of the cap; con.execute("SET arrow_large_buffer_size=true")
 total = con.execute(f"SELECT count(*) FROM read_parquet('{J}') WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND published_at IS NOT NULL").fetchone()[0]
 p_keep = min(1.0, TARGET_N / max(total, 1))
 q = f"""SELECT embed_model, greatest(0, date_diff('day', published_at, now())) AS age_days, embedding
