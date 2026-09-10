@@ -160,7 +160,9 @@ elif a.stage == "estimators":
     local_jobs = glob.glob(os.path.join(export_local, "jobs", "*.parquet")); est_env = {}
     if r2_mode and local_jobs and len(local_jobs) >= 30:
         est_env = {"EXPORT_DIR": export_local}; print(f"estimators read the local export copy ({len(local_jobs)} jobs files)", flush=True)
+    only_est = [x for x in os.environ.get("ESTIMATORS_ONLY", "").split(",") if x]  # rerun a subset after a failure
     for s in ("train-salary", "train-arrangement", "train-seniority", "train-age", "build-city-table", "build-location-table"):
+        if only_est and s not in only_est: continue
         run(["uv", "run", f"scripts/{s}.py"], env=est_env)
 elif a.stage == "finalize":
     run(["uv", "run", "scripts/publish-web.py", "--web", os.path.join(work, "web")], env={"GROUPS_PREFIX": GROUPS_PREFIX})
