@@ -506,7 +506,7 @@ export class Board extends DurableObject<Env> {
 					fetcher.fetchJobsStream(meta.slug, async (page) => {
 						this.ctx.storage.transactionSync(() => this.applyPage(page, now, hasDetail, existing, seen, diff));
 					}),
-					FETCH_JOBS_TIMEOUT_MS,
+					fetcher.fetchTimeoutMs ?? FETCH_JOBS_TIMEOUT_MS,
 					`fetchJobsStream ${meta.name}`,
 				);
 				if (res.status === "gone") {
@@ -524,7 +524,7 @@ export class Board extends DurableObject<Env> {
 				meta.nextFetchAt = next0;
 				return;
 			}
-			const result = provided ?? (await withTimeout(fetcher.fetchJobs(meta.slug, { env: this.env }), FETCH_JOBS_TIMEOUT_MS, `fetchJobs ${meta.name}`));
+			const result = provided ?? (await withTimeout(fetcher.fetchJobs(meta.slug, { env: this.env }), fetcher.fetchTimeoutMs ?? FETCH_JOBS_TIMEOUT_MS, `fetchJobs ${meta.name}`));
 			if (result.status === "gone") {
 				meta.lastStatus = "gone";
 				meta.lastError = null;

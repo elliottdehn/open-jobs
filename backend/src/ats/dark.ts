@@ -183,6 +183,7 @@ const toJob = (u: string): Job => ({
 export class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
 
 export const dark: AtsFetcher = {
+	fetchTimeoutMs: 20 * 60_000, // up to MAX_SITEMAPS sitemap fetches, streamed; must not be cut short (see types.ts)
 	/** Non-streaming variant (ingest path, tests): collects what the stream yields. */
 	async fetchJobs(slug: string): Promise<FetchResult> {
 		const jobs: Job[] = [];

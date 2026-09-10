@@ -44,6 +44,9 @@ export interface AtsFetcher {
 	 * the whole snapshot (a 10k-job board OOMs a 128 MB DO isolate otherwise).
 	 */
 	fetchJobsStream?(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }>;
+	/** Optional: wall budget for one listing fetch (default 5 min). A sitemap walk over hundreds of files needs more;
+	 *  if it is cut short the run fails and no removal sweep happens, so the budget must fit a full walk. */
+	fetchTimeoutMs?: number;
 	/**
 	 * Optional: fetch the full posting for one job (providers whose listing has no description).
 	 * Called once per new job by the Board (never repeated); concurrency per board is adaptive (2..32),
