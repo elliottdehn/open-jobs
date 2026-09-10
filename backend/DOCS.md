@@ -214,7 +214,7 @@ bot rules 403 the default Python `urllib` user agent — send any custom UA (cur
 | POST | `/sync` | start a Registry sweep for every enabled ATS (what the cron does) |
 | GET | `/sync/:ats` | sweep status: `mode`, `cursor/total`, `touched`, `fetched`, `skipped`, `errors`, `lastError`, `finishedAt` |
 | GET | `/snapshots?ats=<ats>[&cursor=…]` | list the per-board snapshot objects of one ATS (key, size, etag, uploaded); what `pull-snapshots.mjs` walks |
-| GET/POST | `/lock`, `/lock/acquire\|renew\|release` | admin: the consolidation publisher mutex (`src/lock.ts`, one object named `consolidate`): body `{holder, ttlMs?, note?, force?}`; stage.py takes it for every publishing stage so only one run, laptop or container, writes the bucket at a time |
+| GET/POST | `/lock`, `/lock/acquire\|renew\|release\|freeze\|thaw` | admin: the consolidation publisher mutex (`src/lock.ts`, one object named `consolidate`): body `{holder, ttlMs?, note?, force?}`; stage.py takes it for every publishing stage so only one run, laptop or container, writes the bucket at a time |
 | POST | `/backfill[?ats=a,b]` | kick every board with a detail/embed/enrich backlog so it drains now (per-board minute ticks); progress via `/sync/:ats` (`fetched` = kicked) |
 | POST | `/fetch-all[?ats=a,b][&skipRecent=<ms>]` | on-demand fetch of every board (arms if needed) via the Registry sweep in `fetch` mode. Boards that are *fresh* — completed a non-error fetch within `skipRecent` (default 6 h; `0` forces) — are skipped. Does not change daily slots. Progress via `/sync/:ats` |
 | GET | `/boards/:ats/:slug[?filters]` | `{meta, jobs}` for one board |
@@ -329,7 +329,9 @@ fleet in about an hour. Without a kick the same work happens at each board's nex
 a Durable Object) under a per-run holder id kept in `<work>/lock.json`, so the stages of one run share it across
 processes and containers, renews it every five minutes while it works, and `retention` releases it. A second run,
 laptop or container, fails fast at its first stage with who holds the lock and since when. A lock that stops being
-renewed expires after four hours, so a crashed run cannot block the next night. `uv run scripts/stage.py unlock
+renewed expires after four hours, so a crashed run cannot block the next night. While the parquet stage reads the
+per-board snapshots it also *freezes* snapshot rewrites (`POST /lock/freeze`, `thaw` after): a board replacing its file
+mid-read would hand DuckDB pages of the new file under the old footer; frozen boards retry their write ten minutes later. `uv run scripts/stage.py unlock
 --date D` releases by hand; `--force-lock` takes it over. `--dry-run` never locks.
 
 One command: `scripts/consolidate.sh [worker-url] [--skip-ingest] [--skip-upload] [--skip-models] [--skip-ledger] [--keep-full] [--source r2] [--from STAGE]`.

@@ -90,7 +90,9 @@ if a.stage not in ("ingest", "report") and not a.dry_run:
     def _renew():
         while True:
             time.sleep(300)
-            try: lock_call("renew", {"holder": holder, "ttlMs": LOCK_TTL_MS})
+            try:
+                lock_call("renew", {"holder": holder, "ttlMs": LOCK_TTL_MS})
+                if a.stage == "parquet" and r2_mode: lock_call("freeze", {"holder": holder, "ttlMs": LOCK_TTL_MS})
             except Exception as e: print(f"WARNING: lock renew failed: {e}", flush=True)
     threading.Thread(target=_renew, daemon=True).start()
     if a.stage == "retention": atexit.register(lock_release)
@@ -124,7 +126,15 @@ elif a.stage == "parquet":
     if missing:
         run(["python3", "-u", "scripts/pull-pool.py", "--base", a.worker, "--out", export_local, "--ats", " ".join(missing), "--", "--status=open", "--embed", "--resume"], env={"NODE_OPTIONS": "--max-old-space-size=16384"})
     cmd = ["uv", "run", "scripts/build-parquet.py"] + (["--publish"] if publish else []) + ([f"--ats={a.only}"] if a.only else [])
-    run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
+    # Freeze snapshot rewrites while we read them: a board replacing its file mid-read hands DuckDB pages of the new
+    # file under the old footer (garbage decoded as text, 2026-09-09). Boards retry their write ten minutes later.
+    if r2_mode and not a.dry_run:
+        lock_call("freeze", {"holder": lock_holder(), "ttlMs": LOCK_TTL_MS}); print("snapshot writes frozen for the read", flush=True)
+    try: run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
+    finally:
+        if r2_mode and not a.dry_run:
+            try: lock_call("thaw", {"holder": lock_holder()}); print("snapshot writes thawed", flush=True)
+            except Exception as e: print(f"WARNING: thaw failed ({e}); the freeze expires on its own", flush=True)
 elif a.stage == "diff":
     if a.prev: prev = a.prev
     elif r2_mode:

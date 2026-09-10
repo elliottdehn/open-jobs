@@ -87,6 +87,8 @@ export interface BoardMeta {
 	snapshotAt?: number | null;
 	/** Open set changed since the last snapshot; written once embeds drain (or after 48h regardless). */
 	snapshotDirty?: boolean;
+	/** Set when a snapshot write was deferred because the publisher had snapshots frozen; arm() retries then. */
+	snapshotRetryAt?: number | null;
 	dirtySince?: number | null;
 	snapshotError?: string | null;
 }
@@ -393,6 +395,7 @@ export class Board extends DurableObject<Env> {
 			if (meta.embedBackoffUntil && meta.embedBackoffUntil > tick) tick = meta.embedBackoffUntil;
 			at = Math.min(at, tick);
 		}
+		if (meta.snapshotDirty && meta.snapshotRetryAt) at = Math.min(at, meta.snapshotRetryAt);
 		await this.ctx.storage.setAlarm(at);
 		meta.nextAlarmAt = at;
 	}
@@ -1131,6 +1134,11 @@ export class Board extends DurableObject<Env> {
 		const embedsDone = !this.autoEmbed() || this.pendingEmbedCount() === 0;
 		const stale = meta.dirtySince != null && now - meta.dirtySince > SNAPSHOT_STALE_MS;
 		if (!force && !embedsDone && !stale) return; // wait for vectors; a backlog tick will retry
+		if (!force && (await this.env.LOCK.getByName("consolidate").snapshotsFrozen())) {
+			meta.snapshotRetryAt = now + 10 * MINUTE; // the publisher is reading snapshots right now; rewrite ours after
+			return;
+		}
+		meta.snapshotRetryAt = null;
 		try {
 			const open = this.ctx.storage.sql
 				.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;

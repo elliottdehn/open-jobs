@@ -28,6 +28,22 @@ export class Lock extends DurableObject<Env> {
 		await this.ctx.storage.put("lock", lock);
 		return { ok: true, lock };
 	}
+	/**
+	 * Snapshot freeze: while set, Board objects defer rewriting their R2 snapshot (they retry in ten minutes). The
+	 * parquet stage reads thousands of snapshot files by byte range over minutes; a board replacing its file
+	 * mid-read hands the reader pages of the new file under the old footer (2026-09-09: embedding bytes decoded
+	 * as text, twice). Expires on its own like the lock.
+	 */
+	async freeze(holder: string, ttlMs: number): Promise<{ ok: boolean; until: number }> {
+		const until = Date.now() + ttlMs;
+		await this.ctx.storage.put("freeze", { holder, until });
+		return { ok: true, until };
+	}
+	async thaw(): Promise<{ ok: boolean }> { await this.ctx.storage.delete("freeze"); return { ok: true }; }
+	async snapshotsFrozen(): Promise<boolean> {
+		const f = await this.ctx.storage.get<{ holder: string; until: number }>("freeze");
+		return !!f && f.until > Date.now();
+	}
 	async release(holder: string, force = false): Promise<{ ok: boolean; lock: LockState | null }> {
 		const cur = await this.current();
 		if (cur && cur.holder !== holder && !force) return { ok: false, lock: cur };
