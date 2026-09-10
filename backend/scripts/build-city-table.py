@@ -15,7 +15,8 @@ _ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://
 root = _ed.rstrip("/") if _s3 else os.path.join(here, "..", _ed)
 work = os.environ.get("WORK_DIR") or (os.path.join(here, "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 base = dict(locparse.CITY_COUNTRY)  # includes the previous table; rebuild from scratch below
-rows = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()).execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL GROUP BY location").fetchall()
+_con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); _con.execute("SET memory_limit='4GB'"); _con.execute("SET threads=4")  # the default (80% of RAM) plus Python's heap exceeded the 16 GB VM (2026-09-10)
+rows = _con.execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL GROUP BY location").fetchall(); _con.close()
 tally = collections.defaultdict(collections.Counter)
 for loc, n in rows:
     for seg in _split(loc):

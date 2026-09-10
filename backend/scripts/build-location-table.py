@@ -33,7 +33,8 @@ DIMS, MODEL = 256, "text-embedding-3-small"
 key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_KEY") or open(os.path.join(here, "..", "..", "oai_key.txt"), encoding="utf-8").read().strip()
 
 t0 = time.time()
-rows = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()).execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL AND length(location) BETWEEN 2 AND 120 GROUP BY location").fetchall()
+_con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); _con.execute("SET memory_limit='4GB'"); _con.execute("SET threads=4")  # the default (80% of RAM) plus Python's heap exceeded the 16 GB VM (2026-09-10)
+rows = _con.execute(f"SELECT location, count(*) FROM read_parquet('{root}/jobs/*.parquet') WHERE is_open AND location IS NOT NULL AND length(location) BETWEEN 2 AND 120 GROUP BY location").fetchall(); _con.close()
 strings = [r[0].strip() for r in rows if r[0].strip()]; counts = {r[0].strip(): r[1] for r in rows}
 placed, unplaced = {}, []
 for s in strings:
