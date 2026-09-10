@@ -237,10 +237,30 @@ for src in (snap_dirs or snap_r2):
             bo.write(json.dumps({"ats": ats, "slug": meta.get("slug"), "meta": meta,
                                  "exported_jobs": counts.get(fn, 0), "error": None}) + "\n")
     bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
-    jsrc = f"read_parquet('{pq}')"
+    # union_by_name: snapshot files are written over months and a board whose snapshot predates a schema change has
+    # its columns in another order; a positional read then decodes a binary column as text (dark, 2026-09-09).
+    jsrc = f"read_parquet('{pq}', union_by_name=true)"
     con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
     os.remove(bl)
-    con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+    try:
+        con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+    except BaseException as e:
+        # One bad snapshot (invalid UTF-8, a truncated upload) must not stop the night: find it, quarantine it, go on
+        # without it, and say so. The board's next snapshot replaces the bad file; nothing here is permanent.
+        print(f"{ats:16} snapshot scan failed ({type(e).__name__}: {e!r}"[:200] + "); testing each file", flush=True)
+        files = [k for k, _, _ in r2.list(f"snapshots/{ats}/")] if from_r2 else sorted(glob.glob(pq))
+        good, bad = [], []
+        for k in files:
+            one = r2.url(k) if from_r2 else k
+            try: con.execute(f"SELECT count(*) FROM ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({one!r})')}) WHERE length(content) >= 0 AND length(title) >= 0 AND length(location) >= 0")
+            except BaseException as e2: bad.append({"file": k, "error": f"{type(e2).__name__}: {e2!r}"[:200]}); print(f"  QUARANTINED {k}: {bad[-1]['error']}", flush=True); continue
+            good.append(one)
+        if not good: raise
+        lst = "[" + ", ".join(repr(g) for g in good) + "]"
+        con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({lst}, union_by_name=true)')}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+        qf = os.path.join(root, "quarantine.json"); q = json.load(open(qf)) if os.path.exists(qf) else []
+        q += [{"ats": ats, **b} for b in bad]; json.dump(q, open(qf, "w"), indent=1)
+        print(f"{ats:16} WARNING: {len(bad)} snapshot file(s) skipped (see {qf}); the board's next snapshot replaces them", flush=True)
     finalize(ats, outs)
 
 def show(sql):
