@@ -18,9 +18,8 @@ import { fetchRetry } from "./http.ts";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) open-jobs-crawler/0.1 (+github.com/elliottdehn/open-jobs)";
 const PAGE = 500;              // job URLs per streamed page (the Board applies each page to SQLite as it arrives)
 const MAX_SITEMAPS = 400;      // sitemaps followed per board (an aggregator index can list hundreds)
-const MAX_URLS = 250_000;      // per-board discovery safety. The cross-board dedup index (src/dedupe.ts) keeps copies cheap;
-                               // unique content on the big national boards is paid for on purpose (budget $300/month, 2026-09-10)
-const DISCOVERY_BUDGET_MS = 15 * 60_000; // best effort: stop here, keep what was found, report partial
+const MAX_URLS = 2_000_000;    // safety only: the Board keeps ~25 MB of id hashes per million postings (SeenSet); no board is near this
+const DISCOVERY_BUDGET_MS = 60 * 60_000; // best effort: stop here, keep what was found, report partial (an hour covers the biggest national boards)
 // Static/asset URLs that pattern-match a job path (career.css, /feed/, bundle.js) but aren't jobs.
 const ASSET = /\.(css|js|mjs|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|pdf|xml|json|rss|zip|mp4|webm)(\?|#|$)/i;
 // A job DETAIL url: a job/career/vacancy segment followed by a slug or id (excludes bare landings and
@@ -190,7 +189,7 @@ const toJob = (u: string): Job => ({
 export class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
 
 export const dark: AtsFetcher = {
-	fetchTimeoutMs: 20 * 60_000, // up to MAX_SITEMAPS sitemap fetches, streamed; must not be cut short (see types.ts)
+	fetchTimeoutMs: 75 * 60_000, // the hour of discovery plus slack; must not be cut short (see types.ts)
 	/** Non-streaming variant (ingest path, tests): collects what the stream yields. */
 	async fetchJobs(slug: string): Promise<FetchResult> {
 		const jobs: Job[] = [];

@@ -258,6 +258,19 @@ function contentHash(job: Job): string {
 	return "s" + hash32(s).toString(16).padStart(8, "0") + hash32(s, 0x9747b28c).toString(16).padStart(8, "0");
 }
 
+/**
+ * "Seen this walk", kept as 52-bit hashes of ids in a Set<number>: ~25 MB per million postings instead of the id
+ * strings and a map of the whole board, so a listing walk has no ceiling a single object cannot hold. A collision
+ * (~1e-4 per million) means one vanished posting waits a day to be swept.
+ */
+class SeenSet {
+	private s = new Set<number>();
+	private static h(id: string): number { return (hash32(id) % 0x100000) * 4294967296 + hash32(id, 0x9747b28c); }
+	has(id: string): boolean { return this.s.has(SeenSet.h(id)); }
+	add(id: string): void { this.s.add(SeenSet.h(id)); }
+	get size(): number { return this.s.size; }
+}
+
 function isFresh(meta: BoardMeta, windowMs: number, now = Date.now()): boolean {
 	return windowMs > 0 && meta.lastRunAt !== null && meta.lastStatus !== "error" && now - meta.lastRunAt < windowMs;
 }
@@ -516,12 +529,11 @@ export class Board extends DurableObject<Env> {
 			if (!provided && fetcher.fetchJobsStream) {
 				// streaming path: pages are applied to SQLite as they arrive and never accumulate in memory
 				const diff: Diff = { added: [], changed: [], removedIds: [], unchanged: 0 };
-				const existing = this.loadExisting();
-				const seen = new Set<string>();
+				const seen = new SeenSet(); // hashes only: the board is never held in memory, each page is looked up in SQLite
 				const hasDetail = !!fetcher.fetchDetail;
 				const res = await withTimeout(
 					fetcher.fetchJobsStream(meta.slug, async (page) => {
-						this.ctx.storage.transactionSync(() => this.applyPage(page, now, hasDetail, existing, seen, diff));
+						this.ctx.storage.transactionSync(() => this.applyPage(page, now, hasDetail, seen, diff));
 					}),
 					fetcher.fetchTimeoutMs ?? FETCH_JOBS_TIMEOUT_MS,
 					`fetchJobsStream ${meta.name}`,
@@ -531,7 +543,7 @@ export class Board extends DurableObject<Env> {
 					this.recordRun(now, "gone", null, null);
 				} else {
 					// a partial walk (budget spent) keeps what it found but says nothing about the rest: no removal sweep
-					if (!res.partial) this.ctx.storage.transactionSync(() => this.sweepUnseen(existing, seen, now, diff));
+					if (!res.partial) this.ctx.storage.transactionSync(() => this.sweepUnseen(seen, now, diff));
 					meta.lastStatus = "ok"; meta.lastOkAt = now; meta.lastError = res.partial ? "partial listing: discovery budget spent; unseen rows kept" : null; meta.consecutiveFailures = 0;
 					meta.jobCount = res.partial ? Math.max(seen.size, meta.jobCount ?? 0) : seen.size;
 					this.recordRun(now, "ok", diff, res.partial ? "partial" : null);
@@ -578,42 +590,43 @@ export class Board extends DurableObject<Env> {
 	 * are never re-queued, even when their content changes); jobs missing from the snapshot get
 	 * `removed_at` set (kept for history); reappearing jobs are revived.
 	 */
-	private loadExisting(): Map<string, { hash: string; removed: boolean }> {
-		const existing = new Map<string, { hash: string; removed: boolean }>();
-		for (const r of this.ctx.storage.sql.exec<{ id: string; content_hash: string; removed_at: number | null }>(
-			`SELECT id, content_hash, removed_at FROM jobs`,
-		)) {
-			existing.set(r.id, { hash: r.content_hash, removed: r.removed_at !== null });
+	/** Which of these ids does the board already hold, and in what state? One query per page instead of a map of the board. */
+	private lookupExisting(ids: string[]): Map<string, { hash: string; removed: boolean }> {
+		const out = new Map<string, { hash: string; removed: boolean }>();
+		for (let i = 0; i < ids.length; i += 500) {
+			const chunk = ids.slice(i, i + 500);
+			for (const r of this.ctx.storage.sql.exec<{ id: string; content_hash: string; removed_at: number | null }>(
+				`SELECT id, content_hash, removed_at FROM jobs WHERE id IN (${chunk.map(() => "?").join(",")})`, ...chunk,
+			)) out.set(r.id, { hash: r.content_hash, removed: r.removed_at !== null });
 		}
-		return existing;
+		return out;
 	}
 
-	private sweepUnseen(existing: Map<string, { hash: string; removed: boolean }>, seen: Set<string>, now: number, diff: Diff): void {
-		for (const [id, prev] of existing) {
-			if (!seen.has(id) && !prev.removed) {
-				this.ctx.storage.sql.exec(`UPDATE jobs SET removed_at = ? WHERE id = ?`, now, id);
-				diff.removedIds.push(id);
-			}
-		}
+	/** After a complete walk: every open row the walk did not see is gone from the board. */
+	private sweepUnseen(seen: SeenSet, now: number, diff: Diff): void {
+		const gone: string[] = [];
+		for (const r of this.ctx.storage.sql.exec<{ id: string }>(`SELECT id FROM jobs WHERE removed_at IS NULL`)) if (!seen.has(r.id)) gone.push(r.id);
+		for (const id of gone) { this.ctx.storage.sql.exec(`UPDATE jobs SET removed_at = ? WHERE id = ?`, now, id); diff.removedIds.push(id); }
 	}
 
 	private applySnapshot(jobs: Job[], now: number, hasDetail: boolean): Diff {
 		const diff: Diff = { added: [], changed: [], removedIds: [], unchanged: 0 };
 		this.ctx.storage.transactionSync(() => {
-			const existing = this.loadExisting();
-			const seen = new Set<string>();
-			this.applyPage(jobs, now, hasDetail, existing, seen, diff);
-			this.sweepUnseen(existing, seen, now, diff);
+			const seen = new SeenSet();
+			for (let i = 0; i < jobs.length; i += 500) this.applyPage(jobs.slice(i, i + 500), now, hasDetail, seen, diff);
+			this.sweepUnseen(seen, now, diff);
 		});
 		return diff;
 	}
 
 	/** Upsert one page of the snapshot; diff bookkeeping shared with the streaming path. */
-	private applyPage(jobs: Job[], now: number, hasDetail: boolean, existing: Map<string, { hash: string; removed: boolean }>, seen: Set<string>, diff: Diff): void {
+	private applyPage(jobs: Job[], now: number, hasDetail: boolean, seen: SeenSet, diff: Diff): void {
 		{
 			const sql = this.ctx.storage.sql;
-			for (const job of jobs) {
-				if (seen.has(job.id)) continue; // provider duplicated a job in its listing
+			const fresh = jobs.filter((j) => !seen.has(j.id)); // provider duplicated a job in its listing, or an earlier page had it
+			const existing = this.lookupExisting(fresh.map((j) => j.id));
+			for (const job of fresh) {
+				if (seen.has(job.id)) continue;
 				seen.add(job.id);
 				const hash = contentHash(job);
 				const prev = existing.get(job.id);

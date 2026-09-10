@@ -122,8 +122,10 @@ are fetched from the laptop and ingested, the other 34 by the fleet.
 
 **`dark` (crawled career sites and job boards, `src/ats/dark.ts`).** Discovery streams a site's job-page URLs
 from its sitemaps (index, one more level of index, `.gz` allowed) to the Board in pages of 500; the Board applies
-each page to SQLite as it arrives, so nothing but one id per row is held in memory. No cap on jobs per board
-(safety: 400 sitemaps, 250k URLs). Details, one page fetch per posting, are paced by the site: a tick runs to a
+each page to SQLite as it arrives: the page's ids are looked up in SQLite and "seen this walk" is a set of
+52-bit id hashes (~25 MB per million postings), so no board is too big for one object (safety: 400 sitemaps,
+2M URLs). A walk gets an hour; past that it ends ok-partial (rows kept, no removal sweep) and resumes from a
+rotated start the next night. Details, one page fetch per posting, are paced by the site: a tick runs to a
 50 s wall budget or 800 subrequests with a per-board concurrency that starts at 8, grows by half every 25 clean
 responses up to 32, halves on a timeout, and on 429/503/Retry-After or a run of 403s leaves the rows pending and
 sleeps the whole board until the site's deadline (`meta.detailBackoffUntil`, `meta.detailConc`). Until 2026-09-10
