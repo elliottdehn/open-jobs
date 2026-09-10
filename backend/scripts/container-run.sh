@@ -35,7 +35,7 @@ case "$cmd" in
   all|from)
     # `from <stage>`: resume a run from that stage. The date is fixed here once, so a resume that crosses midnight
     # keeps the run's date (each stage picks "today" otherwise, which is a different work dir and lock holder).
-    ALL=(pull ledger parquet diff tree estimators finalize history feed retention)
+    ALL=(pull ledger parquet diff tree estimators finalize history feed archive retention)
     if [ "$cmd" = from ]; then
       start="${ARGS[0]}"; ARGS=("${ARGS[@]:1}"); idx=-1
       for i in "${!ALL[@]}"; do [ "${ALL[$i]}" = "$start" ] && idx=$i; done
@@ -46,7 +46,7 @@ case "$cmd" in
     echo "=== container consolidation $DATE from ${STAGES[0]} $(date '+%H:%M:%S')"
     for st in "${STAGES[@]}"; do
       if ! stage "$st" "${ARGS[@]}"; then
-        case "$st" in ledger|diff|history|feed) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
+        case "$st" in ledger|diff|history|feed|archive) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
       fi
     done
     stage report || true; echo "=== done $(date '+%H:%M:%S')" ;;

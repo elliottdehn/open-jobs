@@ -31,7 +31,7 @@ LOG="logs/consolidate-$DATE.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== consolidate $DATE (source $SOURCE, worker $BASE) $(date '+%H:%M:%S')"
 
-STAGES=(ingest pull ledger parquet diff tree estimators finalize history feed retention)
+STAGES=(ingest pull ledger parquet diff tree estimators finalize history feed archive retention)
 N=${#STAGES[@]}; i=0; started=0
 for st in "${STAGES[@]}"; do
   i=$((i+1))
@@ -39,7 +39,7 @@ for st in "${STAGES[@]}"; do
   case "$st" in
     ingest)   has --skip-ingest && { echo "--- $i/$N ingest skipped"; continue; };;
     ledger)   has --skip-ledger && { echo "--- $i/$N ledger skipped"; continue; };;
-    finalize|history|feed) has --skip-upload && { echo "--- $i/$N $st skipped (--skip-upload)"; continue; };;
+    finalize|history|feed|archive) has --skip-upload && { echo "--- $i/$N $st skipped (--skip-upload)"; continue; };;
   esac
   echo "--- $i/$N $st $(date '+%H:%M:%S')"
   args=(--date "$DATE" --source "$SOURCE" --worker "$BASE")
