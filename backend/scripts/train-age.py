@@ -18,7 +18,7 @@ _ed = os.environ.get("EXPORT_DIR", "export/latest"); _s3 = _ed.startswith("s3://
 root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..", _ed)
 work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 J = f"{root}/jobs/*.parquet"
-TARGET_N = 800_000  # plenty for a 1536-d head; keeps the matrix ~5 GB
+TARGET_N = int(os.environ.get("AGE_MAX_ROWS", "250000"))  # plenty for a 1536-d head; 800k (~5 GB + the solver's copies) was OOM-killed in the 16 GB VM
 CAP_DAYS = 3650.0   # fossils beyond 10y say "ancient", not "12.7y exactly"
 
 con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")
@@ -43,6 +43,7 @@ while True:
     seen += len(ages)
     print(f"\r  scanned {seen:,}/{total:,}, kept {k:,}", end="", flush=True)
 print()
+con.close()  # release DuckDB's buffers before the solve
 X = X[:k]; y = np.log1p(np.asarray(ys, dtype=np.float64)); N, D = X.shape
 X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
 print(f"{N:,} rows in {time.time()-t0:.0f}s; median age {np.expm1(np.median(y)):.0f}d, mean {np.expm1(y).mean():.0f}d")
