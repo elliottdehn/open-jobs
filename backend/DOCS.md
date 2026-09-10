@@ -217,6 +217,7 @@ bot rules 403 the default Python `urllib` user agent — send any custom UA (cur
 | POST | `/sync` | start a Registry sweep for every enabled ATS (what the cron does) |
 | GET | `/sync/:ats` | sweep status: `mode`, `cursor/total`, `touched`, `fetched`, `skipped`, `errors`, `lastError`, `finishedAt` |
 | GET | `/snapshots?ats=<ats>[&cursor=…]` | list the per-board snapshot objects of one ATS (key, size, etag, uploaded); what `pull-snapshots.mjs` walks |
+| GET | `/stats[?days=7]` | admin: daily use counters per UTC day (`embed` = searches embedded, `jd` = JDs generated, `group` = group files fetched), kept by the `Stats` object; the 00:00 UTC cron posts yesterday's line to `SLACK_STATS_WEBHOOK` (or the ideas webhook) |
 | GET/POST | `/lock`, `/lock/acquire\|renew\|release\|freeze\|thaw` | admin: the consolidation publisher mutex (`src/lock.ts`, one object named `consolidate`): body `{holder, ttlMs?, note?, force?}`; stage.py takes it for every publishing stage so only one run, laptop or container, writes the bucket at a time |
 | POST | `/backfill[?ats=a,b]` | kick every board with a detail/embed/enrich backlog so it drains now (per-board minute ticks); progress via `/sync/:ats` (`fetched` = kicked) |
 | POST | `/fetch-all[?ats=a,b][&skipRecent=<ms>]` | on-demand fetch of every board (arms if needed) via the Registry sweep in `fetch` mode. Boards that are *fresh* — completed a non-error fetch within `skipRecent` (default 6 h; `0` forces) — are skipped. Does not change daily slots. Progress via `/sync/:ats` |

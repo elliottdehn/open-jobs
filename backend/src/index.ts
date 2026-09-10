@@ -4,6 +4,7 @@ export { Board } from "./board";
 export { RateLimit } from "./ratelimit";
 export { Budget } from "./budget";
 export { Lock } from "./lock";
+export { Stats } from "./stats";
 import type { BoardState, EnrichJobsResult, JobQuery, StoredJob } from "./board";
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
@@ -13,6 +14,17 @@ import { dataIndex } from "./dataindex";
 export { Registry } from "./registry";
 
 const EXPORT_CONCURRENCY = 20;
+
+/** The daily use line: yesterday's (UTC) counters to Slack. Runs on the 00:00 UTC cron next to the registry sweep. */
+async function postDailyStats(env: Env): Promise<void> {
+	const hook = env.SLACK_STATS_WEBHOOK ?? env.SLACK_IDEAS_WEBHOOK;
+	if (!hook) return;
+	const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+	const s = await env.STATS.getByName("daily").day(day);
+	const n = (x: number) => x.toLocaleString("en-US");
+	const text = `📊 ${day}: ${n(s.embed)} searches embedded · ${n(s.group)} group files fetched · ${n(s.jd)} JDs generated`;
+	await fetch(hook, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+}
 
 function unauthorized(): Response {
 	return new Response("unauthorized", { status: 401, headers: { "access-control-allow-origin": "*" } });
@@ -63,9 +75,11 @@ export default {
 	/** Daily sweep: (re)arm every board's alarm. Self-heals boards that lost their alarm. */
 	async scheduled(_controller, env, ctx): Promise<void> {
 		ctx.waitUntil(syncAll(env));
+		ctx.waitUntil(postDailyStats(env));
 	},
 
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
+		const bump = (kind: "embed" | "jd" | "group") => ctx.waitUntil(env.STATS.getByName("daily").bump(kind).catch(() => {}));
 		const url = new URL(request.url);
 		const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
 		const cors = {
@@ -167,6 +181,7 @@ export default {
 			if (text.length > 60_000) return Response.json({ error: "text too long (max 60k chars)" }, { status: 400, headers: cors });
 			try {
 				const v = await embedQueryText(env, text, { title: body?.title, location: body?.location });
+				bump("embed");
 				return Response.json({ vector: Array.from(v), recipe: EMBED_TAG }, { headers: { ...cors, "x-ratelimit-remaining": String(rl.remaining) } });
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -198,6 +213,7 @@ export default {
 			try {
 				const r = await expandJd(env, { title, location, blurb, model });
 				await budget.settle(reserved, r.costUsd);
+				bump("jd");
 				const st = await budget.status(hourLimit, dayLimit);
 				return Response.json({ ...r, costUsd: +r.costUsd.toFixed(5), budget: { hourUsd: +st.hourUsd.toFixed(4), dayUsd: +st.dayUsd.toFixed(4), hourLimit, dayLimit } },
 					{ headers: { ...cors, "x-ratelimit-remaining": String(rl.remaining) } });
@@ -321,6 +337,7 @@ export default {
 			const range = request.headers.get("range");
 			const obj = request.method === "HEAD" ? await env.DATA.head(key) : await env.DATA.get(key, { range: range ? request.headers : undefined });
 			if (!obj) return new Response("not found", { status: 404, headers: cors });
+			if (request.method === "GET" && /^groups\/.*\.json$/.test(key)) bump("group");
 			const headers = new Headers(cors);
 			obj.writeHttpMetadata(headers);
 			headers.set("etag", obj.httpEtag);
@@ -372,6 +389,9 @@ export default {
 		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
 		if (parts[0] === "rowmeter" && request.method === "POST") return Response.json(await env.BOARD.getByName("rowmeter/scratch").rowMeter());
 		if (parts[0] === "rowmeter" && request.method === "GET") return Response.json(await env.BOARD.getByName(url.searchParams.get("board") ?? "rowmeter/scratch").debugState());
+
+		// GET /stats[?days=7] -> daily use counters (searches embedded, JDs generated, group files fetched), UTC days
+		if (parts[0] === "stats" && request.method === "GET") return Response.json(await env.STATS.getByName("daily").recent(Number(url.searchParams.get("days") || 7)));
 
 		// GET /lock | POST /lock/acquire|renew|release|freeze|thaw {holder, ttlMs?, note?, force?} -> the consolidation publisher
 		// mutex (src/lock.ts): stage.py takes it for every publishing stage so only one run writes the bucket at a time
