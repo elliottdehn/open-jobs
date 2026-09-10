@@ -193,6 +193,8 @@ def finalize(ats, outs):
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     if publish:
         for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{ats}.parquet", outs[k], "application/octet-stream")
+        if os.environ.get("LOW_DISK") == "1":  # cloud container (20 GB disk): the bucket copy is the copy
+            for k in ("jobs", "boards"): os.remove(outs[k])
     print(f"{ats:16} {n:>9,} jobs" + (f"  -> exports/{date_name}/" if publish else ""), flush=True)
 
 tmp = os.path.join(root, ".split")
@@ -308,6 +310,9 @@ def dedup_aggregators():
     several boards is kept once (earliest first seen). Employers of first-party rows come from boards/ (company
     name, else slug). Rewrites jobs/dark.parquet in place and re-publishes it."""
     dj = os.path.join(root, "jobs", "dark.parquet")
+    low = os.environ.get("LOW_DISK") == "1" and publish and from_r2
+    if low and not os.path.exists(dj):  # local files were dropped after upload: pull dark back, read the rest from the bucket
+        os.makedirs(os.path.dirname(dj), exist_ok=True); r2.get_file(f"exports/{date_name}/jobs/dark.parquet", dj)
     if not os.path.exists(dj): return
     con.execute(f"""CREATE OR REPLACE MACRO norm(s) AS trim(regexp_replace(regexp_replace(regexp_replace(lower(coalesce(s, '')), '[^a-z0-9 ]+', ' ', 'g'), '{SUFFIX}', ' ', 'g'), ' +', ' ', 'g'))""")
     con.execute("""CREATE OR REPLACE MACRO ntitle(s) AS trim(regexp_replace(regexp_replace(lower(coalesce(s, '')), '\\(.*?\\)|\\[.*?\\]|[^a-z0-9 ]+', ' ', 'g'), ' +', ' ', 'g'))""")
@@ -315,7 +320,7 @@ def dedup_aggregators():
     if not before[0]: return
     con.execute(f"""CREATE OR REPLACE TABLE fp_keys AS
         SELECT DISTINCT norm(coalesce(b.company_name, b.slug)) AS org, ntitle(j.title) AS t, norm(j.location) AS loc
-        FROM read_parquet('{J}', union_by_name=true) j JOIN read_parquet('{B}', union_by_name=true) b USING (ats, slug)
+        FROM read_parquet('{r2.url(f"exports/{date_name}/jobs/*.parquet") if low else J}', union_by_name=true) j JOIN read_parquet('{r2.url(f"exports/{date_name}/boards/*.parquet") if low else B}', union_by_name=true) b USING (ats, slug)
         WHERE j.is_open AND coalesce(j.tier, 'first_party') = 'first_party'""")
     tmp = dj + ".dedup"
     con.execute(f"""COPY (
@@ -330,6 +335,7 @@ def dedup_aggregators():
     after = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet('{dj}')").fetchone()
     print(f"aggregator tier: {before[0]:,} -> {after[0]:,} postings after dedup against first-party boards and across job boards", flush=True)
     if publish: r2.put_file(f"exports/{date_name}/jobs/dark.parquet", dj, "application/octet-stream"); print("  re-published jobs/dark.parquet", flush=True)
+    if low: os.remove(dj)
 
 def show(sql):
     con.sql(sql).show(max_rows=50, max_width=200)

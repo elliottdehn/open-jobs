@@ -21,12 +21,21 @@ ap.add_argument("--part-mb", type=int, default=64)
 a = ap.parse_args()
 root = a.export if os.path.isabs(a.export) else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", a.export)
 date = os.path.basename(os.path.realpath(root))
-jobs = sorted(f for f in os.listdir(os.path.join(root, "jobs")) if f.endswith(".parquet"))
-boards = sorted(f for f in os.listdir(os.path.join(root, "boards")) if f.endswith(".parquet"))
-if len(jobs) < 30: sys.exit(f"only {len(jobs)} jobs files under {root}; refusing to publish a partial archive")
-con = duckdb.connect(); con.execute("SET TimeZone='UTC'")
-n, boards_n = con.execute(f"SELECT count(*), count(DISTINCT ats || '/' || slug) FROM read_parquet('{os.path.join(root, 'jobs', '*.parquet')}', union_by_name=true) WHERE is_open").fetchone()
-cols = [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{os.path.join(root, 'jobs', '*.parquet')}', union_by_name=true)").fetchall()]
+r2 = R2()
+local = os.path.isdir(os.path.join(root, "jobs")) and len([f for f in os.listdir(os.path.join(root, "jobs")) if f.endswith(".parquet")]) >= 30
+if local:
+    jobs = sorted(f for f in os.listdir(os.path.join(root, "jobs")) if f.endswith(".parquet"))
+    boards = sorted(f for f in os.listdir(os.path.join(root, "boards")) if f.endswith(".parquet"))
+    jsrc = os.path.join(root, "jobs", "*.parquet"); con = duckdb.connect()
+else:
+    # no local copy (cloud container, LOW_DISK): stream every object of the export straight from the bucket
+    jobs = sorted(k.split("/")[-1] for k, _, _ in r2.list(f"exports/{date}/jobs/") if k.endswith(".parquet"))
+    boards = sorted(k.split("/")[-1] for k, _, _ in r2.list(f"exports/{date}/boards/") if k.endswith(".parquet"))
+    jsrc = r2.url(f"exports/{date}/jobs/*.parquet"); con = r2.duckdb(duckdb.connect())
+if len(jobs) < 30: sys.exit(f"only {len(jobs)} jobs files for {date}; refusing to publish a partial archive")
+con.execute("SET TimeZone='UTC'")
+n, boards_n = con.execute(f"SELECT count(*), count(DISTINCT ats || '/' || slug) FROM read_parquet('{jsrc}', union_by_name=true) WHERE is_open").fetchone()
+cols = [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{jsrc}', union_by_name=true)").fetchall()]
 readme = f"""Open Jobs, full export of {date}
 {n:,} open job postings from {boards_n:,} career sites, crawled nightly. CC0 1.0. No account, no key.
 https://github.com/elliottdehn/open-jobs  ·  https://backend.dehnbostele.workers.dev/data/
@@ -37,7 +46,7 @@ boards/<ats>.parquet  one row per career site (fetch metadata and company fields
 Read it:  import duckdb; duckdb.sql("SELECT ats, count(*) FROM 'jobs/*.parquet' GROUP BY 1")
 Daily diffs, the ledger of every posting ever recorded, and the change feed: https://backend.dehnbostele.workers.dev/data/
 """
-r2 = R2(); part_size = a.part_mb << 20
+part_size = a.part_mb << 20
 class MultipartSink(io.RawIOBase):
     """A write-only file that ships every `part_size` bytes as one multipart part."""
     def __init__(self):
@@ -67,7 +76,11 @@ try:
     with tarfile.open(fileobj=sink, mode="w|") as tar:
         info = tarfile.TarInfo("open-jobs/README.txt"); data = readme.encode(); info.size = len(data); info.mtime = int(time.time()); tar.addfile(info, io.BytesIO(data))
         for sub, names in (("jobs", jobs), ("boards", boards)):
-            for f in names: tar.add(os.path.join(root, sub, f), arcname=f"open-jobs/{sub}/{f}")
+            for f in names:
+                if local: tar.add(os.path.join(root, sub, f), arcname=f"open-jobs/{sub}/{f}"); continue
+                key = f"exports/{date}/{sub}/{f}"; o = r2.client.get_object(Bucket=r2.bucket, Key=key)
+                info = tarfile.TarInfo(f"open-jobs/{sub}/{f}"); info.size = o["ContentLength"]; info.mtime = int(o["LastModified"].timestamp())
+                tar.addfile(info, o["Body"])  # streamed: the object is never on local disk
     sink.finish()
 except BaseException:
     sink.abort(); raise

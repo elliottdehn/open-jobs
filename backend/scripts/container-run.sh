@@ -21,7 +21,7 @@ case "$cmd" in
 esac
 [ -f .dev.vars ] || { echo "backend/.dev.vars missing (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, OPENAI_KEY)"; exit 1; }
 ENVARGS=(--env-file .dev.vars -e "ADMIN_TOKEN=${ADMIN_TOKEN:-$(tr -d '[:space:]' < admin_token.txt)}" -e "WORKER_URL=${WORKER_URL:-https://backend.dehnbostele.workers.dev}")
-for v in SLACK_RUN_WEBHOOK GROUPS_PREFIX ROOT_PREFIX DIFF_MEMORY FEED_DUCKDB_MEMORY ESTIMATORS_ONLY AGE_MAX_ROWS SALARY_MAX_ROWS; do [ -n "${!v:-}" ] && ENVARGS+=(-e "$v=${!v}"); done
+for v in SLACK_RUN_WEBHOOK GROUPS_PREFIX ROOT_PREFIX DIFF_MEMORY FEED_DUCKDB_MEMORY ESTIMATORS_ONLY AGE_MAX_ROWS SALARY_MAX_ROWS LOW_DISK STAGE_TO_BUCKET; do [ -n "${!v:-}" ] && ENVARGS+=(-e "$v=${!v}"); done
 DATE="$(date +%Y-%m-%d)"; ARGS=()
 while [ $# -gt 0 ]; do case "$1" in --date) DATE="$2"; shift 2;; *) ARGS+=("$1"); shift;; esac; done
 mem=$("$DOCKER" info --format '{{.MemTotal}}' 2>/dev/null || echo 0)

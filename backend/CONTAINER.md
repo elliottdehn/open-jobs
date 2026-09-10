@@ -109,6 +109,14 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
 - **Secrets:** `ADMIN_TOKEN` (Worker admin endpoints for `/export` and the vanished-board check),
   R2 S3 credentials scoped to `jobscream-data`, `OPENAI_KEY` only for `build-location-table.py`
   (it embeds new location strings; pennies).
+- **Fitting Cloudflare's largest instance (standard-4: 4 vCPU, 12 GiB, 20 GB disk).** Memory fits today's tree build
+  (~10 GB peak). Disk did not: the vector memmap was written twice (~19 GB), pass 2 staged ~30 GB locally, and the
+  parquet stage left a 13+ GB local export copy. Now: the memmap is written once, in key order, straight from a
+  DuckDB join (no sorted copy); `STAGE_TO_BUCKET=1` sends pass 2's staging to `tmp/` in the bucket and deletes it after;
+  `LOW_DISK=1` makes the parquet stage drop each local file once uploaded (the end-of-run dedup and the archive read
+  the bucket instead; the estimators already fall back to the bucket when there is no local copy). Both env flags
+  are opt-in: the laptop run keeps local disk. Untested in the cloud as of 2026-09-10; test with a scratch
+  ROOT_PREFIX/GROUPS_PREFIX first.
 - **Resuming across midnight.** `scripts/container-run.sh from <stage> --date <run date>`: the date is fixed once for
   the remaining stages. Running stages one by one after midnight without `--date` targets the new day (a different
   work dir and lock holder), which the lock refuses; that is how the first night's diff was refused at 03:03.

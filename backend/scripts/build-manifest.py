@@ -72,61 +72,52 @@ N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
 D = 1536
 _xpath = os.path.join(work, f"{TMP}.vectors.f16.npy")
 if os.path.exists(_xpath): os.remove(_xpath)
-# file-backed so memory pressure evicts pages instead of killing the build (two jetsam deaths on 2026-09-05)
+# Deterministic row order without a second copy of the matrix: pass A reads only the keys and sorts them; pass B
+# joins each batch to its sorted position in DuckDB and writes every vector straight to that slot of ONE
+# file-backed float16 array. (The old load + key-sorted copy needed 2x the matrix on disk; 20 GB is all a cloud
+# container has.) Same export in, same tree out: the order is the sorted key order, whatever the scan order was.
+import pyarrow as pa, pyarrow.compute as pc
+t2 = time.time()
+Hs = con.execute(f"SELECT {HKEY} {WHERE_} ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
+if len(Hs) != N: sys.exit(f"keys {len(Hs)} != rows {N}")
+con.register("keypos", pa.table({"h": Hs, "pos": pa.array(np.arange(N, dtype=np.int64))}))
+H = Hs  # keys in row order (sorted)
 X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
-titles, locs, hints = [], [], []
+titles = [None] * N; locs = [None] * N; hints = [None] * N
 board_ids = {}; board_of = np.empty(N, dtype=np.int32)
-H = []  # key strings, as Arrow chunks (no per-row Python objects)
-pos_ = 0
-reader = con.execute(q_load).to_arrow_reader(50_000)
+seen_n = 0
+reader = con.execute(f"SELECT k.pos, j.* EXCLUDE (h) FROM ({q_load}) j JOIN keypos k USING (h)").to_arrow_reader(50_000)
 while True:
     try: b = reader.read_next_batch()
     except StopIteration: break
-    emb = b.column("embedding")
-    vals = emb.values.to_numpy(zero_copy_only=False)
-    n = len(b)
-    X[pos_:pos_ + n] = vals.reshape(n, -1)[:, :D]
-    if (pos_ // 50_000) % 8 == 7: X.flush()  # dirty file-backed pages count as footprint until written back
-    H.append(pa.array(b.column("h").to_pylist(), type=pa.string()))  # a copy: keeping the batch's own column pins the whole batch, vectors included (19 GB by the end of loading)
+    pos = b.column("pos").to_numpy(); emb = b.column("embedding")
+    vals = emb.values.to_numpy(zero_copy_only=False); n = len(b)
+    X[pos] = vals.reshape(n, -1)[:, :D]              # scattered writes into the single memmap
+    if (seen_n // 50_000) % 8 == 7: X.flush()
     for k, (a_, s_) in enumerate(zip(b.column("ats").to_pylist(), b.column("slug").to_pylist())):
-        board_of[pos_ + k] = board_ids.setdefault((a_, s_), len(board_ids))
-    titles.extend(b.column("title").to_pylist()); locs.extend(b.column("location").to_pylist()); hints.extend(b.column("company_hint").to_pylist())
-    pos_ += n
-    print(f"\r  loaded {pos_:,}/{N:,}", end="", file=sys.stderr, flush=True)
+        board_of[pos[k]] = board_ids.setdefault((a_, s_), len(board_ids))
+    for k, (ti, lo, hi) in enumerate(zip(b.column("title").to_pylist(), b.column("location").to_pylist(), b.column("company_hint").to_pylist())):
+        titles[pos[k]] = ti; locs[pos[k]] = lo; hints[pos[k]] = hi
+    seen_n += n
+    print(f"\r  loaded {seen_n:,}/{N:,}", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
-del reader
-assert pos_ == N, f"loaded {pos_} rows, expected {N}"
+del reader; con.unregister("keypos")
+assert seen_n == N, f"loaded {seen_n} rows, expected {N}"
+if any(t is None for t in titles): sys.exit("the key join lost rows")
 boards = [None] * len(board_ids)
 for k, i_ in board_ids.items(): boards[i_] = k
 del board_ids
-H = pa.chunked_array(H).combine_chunks()
-if len(H) != N: sys.exit(f"keys {len(H)} != rows {N}")
-# Clean + unit-normalize IN ROW BLOCKS: a whole-matrix np.linalg.norm materializes an X-sized x*x temp
-# (~18 GB at 3M jobs), which doubled peak memory and got this process SIGKILLed once the corpus outgrew
-# RAM. Blockwise keeps the temp at ~1 GB regardless of N.
+# Clean + unit-normalize IN ROW BLOCKS (a whole-matrix norm would materialize an X-sized temp).
 for _i in range(0, X.shape[0], 200_000):
 	_blk = X[_i:_i + 200_000]
-	np.nan_to_num(_blk, copy=False)  # a handful of rows carry NaN/inf from bad decodes; zero them
+	np.nan_to_num(_blk, copy=False)
 	_b32 = _blk.astype(np.float32)
 	_blk[:] = _b32 / (np.sqrt((_b32 * _b32).sum(axis=1, keepdims=True)) + 1e-9)
 	del _b32
 del _blk
 X.flush()
 N, D = X.shape
-# Deterministic row order: sort every per-row array by key, so the build no longer depends on parquet scan order
-# (which varies with column selection and thread count). Same export in, same tree out, run after run.
-t2 = time.time()
-import pyarrow.compute as pc
-perm = pc.sort_indices(H).to_numpy()
-H = H.take(pa.array(perm)); titles = [titles[i] for i in perm]; locs = [locs[i] for i in perm]; hints = [hints[i] for i in perm]; board_of = board_of[perm]
-_x2 = os.path.join(work, f"{TMP}.vectors.f16.sorted.npy")
-X2 = np.lib.format.open_memmap(_x2, mode="w+", dtype=np.float16, shape=(N, D))
-for _i in range(0, N, 200_000):
-    X2[_i:_i + 200_000] = X[perm[_i:_i + 200_000]]
-    if (_i // 200_000) % 4 == 3: X2.flush()
-X2.flush()
-del X; os.remove(_xpath); X = X2; _xpath = _x2; del perm
-print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted in {time.time()-t2:.0f}s)")
+print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memmap, {X.nbytes/1e9:.1f} GB on disk)")
 if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
 # company name per board from boards parquet (resolved), else slug
@@ -339,7 +330,7 @@ t = time.time()
 # Python-side copy. Output is unaffected.
 con.execute("SET memory_limit='6GB'"); con.execute("SET threads=2")
 con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
-_hall = pa.chunked_array([H] + ([HF] if M else [])).combine_chunks()
+_hall = pa.chunked_array([H.cast(pa.large_string())] + ([HF.cast(pa.large_string())] if M else [])).combine_chunks()  # DuckDB hands back large_string with arrow_large_buffer_size
 _assign = pa.table({"h": _hall.take(pa.array(order)), "pos": pa.array(np.arange(NT, dtype=np.int64))}); del _hall
 con.register("assign_src", _assign); con.execute("INSERT INTO assign SELECT h, pos FROM assign_src"); con.unregister("assign_src"); del _assign
 leaf_at = {n["lo"]: n for n in leaves}  # DFS position -> the leaf that starts there
@@ -348,7 +339,12 @@ cur = None; jobs = []; V = None; written = 0; seen_rows = 0
 # is then sorted on its own. A single ORDER BY over the whole corpus needs more buffer than the sort can spill
 # (DuckDB ran out at 5.5 GiB); sorting 250k rows at a time never does.
 import shutil
-CHUNK = 250_000; stage = os.path.join(work, f"{TMP}.stage"); shutil.rmtree(stage, ignore_errors=True)
+CHUNK = 250_000
+# STAGE_TO_BUCKET=1 (cloud container, 20 GB disk): the ~30 GB of staged rows go to a scratch prefix in the bucket and
+# are read back chunk by chunk; the prefix is deleted at the end. Local disk stays the default on the laptop.
+_bucket_stage = bool(is_s3 and r2 and os.environ.get("STAGE_TO_BUCKET") == "1")
+stage = f"s3://{r2.bucket}/tmp/{TMP}.stage" if _bucket_stage else os.path.join(work, f"{TMP}.stage")
+if not _bucket_stage: shutil.rmtree(stage, ignore_errors=True)
 con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
   TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD)""")
 print(f"  staged {NT:,} rows in {(NT + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
@@ -379,7 +375,9 @@ for b in _batches():
             written += 1; jobs = []; V = None
             if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
-shutil.rmtree(stage, ignore_errors=True)
+if _bucket_stage:
+    for k, _, _ in r2.list(f"tmp/{TMP}.stage/"): r2.delete(k)
+else: shutil.rmtree(stage, ignore_errors=True)
 if seen_rows != NT or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{NT} rows")
 if uploader:
     failed = uploader.join()
