@@ -6,7 +6,8 @@ import { EMBED_TAG, embedTexts } from "./openai";
 import { deriveCandidates } from "./company";
 import { resolveCompany, type CompanyEnrichment } from "./company";
 import { usd } from "./pricing";
-import { buildSnapshotParquet, snapshotKey } from "./snapshot";
+import { SNAPSHOT_PART_ROWS, buildSnapshotParquet, snapshotKey } from "./snapshot";
+import { HttpError } from "./ats/dark";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -52,9 +53,15 @@ const EMBED_TODO = `(embed_status IS NULL OR embed_status = 'pending' OR embed_m
  * title, location, departments, terms, full JD) so classifiers can be trained on the vector alone.
  */
 const EMBED_TEXT_CHARS = 28_000;
-/** Detail requests per alarm tick (<= DETAIL_CONCURRENCY in flight). */
-const DETAIL_BATCH = 150;
-const DETAIL_CONCURRENCY = 6;
+/**
+ * Detail fetching is paced by the site, not by us: a tick runs until its wall budget or its subrequest budget is
+ * spent, with a per-board concurrency that grows while the site answers cleanly and halves the moment it says
+ * 429/503, sends Retry-After, walls us with 403s, or times out. The board then sleeps until the site's own deadline.
+ */
+const DETAIL_TICK_WALL_MS = 50_000;     // an alarm invocation's wall budget for details (CPU stays far below the limit)
+const DETAIL_TICK_SUBREQUESTS = 800;    // under the platform's 1000 subrequests per invocation
+const DETAIL_CONC_MIN = 2, DETAIL_CONC_START = 8, DETAIL_CONC_MAX = 32;
+const DETAIL_GROW_EVERY = 25;           // clean responses before concurrency grows by half
 
 export interface BoardMeta {
 	name: string;
@@ -78,6 +85,11 @@ export interface BoardMeta {
 	companyAttemptedAt?: number | null;
 	/** Set when the embeddings API rate-limited us; the next backlog tick waits until then. */
 	embedBackoffUntil?: number | null;
+	/** Adaptive detail-fetch concurrency for this board, and the site-imposed pause (Retry-After, 429, bot wall). */
+	detailConc?: number;
+	detailBackoffUntil?: number | null;
+	/** How many snapshot part files this board last wrote (so shrinking boards delete the leftovers). */
+	snapshotParts?: number;
 	/**
 	 * Board is fetched from outside Cloudflare (provider blocks Worker IPs) and snapshots arrive via
 	 * `ingest()`. The alarm never fetches; it only drains detail/embed/enrich backlogs.
@@ -201,7 +213,7 @@ const FETCH_DETAIL_TIMEOUT_MS = 45_000;
 /** Snapshot staleness escape: write even with a pending embed backlog after this long dirty. */
 const SNAPSHOT_STALE_MS = 48 * 60 * 60 * 1000;
 /** Boards with more open jobs than this skip snapshotting (isolate memory); they're aggregator-shaped anyway. */
-const SNAPSHOT_MAX_JOBS = 15_000;
+const SNAPSHOT_MAX_JOBS = 400_000; // 80 parts of SNAPSHOT_PART_ROWS; beyond this something is wrong with the board
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 	let t: ReturnType<typeof setTimeout>;
@@ -393,6 +405,7 @@ export class Board extends DurableObject<Env> {
 		if (backlog) {
 			let tick = Date.now() + MINUTE;
 			if (meta.embedBackoffUntil && meta.embedBackoffUntil > tick) tick = meta.embedBackoffUntil;
+			if (meta.detailBackoffUntil && meta.detailBackoffUntil > tick && this.pendingDetailCount() > 0) tick = Math.max(tick, meta.detailBackoffUntil);
 			at = Math.min(at, tick);
 		}
 		if (meta.snapshotDirty && meta.snapshotRetryAt) at = Math.min(at, meta.snapshotRetryAt);
@@ -654,54 +667,81 @@ export class Board extends DurableObject<Env> {
 	}
 
 	/**
-	 * Fetch full postings for jobs whose listing lacked a description (providers with fetchDetail).
-	 * One batch per tick, once per job; `error` rows are retried after a day. Rows with NULL
-	 * status predate this stage and are treated as pending.
+	 * Fetch full postings for jobs whose listing lacked a description (providers with fetchDetail). Once per job;
+	 * `error` rows are retried after a day; NULL status predates this stage and counts as pending. Pacing is
+	 * adaptive (see DETAIL_* above): as hard as the site allows, backing off on its signals.
 	 */
 	private async runDetails(meta: BoardMeta): Promise<void> {
 		const fetcher = fetchers[meta.ats];
 		if (!fetcher?.fetchDetail) return;
-		const now = Date.now();
-		const rows = this.ctx.storage.sql
-			.exec<JobRow>(
-				`SELECT * FROM jobs WHERE removed_at IS NULL
-				   AND (detail_status = 'pending' OR detail_status IS NULL OR (detail_status = 'error' AND detail_fetched_at < ?))
-				 ORDER BY first_seen_at LIMIT ?`,
-				now - DAY,
-				DETAIL_BATCH,
-			)
-			.toArray();
-		if (rows.length === 0) return;
-		const queue = [...rows];
-		const worker = async () => {
-			for (;;) {
-				const r = queue.shift();
-				if (!r) return;
-				const job = JSON.parse(r.data) as Job;
-				if ((job.content ?? "").length >= DETAIL_MIN_CONTENT) {
-					this.ctx.storage.sql.exec(`UPDATE jobs SET detail_status = 'na' WHERE id = ?`, r.id);
-					continue;
+		if (meta.detailBackoffUntil && meta.detailBackoffUntil > Date.now()) return; // the site asked us to wait
+		const start = Date.now(); const deadline = start + DETAIL_TICK_WALL_MS;
+		let conc = Math.min(DETAIL_CONC_MAX, Math.max(DETAIL_CONC_MIN, meta.detailConc ?? DETAIL_CONC_START));
+		let used = 0, okStreak = 0, walls = 0, timeouts = 0, stop: string | null = null;
+		const backoff = (ms: number, why: string) => { conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2)); meta.detailBackoffUntil = Date.now() + ms; stop = why; };
+		while (!stop && Date.now() < deadline && used < DETAIL_TICK_SUBREQUESTS) {
+			const rows = this.ctx.storage.sql
+				.exec<JobRow>(
+					`SELECT * FROM jobs WHERE removed_at IS NULL
+					   AND (detail_status = 'pending' OR detail_status IS NULL OR (detail_status = 'error' AND detail_fetched_at < ?))
+					 ORDER BY first_seen_at LIMIT ?`,
+					start - DAY,
+					Math.min(conc * 4, DETAIL_TICK_SUBREQUESTS - used),
+				)
+				.toArray();
+			if (rows.length === 0) break;
+			const queue = [...rows];
+			const worker = async () => {
+				for (;;) {
+					if (stop || Date.now() >= deadline) return;
+					const r = queue.shift();
+					if (!r) return;
+					const job = JSON.parse(r.data) as Job;
+					if ((job.content ?? "").length >= DETAIL_MIN_CONTENT) {
+						this.ctx.storage.sql.exec(`UPDATE jobs SET detail_status = 'na' WHERE id = ?`, r.id);
+						continue;
+					}
+					used++;
+					try {
+						const d = await withTimeout(fetcher.fetchDetail!(meta.slug, job), FETCH_DETAIL_TIMEOUT_MS, `fetchDetail ${meta.name}/${r.id}`);
+						this.ctx.storage.sql.exec(
+							`UPDATE jobs SET detail_status = ?, detail = ?, detail_error = NULL, detail_fetched_at = ? WHERE id = ?`,
+							d ? "done" : "na",
+							d ? JSON.stringify(d) : null,
+							Date.now(),
+							r.id,
+						);
+						walls = 0; timeouts = 0;
+						if (++okStreak % DETAIL_GROW_EVERY === 0 && conc < DETAIL_CONC_MAX) conc = Math.min(DETAIL_CONC_MAX, Math.ceil(conc * 1.5));
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						const status = e instanceof HttpError ? e.status : 0;
+						okStreak = 0;
+						if (status === 429 || status === 503 || status === 502 || status === 504) {
+							// the site is pacing us: leave the row pending, halve, and sleep until Retry-After (or a minute, doubling per wall)
+							const ra = Number(/retry-after=(\d+)/.exec(msg)?.[1]);
+							backoff(Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 15 * MINUTE) : Math.min(15 * MINUTE, MINUTE * 2 ** Math.min(4, ++walls)), `HTTP ${status}`);
+							return;
+						}
+						if (status === 403 || status === 401) {
+							if (++walls >= 5) { backoff(HOUR, `bot wall (${walls} x HTTP ${status})`); return; } // a run of 403s is a wall, not a page
+						} else if (/timed out|timeout/i.test(msg)) {
+							if (++timeouts >= 5) { backoff(10 * MINUTE, `${timeouts} timeouts`); return; }
+							conc = Math.max(DETAIL_CONC_MIN, Math.floor(conc / 2)); // load, not a wall: ease off, keep going
+						}
+						this.ctx.storage.sql.exec(
+							`UPDATE jobs SET detail_status = 'error', detail_error = ?, detail_fetched_at = ? WHERE id = ?`,
+							msg,
+							Date.now(),
+							r.id,
+						);
+					}
 				}
-				try {
-					const d = await withTimeout(fetcher.fetchDetail!(meta.slug, job), FETCH_DETAIL_TIMEOUT_MS, `fetchDetail ${meta.name}/${r.id}`);
-					this.ctx.storage.sql.exec(
-						`UPDATE jobs SET detail_status = ?, detail = ?, detail_error = NULL, detail_fetched_at = ? WHERE id = ?`,
-						d ? "done" : "na",
-						d ? JSON.stringify(d) : null,
-						Date.now(),
-						r.id,
-					);
-				} catch (e) {
-					this.ctx.storage.sql.exec(
-						`UPDATE jobs SET detail_status = 'error', detail_error = ?, detail_fetched_at = ? WHERE id = ?`,
-						e instanceof Error ? e.message : String(e),
-						Date.now(),
-						r.id,
-					);
-				}
-			}
-		};
-		await Promise.all(Array.from({ length: DETAIL_CONCURRENCY }, worker));
+			};
+			await Promise.all(Array.from({ length: Math.min(conc, queue.length) }, worker));
+		}
+		meta.detailConc = conc;
+		if (stop) meta.lastError = `details paused: ${stop}; concurrency now ${conc}`;
 	}
 
 	private pendingCount(): number {
@@ -993,7 +1033,8 @@ export class Board extends DurableObject<Env> {
 		const nRuns24h = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM runs WHERE run_at > ?`, Date.now() - 86_400_000).one().n;
 		const jobs = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
 		const embedErrors = this.ctx.storage.sql.exec(`SELECT embed_status, substr(embed_error, 1, 160) AS err, COUNT(*) AS n, MAX(length(data)) AS max_data FROM jobs WHERE removed_at IS NULL AND embed_status != 'done' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 6`).toArray();
-		return { embedErrors, meta, nRuns24h, jobs, pendingDetail: this.pendingDetailCount(), pendingEmbed: this.pendingEmbedCount(), pendingEnrich: this.pendingCount(), alarm: await this.ctx.storage.getAlarm(), runs };
+		const detailErrors = this.ctx.storage.sql.exec(`SELECT detail_status, substr(detail_error, 1, 90) AS err, COUNT(*) AS n FROM jobs WHERE removed_at IS NULL GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 8`).toArray();
+		return { detailErrors, embedErrors, meta, nRuns24h, jobs, pendingDetail: this.pendingDetailCount(), pendingEmbed: this.pendingEmbedCount(), pendingEnrich: this.pendingCount(), alarm: await this.ctx.storage.getAlarm(), runs };
 	}
 
 	/** Diagnostic: metered rows written per statement shape, on a scratch row (temporary). */
@@ -1143,23 +1184,30 @@ export class Board extends DurableObject<Env> {
 			const open = this.ctx.storage.sql
 				.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
 			if (open === 0) {
-				// no current openings: remove the object so consolidation doesn't see a stale board
-				await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug));
+				// no current openings: remove the object(s) so consolidation doesn't see a stale board
+				for (let p = 0; p < Math.max(1, meta.snapshotParts ?? 1); p++) await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug, p));
+				meta.snapshotParts = 0;
 			} else if (open > SNAPSHOT_MAX_JOBS) {
 				meta.snapshotError = `snapshot skipped: ${open} open jobs > ${SNAPSHOT_MAX_JOBS}`;
 				meta.snapshotAt = now; meta.snapshotDirty = false; meta.dirtySince = null;
 				return;
 			} else {
-				const cursor = this.ctx.storage.sql.exec(`SELECT * FROM jobs WHERE removed_at IS NULL`);
-				function* rows(): Iterable<StoredJob & { embeddingBuf?: ArrayBuffer | null }> {
-					for (const r of cursor) {
-						const j = rowToJob(r as unknown as JobRow, false, meta.lastOkAt ?? 0) as StoredJob & { embeddingBuf?: ArrayBuffer | null };
-						j.embeddingBuf = (r as unknown as JobRow).embedding ?? null;
-						yield j;
+				// parts of SNAPSHOT_PART_ROWS rows, each built and uploaded on its own so peak memory is one part
+				const parts = Math.ceil(open / SNAPSHOT_PART_ROWS);
+				for (let p = 0; p < parts; p++) {
+					const cursor = this.ctx.storage.sql.exec(`SELECT * FROM jobs WHERE removed_at IS NULL ORDER BY id LIMIT ? OFFSET ?`, SNAPSHOT_PART_ROWS, p * SNAPSHOT_PART_ROWS);
+					function* rows(): Iterable<StoredJob & { embeddingBuf?: ArrayBuffer | null }> {
+						for (const r of cursor) {
+							const j = rowToJob(r as unknown as JobRow, false, meta.lastOkAt ?? 0) as StoredJob & { embeddingBuf?: ArrayBuffer | null };
+							j.embeddingBuf = (r as unknown as JobRow).embedding ?? null;
+							yield j;
+						}
 					}
+					const buf = buildSnapshotParquet({ ats: meta.ats, slug: meta.slug, jobs: rows(), meta });
+					await this.env.DATA.put(snapshotKey(meta.ats, meta.slug, p), buf);
 				}
-				const buf = buildSnapshotParquet({ ats: meta.ats, slug: meta.slug, jobs: rows(), meta });
-				await this.env.DATA.put(snapshotKey(meta.ats, meta.slug), buf);
+				for (let p = parts; p < (meta.snapshotParts ?? 1); p++) await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug, p)); // the board shrank
+				meta.snapshotParts = parts;
 			}
 			meta.snapshotAt = now; meta.snapshotDirty = false; meta.dirtySince = null; meta.snapshotError = null;
 		} catch (e) {
@@ -1195,7 +1243,7 @@ export class Board extends DurableObject<Env> {
 		const meta = await this.meta();
 		if (meta) {
 			meta.jobCount = 0; meta.snapshotAt = null; meta.snapshotDirty = false; meta.dirtySince = null;
-			try { await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug)); } catch { /* best effort */ }
+			try { for (let p = 0; p < Math.max(1, meta.snapshotParts ?? 1); p++) await this.env.DATA.delete(snapshotKey(meta.ats, meta.slug, p)); } catch { /* best effort */ }
 			await this.ctx.storage.put("meta", meta);
 		}
 		return { wiped: n };

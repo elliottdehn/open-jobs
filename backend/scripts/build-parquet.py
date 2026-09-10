@@ -229,13 +229,17 @@ for src in (snap_dirs or snap_r2):
     kv = con.execute(f"SELECT file_name, decode(value) FROM parquet_kv_metadata('{pq}') WHERE decode(key) = 'board_meta'").fetchall()
     counts = dict(con.execute(f"SELECT filename, count(*) FROM read_parquet('{pq}', filename=true) GROUP BY 1").fetchall())
     bl = os.path.join(tmp, f"{ats}.boards.jsonl")
+    # a big board is written as parts (<slug>.parquet, <slug>.p1.parquet, ...), each with the same board_meta in its
+    # footer: one boards row per slug, exported_jobs summed over its parts
+    per_slug = {}
+    for fn, meta_json in kv:
+        try: meta = json.loads(meta_json)
+        except Exception: meta = None
+        if not isinstance(meta, dict): continue
+        row = per_slug.setdefault(meta.get("slug"), {"ats": ats, "slug": meta.get("slug"), "meta": meta, "exported_jobs": 0, "error": None})
+        row["exported_jobs"] += counts.get(fn, 0)
     with open(bl, "w") as bo:
-        for fn, meta_json in kv:
-            try: meta = json.loads(meta_json)
-            except Exception: meta = None
-            if not isinstance(meta, dict): continue
-            bo.write(json.dumps({"ats": ats, "slug": meta.get("slug"), "meta": meta,
-                                 "exported_jobs": counts.get(fn, 0), "error": None}) + "\n")
+        for row in per_slug.values(): bo.write(json.dumps(row) + "\n")
     bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
     # union_by_name: snapshot files are written over months and a board whose snapshot predates a schema change has
     # its columns in another order; a positional read then decodes a binary column as text (dark, 2026-09-09).

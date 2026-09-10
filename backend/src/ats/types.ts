@@ -46,7 +46,8 @@ export interface AtsFetcher {
 	fetchJobsStream?(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }>;
 	/**
 	 * Optional: fetch the full posting for one job (providers whose listing has no description).
-	 * Called once per new job by the Board (never repeated), with <= 6 in flight per board.
+	 * Called once per new job by the Board (never repeated); concurrency per board is adaptive (2..32),
+	 * driven by the site's responses. Throw dark.HttpError with the status so 429/503/403 back the board off.
 	 * Return null if the posting is unavailable (job likely closed); throw on transient errors.
 	 */
 	fetchDetail?(slug: string, job: Job): Promise<JobDetail | null>;

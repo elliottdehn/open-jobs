@@ -16,8 +16,9 @@ import { fetchRetry } from "./http.ts";
  * a static probe confirms.
  */
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) open-jobs-crawler/0.1 (+github.com/elliottdehn/open-jobs)";
-const MAX_JOBS = 3000;
-const MAX_SITEMAPS = 25; // sub-sitemaps followed per board
+const PAGE = 500;              // job URLs per streamed page (the Board applies each page to SQLite as it arrives)
+const MAX_SITEMAPS = 400;      // sitemaps followed per board (an aggregator index can list hundreds)
+const MAX_URLS = 250_000;      // hard safety on one board; the Board keeps one id per row in memory for the diff
 // Static/asset URLs that pattern-match a job path (career.css, /feed/, bundle.js) but aren't jobs.
 const ASSET = /\.(css|js|mjs|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|pdf|xml|json|rss|zip|mp4|webm)(\?|#|$)/i;
 // A job DETAIL url: a job/career/vacancy segment followed by a slug or id (excludes bare landings and
@@ -33,52 +34,73 @@ function locs(xml: string): string[] {
 	return out;
 }
 
-/** Collect current job-page URLs from the host's sitemaps (index → sub-sitemaps → job URLs). */
-async function discover(slug: string): Promise<string[]> {
+/** Sitemap body as text; .gz sitemaps (common on big boards) are decompressed on the fly. */
+async function sitemapText(res: Response, url: string): Promise<string> {
+	const gz = /\.gz(\?|$)/i.test(url) || /gzip/i.test(res.headers.get("content-type") ?? "") || /gzip/i.test(res.headers.get("content-encoding") ?? "");
+	if (gz && res.body && !(res.headers.get("content-encoding") ?? "").includes("gzip")) {
+		try { return await new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).text(); } catch { return ""; }
+	}
+	return res.text();
+}
+const isSitemapUrl = (u: string) => /\.xml($|\?|\.gz)/i.test(u);
+
+/**
+ * Stream the host's current job-page URLs to `sink` in pages as they are found, never holding the whole
+ * list: sitemap index -> sub-sitemaps (one more level of index allowed) -> job URLs. No cap on jobs; the
+ * only bounds are MAX_SITEMAPS and MAX_URLS, sized for aggregators, not employers. Returns the count.
+ */
+async function discoverStream(slug: string, sink: (urls: string[]) => Promise<void>): Promise<number> {
 	const roots = new Set<string>();
 	for (const p of ["/robots.txt", "/sitemap.xml", "/sitemap_index.xml", "/job-sitemap.xml", "/sitemaps/jobs.xml"]) {
 		try {
 			const res = await fetchRetry(`https://${slug}${p}`, { headers: { "user-agent": UA } });
 			if (!res.ok) continue;
-			const body = await res.text();
+			const body = await sitemapText(res, p);
 			if (p === "/robots.txt") for (const m of body.matchAll(/(?:^|\n)\s*sitemap:\s*(\S+)/gi)) roots.add(m[1].trim());
 			else for (const u of locs(body)) roots.add(u);
 		} catch { /* ignore */ }
 	}
-	const jobs = new Set<string>();
-	const subs = [...roots].filter((u) => JOB_SITEMAP.test(u) && /\.xml($|\?|\.gz)/i.test(u));
-	const toScan = (subs.length ? subs : [...roots].filter((u) => /\.xml($|\?)/i.test(u))).slice(0, MAX_SITEMAPS);
-	// any job URLs already listed directly in the roots
-	for (const u of roots) if (isJobUrl(u)) jobs.add(u);
-	for (const sm of toScan) {
-		if (jobs.size >= MAX_JOBS) break;
+	let total = 0; let page: string[] = [];
+	const emit = async (u: string) => { page.push(u); total++; if (page.length >= PAGE) { const p = page; page = []; await sink(p); } };
+	for (const u of roots) if (isJobUrl(u)) await emit(u);
+	const subs = [...roots].filter((u) => JOB_SITEMAP.test(u) && isSitemapUrl(u));
+	const queue = (subs.length ? subs : [...roots].filter(isSitemapUrl));
+	const scanned = new Set<string>();
+	while (queue.length && scanned.size < MAX_SITEMAPS && total < MAX_URLS) {
+		const sm = queue.shift()!;
+		if (scanned.has(sm)) continue;
+		scanned.add(sm);
 		try {
 			const res = await fetchRetry(sm, { headers: { "user-agent": UA } });
 			if (!res.ok) continue;
-			for (const u of locs(await res.text())) if (isJobUrl(u)) jobs.add(u);
+			const body = await sitemapText(res, sm);
+			const isIndex = /<sitemapindex/i.test(body);
+			for (const u of locs(body)) {
+				if (isIndex && isSitemapUrl(u)) { if (subs.length === 0 || JOB_SITEMAP.test(u) || !/\b(page|post|blog|news|categor|tag)/i.test(u)) queue.push(u); }
+				else if (isJobUrl(u)) { await emit(u); if (total >= MAX_URLS) break; }
+			}
 		} catch { /* ignore */ }
 	}
 	// Discovery fallback: many sites list jobs only in the careers-page HTML, not in a sitemap. When the
 	// sitemap pass came up short, harvest job-shaped links straight from the careers landing pages.
-	if (jobs.size < 3) {
+	if (total < 3) {
 		for (const p of ["/careers", "/jobs", "/", "/en/careers", "/karriere", "/careers/jobs", "/join-us"]) {
-			if (jobs.size >= MAX_JOBS) break;
 			try {
 				const res = await fetchRetry(`https://${slug}${p}`, { headers: { "user-agent": UA } });
 				if (!res.ok) continue;
 				const html = await res.text();
 				for (const m of html.matchAll(/<a[^>]+href=["']([^"'#]+)["']/gi)) {
 					if (!isJobUrl(m[1])) continue;
-					try { jobs.add(new URL(m[1], `https://${slug}${p}`).href.replace(/#.*$/, "")); } catch { /* skip bad href */ }
+					try { await emit(new URL(m[1], `https://${slug}${p}`).href.replace(/#.*$/, "")); } catch { /* skip bad href */ }
 				}
-				if (jobs.size >= 3) break; // a landing page that yielded links is enough
+				if (total >= 3) break; // a landing page that yielded links is enough
 			} catch { /* ignore */ }
 		}
 	}
-	return [...jobs].slice(0, MAX_JOBS);
+	if (page.length) await sink(page);
+	return total;
 }
 
-/** Title guess from a job URL slug, used until fetchDetail supplies the real one. */
 function titleFromUrl(u: string): string {
 	try {
 		const seg = new URL(u).pathname.split("/").filter(Boolean).pop() ?? "";
@@ -145,28 +167,42 @@ function locationOf(d: JobPostingLD): string | null {
 	return null;
 }
 
+const toJob = (u: string): Job => ({
+	id: u.replace(/^https?:\/\//, "").replace(/[#?].*$/, ""), // stable per job URL
+	title: titleFromUrl(u),
+	location: null,
+	url: u,
+	departments: [],
+	publishedAt: null,
+	updatedAt: null,
+	content: null, // the JobPosting JSON-LD arrives via fetchDetail
+	raw: null,
+});
+
+/** Error carrying the HTTP status so the Board's detail loop can tell "back off" (429/503) from "gone" (404). */
+export class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
+
 export const dark: AtsFetcher = {
+	/** Non-streaming variant (ingest path, tests): collects what the stream yields. */
 	async fetchJobs(slug: string): Promise<FetchResult> {
-		const urls = await discover(slug);
-		if (!urls.length) return { status: "gone" }; // no sitemap job URLs: not a static-crawlable board
-		const jobs: Job[] = urls.map((u) => ({
-			id: u.replace(/^https?:\/\//, "").replace(/[#?].*$/, ""), // stable per job URL
-			title: titleFromUrl(u),
-			location: null,
-			url: u,
-			departments: [],
-			publishedAt: null,
-			updatedAt: null,
-			content: null, // the JobPosting JSON-LD arrives via fetchDetail
-			raw: null,
-		}));
+		const jobs: Job[] = [];
+		const n = await discoverStream(slug, async (urls) => { for (const u of urls) jobs.push(toJob(u)); });
+		if (!n) return { status: "gone" }; // no sitemap job URLs: not a static-crawlable board
 		return { status: "ok", jobs };
 	},
 
+	/** Streaming: each page of URLs goes to the Board as soon as a sitemap yields it. */
+	async fetchJobsStream(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }> {
+		const n = await discoverStream(slug, async (urls) => sink(urls.map(toJob)));
+		return n ? { status: "ok" } : { status: "gone" };
+	},
+
 	async fetchDetail(_slug: string, job: Job): Promise<JobDetail | null> {
-		const res = await fetchRetry(job.url, { headers: { "user-agent": UA } });
+		// One attempt, no internal retry: the Board's detail loop owns pacing and backs the whole board off on
+		// 429/503/Retry-After, which is cheaper than every worker sleeping through its own retry ladder.
+		const res = await fetchRetry(job.url, { headers: { "user-agent": UA } }, 1);
 		if (res.status === 404 || res.status === 410) return null;
-		if (!res.ok) throw new Error(`dark job page HTTP ${res.status}`);
+		if (!res.ok) { await res.body?.cancel(); throw new HttpError(res.status, `dark job page HTTP ${res.status}` + (res.headers.get("retry-after") ? ` retry-after=${res.headers.get("retry-after")}` : "")); }
 		const d = findJobPosting(await res.text());
 		if (!d || !d.description) return null; // no JobPosting markup on this page (SPA/removed): drop it
 		const content = decodeEntities(d.description);

@@ -119,6 +119,16 @@ Registry sweeps / DOs. Each file's header comment documents endpoints, paginatio
 Registered providers: 36 (`src/boards.json`, 114k slugs); `localOnlyAts` (`jobscore`, `governmentjobs`)
 are fetched from the laptop and ingested, the other 34 by the fleet.
 
+
+**`dark` (crawled career sites and job boards, `src/ats/dark.ts`).** Discovery streams a site's job-page URLs
+from its sitemaps (index, one more level of index, `.gz` allowed) to the Board in pages of 500; the Board applies
+each page to SQLite as it arrives, so nothing but one id per row is held in memory. No cap on jobs per board
+(safety: 400 sitemaps, 250k URLs). Details, one page fetch per posting, are paced by the site: a tick runs to a
+50 s wall budget or 800 subrequests with a per-board concurrency that starts at 8, grows by half every 25 clean
+responses up to 32, halves on a timeout, and on 429/503/Retry-After or a run of 403s leaves the rows pending and
+sleeps the whole board until the site's deadline (`meta.detailBackoffUntil`, `meta.detailConc`). Until 2026-09-10
+discovery stopped at 3,000 URLs and details ran 150 per minute; the 2,383 boards the aggregator guard drops were
+truncated by that cap.
 ### Board (company) enrichment (`src/company.ts`, `src/openai.ts`)
 Identifies the company behind a board — name, homepage, careers/LinkedIn URLs, HQ, industry,
 staffing-agency flag, size — with one OpenAI **Responses API** call using **Structured Outputs**
@@ -179,6 +189,9 @@ of cache), rebuilt nightly:
 - `centroids.bin` — float16 `[nodes × dims]` unit centroids, same order as `manifest.tree`; a client
   walks the tree with byte-range reads (each subtree is contiguous in DFS order) instead of
   downloading the 69 MB file.
+- `snapshots/<ats>/<slug>.parquet` (+ `<slug>.p1.parquet`, ... for boards over 5,000 open jobs; each part built
+  and uploaded on its own so a 100k-posting aggregator fits the object's memory) — per-board snapshots the
+  parquet stage reads under the snapshot freeze.
 - `groups/<date>/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen, pub,
   jd text ≤ 4k chars, enrichment and company when known) with exact float32 embeddings (`v`, base64
   little-endian). Three copies live in the bucket: this build's dated prefix (named in the manifest's

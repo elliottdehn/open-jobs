@@ -87,6 +87,9 @@ export function buildSnapshotParquet(src: SnapshotSource): Uint8Array {
 }
 
 /** R2 object key for a board's snapshot (slug URI-encoded: slugs can contain '/', ':', unicode). */
-export function snapshotKey(ats: string, slug: string): string {
-	return `snapshots/${ats}/${encodeURIComponent(slug)}.parquet`;
+/** Rows per snapshot file. A board bigger than this is written as parts (`<slug>.parquet`, `<slug>.p1.parquet`, ...),
+ *  each built in memory on its own, so an aggregator with 100k postings fits the object's 128 MB. Readers glob. */
+export const SNAPSHOT_PART_ROWS = 5000;
+export function snapshotKey(ats: string, slug: string, part = 0): string {
+	return `snapshots/${ats}/${encodeURIComponent(slug)}${part ? `.p${part}` : ""}.parquet`;
 }
