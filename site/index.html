@@ -1100,8 +1100,9 @@ function makeLocparse(L) {
     const K = 'open-jobs-fresh-at', dlg = $('#fresh');
     if (!dlg || typeof dlg.showModal !== 'function') return;
     let last = 0; try { last = Number(localStorage.getItem(K) || 0); } catch {}
-    if (Date.now() - last < 86400e3) return;
     const stamp = () => { try { localStorage.setItem(K, String(Date.now())); } catch {} };
+    if (!last) { stamp(); return; }                 // first visit: nothing to refresh yet, just start the clock
+    if (Date.now() - last < 86400e3) return;
     $('#fresh-ok').addEventListener('click', () => { stamp(); dlg.close(); });
     dlg.addEventListener('close', stamp);
     dlg.showModal();
