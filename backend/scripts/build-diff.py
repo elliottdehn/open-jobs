@@ -160,10 +160,23 @@ part_hashes = {os.path.basename(f): sha256_of(f) for f in parts}
 lite_hashes = {os.path.basename(f): sha256_of(f) for f in lparts}
 content_sha256 = hashlib.sha256("\n".join(f"{k} {v}" for k, v in sorted(part_hashes.items())).encode()).hexdigest()
 parent = None
-for cand in sorted(glob.glob(os.path.join(a.out, f"*__{pd}.json"))):
+cands = sorted(glob.glob(os.path.join(a.out, f"*__{pd}.json")))
+if cands:
+    cand = cands[-1]
+    pj = json.load(open(cand)); parent = {"diff": os.path.basename(cand)[:-5], "content_sha256": pj.get("content_sha256")}
+else:
+    # a fresh volume (the container) has no local sidecars: the previous diff lives in the bucket. A diff without
+    # its parent link breaks the chain for every mirror (2026-09-10: the feed refused to build on it).
     try:
-        pj = json.load(open(cand)); parent = {"diff": os.path.basename(cand)[:-5], "content_sha256": pj.get("content_sha256")}
-    except Exception: pass
+        from r2 import R2
+        r2 = R2(); keys = sorted(k for k, _, _ in r2.list("diffs/") if k.endswith(f"__{pd}.json") and k.count("/") == 1)
+        if keys:
+            import io
+            pj = json.load(io.BytesIO(r2.client.get_object(Bucket=r2.bucket, Key=keys[-1])["Body"].read()))
+            parent = {"diff": keys[-1].split("/")[-1][:-5], "content_sha256": pj.get("content_sha256")}
+            print(f"parent diff from the bucket: {parent['diff']}", flush=True)
+    except Exception as e:
+        print(f"WARNING: could not find the parent diff for {pd} locally or in the bucket ({e}); the sidecar will have parent=null", flush=True)
 
 n_new_final = n_new + counts["carried"]
 ok_to_prune = n_new_final >= 0.9 * n_old and counts["removed"] <= 0.15 * n_old
