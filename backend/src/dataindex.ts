@@ -28,6 +28,7 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 		json(env, "ledger/index.json"), json(env, "diffs/index.json"), json(env, "changes/latest.json"),
 		env.DATA.head("manifest.json"), env.DATA.list({ prefix: "exports/", delimiter: "/" }),
 	]);
+	const archive = await env.DATA.head("exports/open-jobs-latest.tar"); // the one-link download, rebuilt nightly
 	const days = exportDays.delimitedPrefixes.map((p) => p.slice("exports/".length, -1)).sort();
 	const head: string = days.includes(diffs?.head) ? diffs.head : days.at(-1) ?? "";
 	const [jobs, boards] = head ? await Promise.all([listFiles(env, `exports/${head}/jobs/`), listFiles(env, `exports/${head}/boards/`)]) : [[], []];
@@ -88,7 +89,9 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 <section id="download">
 <p class="eyebrow">01 / Start here</p>
 <h2>Take a copy.</h2>
-<pre class="hero"><span class="ln">1</span>git clone ${REPO}
+${archive ? `<a class="dl-all" href="/data/exports/open-jobs-latest.tar" download><b>Download everything</b><span>one .tar, ${gb(archive.size)}: every open posting with text, vectors, and company fields, as parquet. Resumes if interrupted.</span></a>
+<p class="soft">Or with the tools, which also give you a query shell over it:</p>
+` : ""}<pre class="hero"><span class="ln">1</span>git clone ${REPO}
 <span class="ln">2</span>cd open-jobs
 <span class="ln">3</span>uv run tools/jobs.py export</pre>
 <p class="soft">Needs <a href="https://docs.astral.sh/uv/">uv</a>, one line to install: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code> (or <code>brew install uv</code>; on Windows <code>winget install astral-sh.uv</code>).</p>

@@ -103,6 +103,11 @@ tbody tr:nth-child(even) { background: #fafcf8; }
 tbody tr:hover { background: #eff5e9; }
 td.n, th.n { text-align: right; }
 td a { font-family: var(--mono); font-size: 12px; }
+.dl-all { display: block; margin: 14px 0 6px; padding: 16px 20px; border: 2px solid var(--acc); border-radius: 8px; background: var(--paper); color: var(--ink); text-decoration: none; }
+.dl-all:hover { background: var(--panel); text-decoration: none; }
+.dl-all b { display: block; font-size: 18px; margin-bottom: 4px; }
+.dl-all b:before { content: '↓ '; color: var(--acc); }
+.dl-all span { color: var(--soft); font-size: 14px; line-height: 1.5; }
 .dls { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-top: 14px; }
 .dls .dl { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 9px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); text-decoration: none; color: var(--ink); }
 .dls .dl:hover { border-color: var(--acc); text-decoration: none; }

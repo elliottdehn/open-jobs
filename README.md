@@ -131,6 +131,12 @@ Design and the daily workflow: [`backend/DOCS.md`](backend/DOCS.md). Enrichment 
 
 ## Take the data
 
+**One link:** [open-jobs-latest.tar](https://backend.dehnbostele.workers.dev/data/exports/open-jobs-latest.tar), about 13 GB, every open posting with
+its full description, a 1536-dim embedding, and company fields, as one parquet file per applicant tracking
+system, rebuilt nightly. Resumes if interrupted.
+
+**Or three commands,** which also give you a query shell over it:
+
 ```
 git clone https://github.com/elliottdehn/open-jobs
 cd open-jobs
