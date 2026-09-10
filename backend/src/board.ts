@@ -403,13 +403,13 @@ export class Board extends DurableObject<Env> {
 	private async arm(meta: BoardMeta): Promise<void> {
 		let at = meta.nextFetchAt ?? Date.now();
 		const backlog =
-			(this.autoEnrich() && this.pendingCount() > 0) ||
-			(this.autoEmbed() && this.pendingEmbedCount() > 0) ||
-			(fetchers[meta.ats]?.fetchDetail && this.pendingDetailCount() > 0);
+			(this.autoEnrich() && this.hasPending(`enrich_status = 'pending' AND removed_at IS NULL`)) ||
+			(this.autoEmbed() && this.hasPending(`removed_at IS NULL AND ${EMBED_TODO} AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`, EMBED_TAG, Date.now() - DAY)) ||
+			(!!fetchers[meta.ats]?.fetchDetail && this.hasPending(`removed_at IS NULL AND (detail_status = 'pending' OR detail_status IS NULL)`));
 		if (backlog) {
 			let tick = Date.now() + MINUTE;
 			if (meta.embedBackoffUntil && meta.embedBackoffUntil > tick) tick = meta.embedBackoffUntil;
-			if (meta.detailBackoffUntil && meta.detailBackoffUntil > tick && this.pendingDetailCount() > 0) tick = Math.max(tick, meta.detailBackoffUntil);
+			if (meta.detailBackoffUntil && meta.detailBackoffUntil > tick) tick = meta.detailBackoffUntil; // the site asked us to wait
 			at = Math.min(at, tick);
 		}
 		if (meta.snapshotDirty && meta.snapshotRetryAt) at = Math.min(at, meta.snapshotRetryAt);
@@ -663,6 +663,11 @@ export class Board extends DurableObject<Env> {
 		);
 	}
 
+	/** Is there at least one row matching `where`? One index probe instead of a COUNT over the whole backlog. */
+	private hasPending(where: string, ...params: SqlStorageValue[]): boolean {
+		return this.ctx.storage.sql.exec<{ x: number }>(`SELECT 1 AS x FROM jobs WHERE ${where} LIMIT 1`, ...params).toArray().length > 0;
+	}
+
 	private pendingDetailCount(): number {
 		return this.ctx.storage.sql
 			.exec<{ n: number }>(
@@ -689,7 +694,7 @@ export class Board extends DurableObject<Env> {
 				.exec<JobRow>(
 					`SELECT * FROM jobs WHERE removed_at IS NULL
 					   AND (detail_status = 'pending' OR detail_status IS NULL OR (detail_status = 'error' AND detail_fetched_at < ?))
-					 ORDER BY first_seen_at LIMIT ?`,
+					 LIMIT ?`,  // no ORDER BY: sorting a 100k-row backlog for every small batch was billions of rows read a day
 					start - DAY,
 					Math.min(conc * 4, DETAIL_TICK_SUBREQUESTS - used),
 				)
@@ -972,7 +977,7 @@ export class Board extends DurableObject<Env> {
 					`SELECT * FROM jobs WHERE removed_at IS NULL
 					   AND ${EMBED_TODO}
 					   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)
-					 ORDER BY CASE WHEN embed_status = 'error' THEN 1 ELSE 0 END, first_seen_at LIMIT ?`,
+					 LIMIT ?`,  // no ORDER BY (see runDetails); error rows are already pushed a day out by EMBED_TODO
 					EMBED_TAG, Date.now() - DAY,
 					EMBED_BATCH,
 				)
