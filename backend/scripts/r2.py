@@ -80,6 +80,9 @@ class R2:
             for o in page.get("Contents", []): yield o["Key"], o["Size"], o.get("ETag", "").strip('"')
 
     def delete(self, key): self.client.delete_object(Bucket=self.bucket, Key=key)
+    def copy(self, src, dst, content_type="application/octet-stream"):
+        """Server-side copy within the bucket (no download; one class A operation)."""
+        self.client.copy_object(Bucket=self.bucket, CopySource={"Bucket": self.bucket, "Key": src}, Key=dst, ContentType=content_type, MetadataDirective="REPLACE")
 
     def get_file(self, key, path):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)

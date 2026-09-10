@@ -22,6 +22,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--web", default=os.path.join(os.environ.get("WORK_DIR") or os.environ.get("EXPORT_DIR", "export"), "web"))
 ap.add_argument("--workers", type=int, default=8)
 ap.add_argument("--groups-prefix", default=os.environ.get("GROUPS_PREFIX", "groups/"))
+ap.add_argument("--mirror-prefix", default=os.environ.get("GROUPS_MIRROR_PREFIX", "groups/"), help="after the manifest: server-side copy this build's group files here for readers that hardcode the flat path (old checkouts); '' to skip")
 ap.add_argument("--root-prefix", default=os.environ.get("ROOT_PREFIX", ""), help="key prefix for the models, centroids, and manifest (tests only; production is the bucket root)")
 a = ap.parse_args()
 web = a.web; r2 = R2(); t0 = time.time()
@@ -43,4 +44,18 @@ for name in ("salary-model.json", "arrangement-model.json", "seniority-model.jso
     if os.path.exists(p): r2.put_file(a.root_prefix + name, p, "application/json"); print(f"  {name}", flush=True)
 r2.put_file(a.root_prefix + "centroids.bin", os.path.join(web, "centroids.bin"), "application/octet-stream")
 r2.put_file(a.root_prefix + "manifest.json", os.path.join(web, "manifest.json"), "application/json")
+if a.mirror_prefix and a.mirror_prefix != a.groups_prefix:
+    # Three copies of the group files live in the bucket: this build's dated prefix (what the manifest names), the
+    # previous build's (a manifest cached for an hour must still find its files), and this flat mirror for readers
+    # that predate the dated layout. The mirror is refreshed after the manifest so new readers never see a mix.
+    import concurrent.futures as cf
+    tm = time.time(); names = sorted(local)
+    def cp(f):
+        for attempt in range(4):
+            try: r2.copy(f"{a.groups_prefix}{f}", f"{a.mirror_prefix}{f}", "application/json"); return None
+            except Exception as e:
+                if attempt == 3: return f"{f}: {e}"
+                time.sleep(1 + attempt)
+    with cf.ThreadPoolExecutor(max_workers=16) as ex: errs = [e for e in ex.map(cp, names) if e]
+    print(f"mirrored {len(names) - len(errs)} group files to {a.mirror_prefix} for old readers ({time.time() - tm:.0f}s)" + (f"; {len(errs)} failed, e.g. {errs[0]}" if errs else ""), flush=True)
 print(f"published centroids + manifest ({manifest['jobs']:,} jobs, {manifest['leaves']:,} groups, built {time.strftime('%Y-%m-%d %H:%M', time.localtime(manifest['built_at']/1000))}); {len(todo)} group files uploaded; {time.time()-t0:.0f}s", flush=True)

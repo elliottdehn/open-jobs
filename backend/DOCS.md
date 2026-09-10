@@ -181,10 +181,11 @@ of cache), rebuilt nightly:
   downloading the 69 MB file.
 - `groups/<date>/<leaf>.json` — jobs of one leaf (ats, slug, id, title, company, location, url, seen, pub,
   jd text ≤ 4k chars, enrichment and company when known) with exact float32 embeddings (`v`, base64
-  little-endian). Each build writes its own dated prefix, named in the manifest's `groups` field, and the
-  manifest is published last, so the swap is atomic for readers; retention keeps two builds (the manifest is
-  cached for an hour). Readers must use `manifest.groups`, never a hardcoded path. The flat pre-2026-09-10
-  `groups/<id>.json` files are unreferenced and left alone.
+  little-endian). Three copies live in the bucket: this build's dated prefix (named in the manifest's
+  `groups` field, published before the manifest so the swap is atomic for readers), the previous build's
+  (a manifest cached for an hour must still find its files; retention keeps two), and the flat
+  `groups/<id>.json` mirror, server-side copied from the dated prefix *after* the manifest, for readers that
+  predate the dated layout (old checkouts of `tools/jobs.py`). New readers use `manifest.groups`.
 - `age-model.json`, `salary-model.json`, `arrangement-model.json`, `seniority-model.json`,
   `location-countries.json` — the estimators (`FIELDS.md`, `scripts/train-*.py`), applied client-side.
 - `diffs/`, `ledger/`, `changes/` — history: see "Layout and retention" below and JOB-CHANGES.md.
