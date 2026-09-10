@@ -274,7 +274,13 @@ for src in (snap_dirs or snap_r2):
     con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
     os.remove(bl)
     try:
-        con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+        # a transient storage error on the big read is retried here; only a repeatable failure goes to the per-file scan
+        for attempt in range(4):
+            try:
+                con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)"); break
+            except Exception as e:
+                if attempt == 3 or "HTTP" not in str(e): raise
+                print(f"{ats:16} bucket read failed ({str(e)[:100]}); retrying the scan in {20 * (attempt + 1)}s", flush=True); time.sleep(20 * (attempt + 1))
     except BaseException as e:
         # One bad snapshot (invalid UTF-8, a truncated upload) must not stop the night: find it, quarantine it, go on
         # without it, and say so. The board's next snapshot replaces the bad file; nothing here is permanent.
