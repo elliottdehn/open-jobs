@@ -166,21 +166,29 @@ def split_ndjson(f, jobs_out, boards_out):
                 jo.write(json.dumps(j) + "\n")
 
 def finalize(ats, outs):
-    """Shared tail for both sources: dark aggregator guard, org column strip, count, optional publish."""
+    """Shared tail for both sources: the tier columns, the dark aggregator tier, count, optional publish.
+
+    Every jobs row carries `tier` ('first_party' | 'aggregator'), `via` (the board a second-tier posting came
+    through, else NULL) and `org` (the hiring organization a job board names, else NULL). A `dark` board whose
+    open postings name >2 distinct organizations is a job board, not an employer: until 2026-09-10 its postings
+    were dropped; now they are kept as the aggregator tier, provided they name an organization and a location,
+    and dedup_aggregators() at the end of the run removes what first-party boards already carry."""
     if ats == "dark":
-        # aggregator guard: a `dark` board whose open postings name >2 distinct hiringOrganizations is a job
-        # board, not an employer -> drop all its jobs from the export (keeps the corpus employer-only).
         agg = con.execute(f"""SELECT slug FROM (SELECT slug, count(DISTINCT lower(org)) AS o
                               FROM read_parquet('{outs['jobs']}') WHERE is_open AND org IS NOT NULL GROUP BY slug)
                               WHERE o > 2""").fetchall()
-        if agg:
-            drop = {r[0] for r in agg}
-            con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}') WHERE slug NOT IN ({','.join('?'*len(drop))})) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)", list(drop))
-            print(f"  dark aggregator guard: dropped {len(drop)} multi-org boards", flush=True)
-        else:
-            con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+        aggs = [r[0] for r in agg]
+        inlist = ",".join("?" * len(aggs)) or "''"
+        con.execute(f"""COPY (SELECT *, CASE WHEN slug IN ({inlist}) THEN 'aggregator' ELSE 'first_party' END AS tier,
+                               CASE WHEN slug IN ({inlist}) THEN slug END AS via
+                        FROM read_parquet('{outs['jobs']}')
+                        WHERE slug NOT IN ({inlist})
+                           OR (org IS NOT NULL AND trim(org) != '' AND location IS NOT NULL AND trim(location) != ''))
+                        TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""", aggs * 3)
+        n_agg = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}') WHERE tier = 'aggregator'").fetchone()[0]
+        print(f"  dark: {len(aggs)} job boards kept as the aggregator tier ({n_agg:,} located postings naming an employer; deduped at the end of the run)", flush=True)
     else:
-        con.execute(f"COPY (SELECT * EXCLUDE(org) FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+        con.execute(f"COPY (SELECT *, 'first_party' AS tier, CAST(NULL AS VARCHAR) AS via FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     if publish:
         for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{ats}.parquet", outs[k], "application/octet-stream")
@@ -286,11 +294,41 @@ for src in (snap_dirs or snap_r2):
         print(f"{ats:16} WARNING: {len(bad)} snapshot file(s) skipped (see {qf}); the board's next snapshot replaces them", flush=True)
     finalize(ats, outs)
 
+SUFFIX = r"\b(inc|incorporated|llc|ltd|limited|gmbh|ag|sa|sas|sarl|srl|bv|nv|oy|ab|as|plc|co|corp|corporation|company|group|holding|holdings|kg|mbh|e\.?v\.?|se|s\.?p\.?a\.?|kk|k\.k\.)\b"
+def dedup_aggregators():
+    """Second-tier dedup, once every ATS is written: an aggregator posting whose (employer, title, location) a
+    first-party board already carries is the same job seen through a job board; and the same job seen through
+    several boards is kept once (earliest first seen). Employers of first-party rows come from boards/ (company
+    name, else slug). Rewrites jobs/dark.parquet in place and re-publishes it."""
+    dj = os.path.join(root, "jobs", "dark.parquet")
+    if not os.path.exists(dj): return
+    con.execute(f"""CREATE OR REPLACE MACRO norm(s) AS trim(regexp_replace(regexp_replace(regexp_replace(lower(coalesce(s, '')), '[^a-z0-9 ]+', ' ', 'g'), '{SUFFIX}', ' ', 'g'), ' +', ' ', 'g'))""")
+    con.execute("""CREATE OR REPLACE MACRO ntitle(s) AS trim(regexp_replace(regexp_replace(lower(coalesce(s, '')), '\\(.*?\\)|\\[.*?\\]|[^a-z0-9 ]+', ' ', 'g'), ' +', ' ', 'g'))""")
+    before = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet('{dj}')").fetchone()
+    if not before[0]: return
+    con.execute(f"""CREATE OR REPLACE TABLE fp_keys AS
+        SELECT DISTINCT norm(coalesce(b.company_name, b.slug)) AS org, ntitle(j.title) AS t, norm(j.location) AS loc
+        FROM read_parquet('{J}', union_by_name=true) j JOIN read_parquet('{B}', union_by_name=true) b USING (ats, slug)
+        WHERE j.is_open AND coalesce(j.tier, 'first_party') = 'first_party'""")
+    tmp = dj + ".dedup"
+    con.execute(f"""COPY (
+        SELECT * EXCLUDE (k_org, k_t, k_loc) FROM (
+          SELECT d.*, norm(d.org) AS k_org, ntitle(d.title) AS k_t, norm(d.location) AS k_loc FROM read_parquet('{dj}') d)
+        WHERE tier = 'first_party'
+           OR (NOT EXISTS (SELECT 1 FROM fp_keys f WHERE f.org = k_org AND f.t = k_t AND f.loc = k_loc))
+        QUALIFY tier = 'first_party' OR row_number() OVER (PARTITION BY tier, k_org, k_t, k_loc ORDER BY first_seen_at, slug, id) = 1
+      ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
+    os.replace(tmp, dj)
+    after = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet('{dj}')").fetchone()
+    print(f"aggregator tier: {before[0]:,} -> {after[0]:,} postings after dedup against first-party boards and across job boards", flush=True)
+    if publish: r2.put_file(f"exports/{date_name}/jobs/dark.parquet", dj, "application/octet-stream"); print("  re-published jobs/dark.parquet", flush=True)
+
 def show(sql):
     con.sql(sql).show(max_rows=50, max_width=200)
 
 B = os.path.join(root, "boards", "*.parquet")
 J = os.path.join(root, "jobs", "*.parquet")
+dedup_aggregators()
 show(f"SELECT count(*) AS boards, count(*) FILTER (last_status='ok') AS ok, count(*) FILTER (last_status='gone') AS gone, count(*) FILTER (last_status='error') AS error, count(*) FILTER (last_status IS NULL) AS unfetched FROM read_parquet('{B}')")
 show(f"SELECT ats, count(*) AS jobs, count(*) FILTER (is_open) AS open, count(*) FILTER (length(content) > 800) AS with_body, count(DISTINCT slug) AS boards FROM read_parquet('{J}') GROUP BY ats ORDER BY jobs DESC")
 show(f"SELECT count(*) AS total_jobs, count(*) FILTER (is_open) AS open_jobs, count(*) FILTER (is_open AND length(content) > 800) AS open_with_body FROM read_parquet('{J}')")

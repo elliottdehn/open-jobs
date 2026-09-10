@@ -538,9 +538,17 @@ change feed use their own change key and are unaffected.
 a daily fetch does not rewrite unchanged rows (that was ~40M DO row writes a day, the largest Cloudflare
 line item in September 2026); only added, changed, removed, and re-listed rows are written.
 
+**Tiers.** Every jobs row carries `tier`: `first_party` (the employer's own board or career site) or `aggregator`
+(a `dark` job board naming more than two hiring organizations; until 2026-09-10 these were dropped). Second-tier
+rows also carry `via` (the board they came through) and `org` (the employer the board names), must state a
+location, and are deduplicated at the end of the parquet stage against first-party rows and across boards on
+(employer, title, location), earliest first-seen kept (`build-parquet.py dedup_aggregators`). The search tree
+(`build-manifest.py`) uses first-party rows only until the aggregator tier has an age curve of its own; the
+diffs, ledger, and feed carry both tiers, so consumers filter on `tier`.
+
 `jobs/<ats>.parquet`: one row per job (`ats, slug, id, title, location, url, departments[], published_at,
 updated_at, content, raw_json, detail_raw_json, detail_status, content_hash, first/last_seen_at, changed_at,
-removed_at, is_open, enrich_status, enriched_at, enrichment_json, embed_status, embed_model, embedding FLOAT[]`;
+removed_at, is_open, enrich_status, enriched_at, enrichment_json, embed_status, embed_model, embedding FLOAT[], tier, via, org`;
 from snapshots the raw JSON columns are NULL and only open jobs are present). `boards/<ats>.parquet`: one row
 per board with fetch meta and `company_*` columns.
 Incremental: pass `--since=<last pull ms>`; removed jobs come through with `removed_at` set.

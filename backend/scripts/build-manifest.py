@@ -46,7 +46,8 @@ t = time.time()
 recipe = con.execute(f"SELECT embed_model, count(*) FROM read_parquet('{J}') WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY 2 DESC").fetchall()
 print("recipes:", recipe)
 tag = recipe[0][0]
-WHERE_ = f"FROM read_parquet('{J}') WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"
+# first-party postings only in the search tree for now: the aggregator tier has no age curve of its own yet
+WHERE_ = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}' AND coalesce(tier, 'first_party') = 'first_party'"
 # The exact key string per row ties the vector-loading pass to the group-writing pass without relying on parquet
 # scan order (which is not stable across queries). Not a hash: 3.1M keys produced one 64-bit collision on 2026-09-08.
 HKEY = "ats || '/' || slug || '#' || id AS h"
