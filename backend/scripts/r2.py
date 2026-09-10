@@ -69,7 +69,7 @@ class R2:
     def head(self, key):
         try:
             h = self.client.head_object(Bucket=self.bucket, Key=key)
-            return {"size": h["ContentLength"], "etag": h.get("ETag", "").strip('"')}
+            return {"size": h["ContentLength"], "etag": h.get("ETag", "").strip('"'), "modified": h.get("LastModified")}
         except self.client.exceptions.ClientError as e:
             if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"): return None
             raise
@@ -94,6 +94,10 @@ class R2:
         con.execute(f"SET s3_endpoint='{self.account}.r2.cloudflarestorage.com'")
         con.execute("SET s3_region='auto'"); con.execute("SET s3_url_style='path'"); con.execute("SET s3_use_ssl=true")
         con.execute(f"SET s3_access_key_id='{self.key}'"); con.execute(f"SET s3_secret_access_key='{self.secret}'")
+        # R2 answers an occasional 503; one of those killed a 45-minute stage on 2026-09-10. Retry with backoff.
+        for k, v in (("http_retries", 8), ("http_retry_wait_ms", 1500), ("http_retry_backoff", 2), ("http_keep_alive", "true")):
+            try: con.execute(f"SET {k}={v}")
+            except Exception: pass
         return con
 
 

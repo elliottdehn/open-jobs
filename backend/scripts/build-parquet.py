@@ -7,7 +7,7 @@ memory stays bounded (the full job set with content + raw is several GB):
   export/jobs/<ats>.parquet    one row per job      -> read_parquet('export/jobs/*.parquet')
   export/boards/<ats>.parquet  one row per board    -> read_parquet('export/boards/*.parquet')
 Run: uv run scripts/build-parquet.py"""
-import glob, os, sys
+import time, glob, os, sys
 import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from r2 import R2
@@ -209,10 +209,22 @@ for f in files:
 
 
 # ---- per-board R2 snapshot parquets: local (scripts/pull-snapshots.mjs) or read from the bucket in place ----
+import datetime as _dt
+def _published_recently(ats):
+    """Same-day resume: both published objects exist and were written in the last 12 hours -> this run already did it."""
+    if not (publish and from_r2 and not force): return False
+    cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=12)
+    for k in ("jobs", "boards"):
+        h = r2.head(f"exports/{date_name}/{k}/{ats}.parquet")
+        if not h or not h.get("modified") or h["modified"] < cut: return False
+    return True
+
 for src in (snap_dirs or snap_r2):
     if from_r2:
         ats = src; pq = r2.url(f"snapshots/{ats}/*.parquet")
         outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
+        if _published_recently(ats):
+            print(f"{ats:16} published earlier this run; skipped (--force to redo)", flush=True); continue
         if not any(True for _ in r2.list(f"snapshots/{ats}/")):
             print(f"{ats:16} no snapshots in R2", flush=True); continue
     else:
@@ -225,9 +237,16 @@ for src in (snap_dirs or snap_r2):
             continue
         pq = os.path.join(d, "*.parquet")
     # boards.parquet: board meta rides in each snapshot's footer kv; rebuild the boards.jsonl shape
-    # split_ndjson produces so BOARDS_SQL is reused unchanged.
-    kv = con.execute(f"SELECT file_name, decode(value) FROM parquet_kv_metadata('{pq}') WHERE decode(key) = 'board_meta'").fetchall()
-    counts = dict(con.execute(f"SELECT filename, count(*) FROM read_parquet('{pq}', filename=true) GROUP BY 1").fetchall())
+    # split_ndjson produces so BOARDS_SQL is reused unchanged. The bucket reads retry (r2.duckdb) and this
+    # block retries on top: a transient storage error must not cost the night.
+    for attempt in range(4):
+        try:
+            kv = con.execute(f"SELECT file_name, decode(value) FROM parquet_kv_metadata('{pq}') WHERE decode(key) = 'board_meta'").fetchall()
+            counts = dict(con.execute(f"SELECT filename, count(*) FROM read_parquet('{pq}', filename=true) GROUP BY 1").fetchall())
+            break
+        except Exception as e:
+            if attempt == 3: raise
+            print(f"{ats:16} bucket read failed ({str(e)[:120]}); retrying in {15 * (attempt + 1)}s", flush=True); time.sleep(15 * (attempt + 1))
     bl = os.path.join(tmp, f"{ats}.boards.jsonl")
     # a big board is written as parts (<slug>.parquet, <slug>.p1.parquet, ...), each with the same board_meta in its
     # footer: one boards row per slug, exported_jobs summed over its parts
