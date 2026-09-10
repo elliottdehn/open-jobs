@@ -178,3 +178,9 @@ deployment or crawler scheduling change is part of this PR.
 UTC calendar date moves (a re-stamp). Time-of-day and zone shifts do not: the export moved from a laptop in Eastern
 time to a container in UTC that night, and date-only posting dates would otherwise have produced 829k spurious
 `changed` rows. Every export script now pins DuckDB to UTC.
+
+**2026-09-11 (expected): a large `added` day.** The export gains the aggregator tier: postings from job boards that name
+an employer and a location, deduplicated against first-party boards and across boards, roughly half a million rows
+tagged `tier = 'aggregator'` with `via` (the board) and `org` (the employer). First-party rows carry
+`tier = 'first_party'`. A consumer that only wants first-party postings filters on `tier`; the change key and the
+chain are unaffected.
