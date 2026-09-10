@@ -13,7 +13,8 @@
 		{ "tag": "v3", "new_sqlite_classes": ["RateLimit"] },
 		{ "tag": "v4", "new_sqlite_classes": ["Budget"] },
 		{ "tag": "v5", "new_sqlite_classes": ["Lock"] },
-		{ "tag": "v6", "new_sqlite_classes": ["Stats"] }
+		{ "tag": "v6", "new_sqlite_classes": ["Stats"] },
+		{ "tag": "v7", "new_sqlite_classes": ["Dedupe"] }
 	],
 	"durable_objects": {
 		"bindings": [
@@ -22,7 +23,8 @@
 			{ "class_name": "RateLimit", "name": "RATELIMIT" },
 			{ "class_name": "Budget", "name": "BUDGET" },
 			{ "class_name": "Lock", "name": "LOCK" },
-			{ "class_name": "Stats", "name": "STATS" }
+			{ "class_name": "Stats", "name": "STATS" },
+			{ "class_name": "Dedupe", "name": "DEDUPE" }
 		]
 	},
 	// Static data for the local-first client: tree manifest, group files, parquet. Served via GET /data/*.

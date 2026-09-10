@@ -230,6 +230,7 @@ bot rules 403 the default Python `urllib` user agent — send any custom UA (cur
 | POST | `/sync` | start a Registry sweep for every enabled ATS (what the cron does) |
 | GET | `/sync/:ats` | sweep status: `mode`, `cursor/total`, `touched`, `fetched`, `skipped`, `errors`, `lastError`, `finishedAt` |
 | GET | `/snapshots?ats=<ats>[&cursor=…]` | list the per-board snapshot objects of one ATS (key, size, etag, uploaded); what `pull-snapshots.mjs` walks |
+| GET | `/dedupe` | admin: size of the cross-board dedup index (keys, first-party share, shards) |
 | GET | `/stats[?days=7]` | admin: daily use counters per UTC day (`embed` = searches embedded, `jd` = JDs generated, `group` = group files fetched), kept by the `Stats` object; the 00:00 UTC cron posts yesterday's line to `SLACK_STATS_WEBHOOK` (or the ideas webhook) |
 | GET/POST | `/lock`, `/lock/acquire\|renew\|release\|freeze\|thaw` | admin: the consolidation publisher mutex (`src/lock.ts`, one object named `consolidate`): body `{holder, ttlMs?, note?, force?}`; stage.py takes it for every publishing stage so only one run, laptop or container, writes the bucket at a time |
 | POST | `/backfill[?ats=a,b]` | kick every board with a detail/embed/enrich backlog so it drains now (per-board minute ticks); progress via `/sync/:ats` (`fetched` = kicked) |
@@ -537,6 +538,14 @@ change feed use their own change key and are unaffected.
 `last_seen_at` of an open job is derived at read time as max(stored value, the board's last successful fetch):
 a daily fetch does not rewrite unchanged rows (that was ~40M DO row writes a day, the largest Cloudflare
 line item in September 2026); only added, changed, removed, and re-listed rows are written.
+
+**Cross-board dedup, best effort (`src/dedupe.ts`).** A global index of (employer, title, location) keys, normalized the
+way the export dedups, sharded over 64 Durable Objects (`dedupe:<n>`). First-party boards claim their open postings
+(once as a seed, then each fetch's additions; the employer's own listing always wins a key). A crawled job board
+asks the index after each detail fetch, before the posting's text and vector are kept: a copy of something already
+claimed is stored slim (`embed_status = 'dup'`, `dup_of` = the owner key, no content, never embedded). Misses are
+fine; `build-parquet.py dedup_aggregators` is the real dedup at consolidation. `GET /dedupe` (admin) shows the
+index size. Cost: one row write per claim, a couple of GB of storage.
 
 **Tiers.** Every jobs row carries `tier`: `first_party` (the employer's own board or career site) or `aggregator`
 (a `dark` job board naming more than two hiring organizations; until 2026-09-10 these were dropped). Second-tier

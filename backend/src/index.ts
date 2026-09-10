@@ -5,6 +5,7 @@ export { RateLimit } from "./ratelimit";
 export { Budget } from "./budget";
 export { Lock } from "./lock";
 export { Stats } from "./stats";
+export { Dedupe } from "./dedupe";
 import type { BoardState, EnrichJobsResult, JobQuery, StoredJob } from "./board";
 import { discoverUid } from "./ats/comeet";
 import type { SyncMode } from "./registry";
@@ -389,6 +390,12 @@ export default {
 		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
 		if (parts[0] === "rowmeter" && request.method === "POST") return Response.json(await env.BOARD.getByName("rowmeter/scratch").rowMeter());
 		if (parts[0] === "rowmeter" && request.method === "GET") return Response.json(await env.BOARD.getByName(url.searchParams.get("board") ?? "rowmeter/scratch").debugState());
+
+		// GET /dedupe -> the best-effort cross-board dedup index: keys per shard, first-party share
+		if (parts[0] === "dedupe" && request.method === "GET") {
+			const per = await Promise.all(Array.from({ length: 64 }, (_, i) => env.DEDUPE.getByName(`dedupe:${i}`).stats()));
+			return Response.json({ keys: per.reduce((a, s) => a + s.keys, 0), firstParty: per.reduce((a, s) => a + s.firstParty, 0), shards: per.length });
+		}
 
 		// GET /stats[?days=7] -> daily use counters (searches embedded, JDs generated, group files fetched), UTC days
 		if (parts[0] === "stats" && request.method === "GET") return Response.json(await env.STATS.getByName("daily").recent(Number(url.searchParams.get("days") || 7)));

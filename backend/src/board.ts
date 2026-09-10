@@ -8,6 +8,7 @@ import { resolveCompany, type CompanyEnrichment } from "./company";
 import { usd } from "./pricing";
 import { SNAPSHOT_PART_ROWS, buildSnapshotParquet, snapshotKey } from "./snapshot";
 import { HttpError } from "./ats/dark";
+import { dedupeKey, dedupeShard } from "./dedupe";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -64,7 +65,7 @@ const DETAIL_CONC_MIN = 2, DETAIL_CONC_START = 8, DETAIL_CONC_MAX = 32;
 const DETAIL_GROW_EVERY = 25;           // clean responses before concurrency grows by half
 /** A crawled board with more open rows than this is a national job board, not an employer: it is paused (no fetch,
  *  details, or embeddings) until someone decides what to do with it. Rows already stored stay. */
-const DARK_BOARD_MAX_OPEN = 20_000;
+const DARK_BOARD_MAX_OPEN = 0; // 0 = no pause. The cross-board dedup (src/dedupe.ts) makes copies cheap; the rest is paid for on purpose (budget $300/month, 2026-09-10)
 
 export interface BoardMeta {
 	name: string;
@@ -95,6 +96,8 @@ export interface BoardMeta {
 	detailBaseMs?: number;
 	/** Last detail tick: fetched, ok, errors, wall ms, mean latency ms, concurrency at the end (diagnostics). */
 	detailTick?: { at: number; fetched: number; ok: number; errors: number; wallMs: number; meanMs: number; conc: number };
+	/** First-party boards claim their open postings in the dedup index once, then per fetch for new ones. */
+	dedupeSeeded?: boolean;
 	/** How many snapshot part files this board last wrote (so shrinking boards delete the leftovers). */
 	snapshotParts?: number;
 	/**
@@ -211,6 +214,7 @@ type JobRow = {
 	embed_status: string | null;
 	embed_error: string | null;
 	embed_tried_at: number | null;
+	dup_of: string | null;
 	[k: string]: SqlStorageValue;
 };
 
@@ -355,6 +359,7 @@ export class Board extends DurableObject<Env> {
 				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_embed ON jobs (embed_status, removed_at)`);
 			}
 			if (!cols.has("embed_tried_at")) ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_tried_at INTEGER`);
+			if (!cols.has("dup_of")) ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN dup_of TEXT`);
 		});
 	}
 
@@ -424,7 +429,7 @@ export class Board extends DurableObject<Env> {
 		const meta = await this.meta();
 		if (!meta) return; // never initialized; nothing to do
 		const now = Date.now();
-		if (meta.ats === "dark") {
+		if (meta.ats === "dark" && DARK_BOARD_MAX_OPEN > 0) {
 			const open = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
 			if (open > DARK_BOARD_MAX_OPEN) {
 				meta.lastError = `paused: ${open.toLocaleString("en-US")} open rows exceeds the per-board cap ${DARK_BOARD_MAX_OPEN.toLocaleString("en-US")} (national job board)`;
@@ -531,6 +536,7 @@ export class Board extends DurableObject<Env> {
 					meta.jobCount = res.partial ? Math.max(seen.size, meta.jobCount ?? 0) : seen.size;
 					this.recordRun(now, "ok", diff, res.partial ? "partial" : null);
 					this.markSnapshotDirty(meta, diff, now);
+					await this.dedupeSeed(meta, diff);
 				}
 				let next0 = nextSlotAfter(now, meta.slotMs);
 				if (meta.consecutiveFailures >= BACKOFF_AFTER) next0 += 6 * DAY;
@@ -545,6 +551,7 @@ export class Board extends DurableObject<Env> {
 				this.recordRun(now, "gone", null, null);
 			} else {
 				const diff = this.applySnapshot(result.jobs, now, !!fetcher.fetchDetail);
+				await this.dedupeSeed(meta, diff);
 				meta.lastStatus = "ok";
 				meta.lastOkAt = now;
 				meta.lastError = null;
@@ -675,6 +682,38 @@ export class Board extends DurableObject<Env> {
 		);
 	}
 
+	/** After a fetch: claim the new postings' keys; the first time, every open posting's (one-time seed of the index). */
+	private async dedupeSeed(meta: BoardMeta, diff: Diff): Promise<void> {
+		if (meta.ats === "dark") return;
+		if (meta.dedupeSeeded) { await this.dedupeClaimFirstParty(meta, diff.added); return; }
+		const jobs = this.ctx.storage.sql.exec<{ data: string }>(`SELECT data FROM jobs WHERE removed_at IS NULL`).toArray().map((r) => JSON.parse(r.data) as Job);
+		await this.dedupeClaimFirstParty(meta, jobs);
+		meta.dedupeSeeded = true;
+	}
+
+	/** Claim dedup keys for this board's postings (batched per shard). Returns the existing owner for duplicates, else null. */
+	private async dedupeClaim(entries: { key: string; owner: string }[], firstParty: boolean): Promise<(string | null)[]> {
+		const out: (string | null)[] = new Array(entries.length).fill(null);
+		const byShard = new Map<number, number[]>();
+		entries.forEach((e, i) => { const sh = dedupeShard(e.key); (byShard.get(sh) ?? byShard.set(sh, []).get(sh)!).push(i); });
+		await Promise.all([...byShard].map(async ([sh, idx]) => {
+			try {
+				const res = await this.env.DEDUPE.getByName(`dedupe:${sh}`).claim(idx.map((i) => entries[i]), firstParty);
+				idx.forEach((i, j) => { out[i] = res[j]; });
+			} catch { /* best effort: a missed claim just means consolidation dedups it later */ }
+		}));
+		return out;
+	}
+
+	/** First-party: claim the keys of these postings (the employer's own listing wins over any job-board copy). */
+	private async dedupeClaimFirstParty(meta: BoardMeta, jobs: Job[]): Promise<void> {
+		if (meta.ats === "dark" || !jobs.length) return;
+		const company = meta.company?.name ?? deriveCandidates(meta.slug, []).candidate_name;
+		const entries: { key: string; owner: string }[] = [];
+		for (const j of jobs) { const k = dedupeKey(company, j.title, j.location); if (k) entries.push({ key: k, owner: `${meta.ats}/${meta.slug}#${j.id}` }); }
+		for (let i = 0; i < entries.length; i += 500) await this.dedupeClaim(entries.slice(i, i + 500), true);
+	}
+
 	/** Is there at least one row matching `where`? One index probe instead of a COUNT over the whole backlog. */
 	private hasPending(where: string, ...params: SqlStorageValue[]): boolean {
 		return this.ctx.storage.sql.exec<{ x: number }>(`SELECT 1 AS x FROM jobs WHERE ${where} LIMIT 1`, ...params).toArray().length > 0;
@@ -728,6 +767,18 @@ export class Board extends DurableObject<Env> {
 					try {
 						const d = await withTimeout(fetcher.fetchDetail!(meta.slug, job), FETCH_DETAIL_TIMEOUT_MS, `fetchDetail ${meta.name}/${r.id}`);
 						latSum += Date.now() - t0; latN++; oks++;
+						// a job-board posting asks the dedup index before its text and vector are kept: a copy of something
+						// already claimed (an employer's own listing, or an earlier board) is stored slim and never embedded
+						let dupOf: string | null = null;
+						if (d && meta.ats === "dark") {
+							const k = dedupeKey(d.org, d.title ?? job.title, d.location);
+							if (k) dupOf = (await this.dedupeClaim([{ key: k, owner: `${meta.ats}/${meta.slug}#${r.id}` }], false))[0];
+						}
+						if (dupOf) {
+							const slim = { title: d!.title, location: d!.location, publishedAt: d!.publishedAt, org: d!.org, content: null };
+							this.ctx.storage.sql.exec(`UPDATE jobs SET detail_status = 'done', detail = ?, detail_error = NULL, detail_fetched_at = ?, embed_status = 'dup', dup_of = ? WHERE id = ?`, JSON.stringify(slim), Date.now(), dupOf, r.id);
+							continue;
+						}
 						this.ctx.storage.sql.exec(
 							`UPDATE jobs SET detail_status = ?, detail = ?, detail_error = NULL, detail_fetched_at = ? WHERE id = ?`,
 							d ? "done" : "na",
@@ -1068,7 +1119,8 @@ export class Board extends DurableObject<Env> {
 		const jobs = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL`).one().n;
 		const embedErrors = this.ctx.storage.sql.exec(`SELECT embed_status, substr(embed_error, 1, 160) AS err, COUNT(*) AS n, MAX(length(data)) AS max_data FROM jobs WHERE removed_at IS NULL AND embed_status != 'done' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 6`).toArray();
 		const detailErrors = this.ctx.storage.sql.exec(`SELECT detail_status, substr(detail_error, 1, 90) AS err, COUNT(*) AS n FROM jobs WHERE removed_at IS NULL GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 8`).toArray();
-		return { detailErrors, embedErrors, meta, nRuns24h, jobs, pendingDetail: this.pendingDetailCount(), pendingEmbed: this.pendingEmbedCount(), pendingEnrich: this.pendingCount(), alarm: await this.ctx.storage.getAlarm(), runs };
+		const dups = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE embed_status = 'dup'`).one().n;
+		return { dups, detailErrors, embedErrors, meta, nRuns24h, jobs, pendingDetail: this.pendingDetailCount(), pendingEmbed: this.pendingEmbedCount(), pendingEnrich: this.pendingCount(), alarm: await this.ctx.storage.getAlarm(), runs };
 	}
 
 	/** Diagnostic: metered rows written per statement shape, on a scratch row (temporary). */
