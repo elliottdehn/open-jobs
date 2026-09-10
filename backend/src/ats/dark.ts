@@ -199,7 +199,7 @@ export const dark: AtsFetcher = {
 	},
 
 	/** Streaming: each page of URLs goes to the Board as soon as a sitemap yields it. */
-	async fetchJobsStream(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok" } | { status: "gone" }> {
+	async fetchJobsStream(slug: string, sink: (page: Job[]) => Promise<void>): Promise<{ status: "ok"; partial?: boolean } | { status: "gone" }> {
 		const { total: n, partial } = await discoverStream(slug, async (urls) => sink(urls.map(toJob)));
 		return n ? { status: "ok", partial } : { status: "gone" };
 	},
