@@ -57,6 +57,7 @@ button { cursor: pointer; }
 .top nav { display: flex; align-items: center; gap: 32px; }
 .navlink { color: var(--muted); font-size: 14px; text-decoration: none; transition: color .2s; }
 .navlink:hover { color: var(--text); }
+.via { display: inline-block; margin-left: 8px; padding: 1px 7px; border: 1px solid var(--line-strong); border-radius: 10px; font-size: 11px; color: var(--faint); vertical-align: middle; }
 .ghbtn { display: inline-flex; align-items: center; gap: 10px; color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 13px; font-size: 13px; text-decoration: none; transition: border-color .2s, background .2s; }
 .ghbtn:hover { border-color: var(--green); background: var(--surface-2); }
 .ghbtn svg { width: 16px; height: 16px; fill: currentColor; }
@@ -818,7 +819,7 @@ function makeLocparse(L) {
         const key = `${j.ats}/${j.slug}#${j.id}`;
         if (BY_KEY.has(key)) continue;
         const v = b64vec(j.v);
-        const job = { k: key, t: j.title, c: j.company || '', l: j.location || '', u: j.url, s: j.seen || 0, p: j.pub || null, jd: cleanText(j.jd), v, g: id, sim: dot(v, Q), score: 0, agp: AGE ? Math.max(0, Math.expm1(dot(v, AGE.w) + AGE.b)) : null, el: null };
+        const job = { k: key, t: j.title, c: j.company || '', l: j.location || '', u: j.url, s: j.seen || 0, p: j.pub || null, jd: cleanText(j.jd), v, g: id, sim: dot(v, Q), score: 0, agg: j.t === 'agg', via: j.via || null, agp: AGE ? Math.max(0, Math.expm1(dot(v, AGE.w) + AGE.b)) : null, el: null };
         job.el = PREF ? LOC.eligibility(PREF, job.l, job.jd, job.t) : null;
         job.vc = (verdict(job) || {}).cls || null;
         job.score = job.sim;
@@ -940,7 +941,7 @@ function makeLocparse(L) {
     return `<article class="card${isNew ? ' new' : ''}${lab === 1 ? ' yes' : lab === 0 ? ' no' : ''}" data-k="${esc(j.k)}">
       <div class="body">
         <p class="t"><a href="${esc(j.u)}" target="_blank" rel="noopener">${esc(j.t)}</a></p>
-        <div class="meta" title="${esc(why)}">${esc(j.c)}${j.c && j.l ? ' · ' : ''}${esc(j.l)}</div>
+        <div class="meta" title="${esc(why)}">${esc(j.c)}${j.c && j.l ? ' · ' : ''}${esc(j.l)}${j.agg ? ` <span class="via" title="Seen on a job board, not the employer's own site">via ${esc(j.via || 'a job board')}</span>` : ''}</div>
         <div class="chips">${v ? `<span class="v ${v.cls}" title="${esc(v.tip)}">${v.text}</span>` : ''}${j.p ? `<span class="v v-plain" title="Posting date stated by the board: ${new Date(j.p).toISOString().slice(0, 10)}">posted ${daysAgo(j.p)}</span>` : ''}${j.s ? `<span class="v v-plain" title="When the crawler first saw it: ${new Date(j.s).toISOString().slice(0, 10)}">first seen ${daysAgo(j.s)}</span>` : ''}${locChip}</div>
         <div class="snip" data-full="0">${esc(snip.slice(0, 240))}${snip.length > 240 ? '… <button class="more">more</button>' : ''}</div>
       </div>

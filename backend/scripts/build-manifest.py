@@ -55,10 +55,14 @@ WHERE_ = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_
 HKEY = "ats || '/' || slug || '#' || id AS h"
 q_load = f"""SELECT {HKEY}, ats, slug, coalesce(title,'') AS title, coalesce(location,'') AS location,
                coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint, embedding {WHERE_}"""
+# The search tree is built on first-party rows (WHERE_) and job-board rows are placed into it afterwards (see "filler"
+# below); pass 2 streams both tiers, so its query drops the tier restriction and carries tier/org/via along.
+WHERE_ROWS = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}'"
+_tier_cols = "coalesce(tier, 'first_party') AS tier, org, via" if _has_tier else "'first_party' AS tier, NULL AS org, NULL AS via"
 q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
                epoch_ms(first_seen_at) AS first_seen_ms, epoch_ms(published_at) AS published_ms,
                left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
-               json_extract(enrichment_json, '$.data') AS enrichment {WHERE_}"""
+               json_extract(enrichment_json, '$.data') AS enrichment, {_tier_cols} {WHERE_ROWS}"""
 # Pass 1 (vectors): stream record batches; vectors go straight into a file-backed float16 array (N x D); the
 # only per-row Python kept is what labels and exemplars need (title, location, company hint, board). Everything
 # else a group file needs (id, url, dates, jd text, enrichment) is streamed back out of the parquet in DFS order
@@ -245,11 +249,80 @@ for n in nodes:
     samp = idx if len(idx) <= 20000 else np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
     n["distinct_titles"] = int(len({norm_title(titles[r]) for r in samp}) * (len(idx) / len(samp)))
 
+# ---- filler: job-board postings (the aggregator tier) are placed into the first-party tree, not used to build it.
+# Each batch descends from the root to a leaf by centroid cosine (the same walk the client does), so the tree's
+# shape, labels, and exemplars stay first-party while the groups carry both tiers. Vectors go to a second memmap.
+M = 0; XF = None; fill_leaf = None; HF = None
+if _has_tier:
+    WHERE_FILL = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}' AND tier = 'aggregator'"
+    M = con.execute(f"SELECT count(*) {WHERE_FILL}").fetchone()[0]
+if M:
+    t = time.time()
+    _xf = os.path.join(work, f"{TMP}.filler.f16.npy")
+    XF = np.lib.format.open_memmap(_xf, mode="w+", dtype=np.float16, shape=(M, D))
+    fill_leaf = np.empty(M, dtype=np.int32); HF = []
+    kids = {n["id"]: n["children"] for n in nodes}
+    CEN = np.stack([n["_cen"] for n in nodes]).astype(np.float32)  # (nodes x D) unit centroids
+    def descend(V):
+        """Leaf id per row of V (float32, unit rows): start at the root, take the child with the higher cosine."""
+        node = np.zeros(len(V), dtype=np.int32); active = np.arange(len(V))
+        while len(active):
+            nxt = []
+            for nid in np.unique(node[active]):
+                ch = kids[nid]
+                rows = active[node[active] == nid]
+                if not ch: continue
+                sims = V[rows] @ CEN[ch].T           # (rows x 2)
+                node[rows] = np.asarray(ch, dtype=np.int32)[sims.argmax(1)]
+                nxt.append(rows)
+            active = np.concatenate(nxt) if nxt else np.empty(0, dtype=np.int64)
+        return node
+    pos_ = 0
+    reader = con.execute(f"SELECT {HKEY}, embedding {WHERE_FILL}").to_arrow_reader(50_000)
+    while True:
+        try: b = reader.read_next_batch()
+        except StopIteration: break
+        n = len(b); vals = b.column("embedding").values.to_numpy(zero_copy_only=False).reshape(n, -1)[:, :D].astype(np.float32)
+        np.nan_to_num(vals, copy=False); vals /= (np.sqrt((vals * vals).sum(axis=1, keepdims=True)) + 1e-9)
+        XF[pos_:pos_ + n] = vals.astype(np.float16); fill_leaf[pos_:pos_ + n] = descend(vals)
+        HF.append(pa.array(b.column("h").to_pylist(), type=pa.string())); pos_ += n
+        print(f"\r  placed {pos_:,}/{M:,} job-board postings", end="", file=sys.stderr, flush=True)
+    print(file=sys.stderr); del reader
+    assert pos_ == M, f"placed {pos_} filler rows, expected {M}"
+    XF.flush(); HF = pa.chunked_array(HF).combine_chunks()
+    # renumber: every leaf keeps its builder rows first, then its filler rows; internal nodes span their leaves
+    fill_order = np.argsort(fill_leaf, kind="stable"); fill_sorted = fill_leaf[fill_order]
+    fill_lo = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="left"); fill_hi = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="right")
+    new_order = []; cursor = 0; leaf_new = {}
+    for n in nodes:
+        n["fp"] = n["hi"] - n["lo"]
+    def renumber(n):
+        global cursor
+        if n["children"]:
+            lo = cursor
+            for c in n["children"]: renumber(nodes[c])
+            n["lo"], n["hi"] = lo, cursor
+        else:
+            b_idx = order[n["lo"]:n["hi"]]; f_idx = fill_order[fill_lo[n["id"]]:fill_hi[n["id"]]] + N
+            n["lo"] = cursor; new_order.append(b_idx); new_order.append(f_idx); cursor += len(b_idx) + len(f_idx); n["hi"] = cursor
+    renumber(nodes[0])
+    order = np.concatenate(new_order); assert len(order) == N + M
+    for n in nodes: n["size"] = n["hi"] - n["lo"]
+    print(f"placed {M:,} job-board postings into {len(leaves)} first-party groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
+NT = N + M
+def vec_rows(idx):
+    """Vectors for combined row indices: < N from the builder memmap, >= N from the filler memmap."""
+    out = np.empty((len(idx), D), dtype=np.float32)
+    b = idx < N
+    if b.any(): out[b] = X[idx[b]]
+    if (~b).any(): out[~b] = XF[idx[~b] - N]
+    return out
+
 # outputs
 C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
 C.tofile(os.path.join(out, "centroids.bin"))
 manifest = {
-    "recipe": tag, "dims": D, "jobs": N, "nodes": len(nodes), "leaves": len(leaves),
+    "recipe": tag, "dims": D, "jobs": N, "jobs_aggregator": M, "jobs_total": NT, "nodes": len(nodes), "leaves": len(leaves),
     "groups": args.groups_prefix,   # where this build's group files live under /data/ (per-build prefix; readers must use it)
     "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
     "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
@@ -266,7 +339,8 @@ t = time.time()
 # Python-side copy. Output is unaffected.
 con.execute("SET memory_limit='6GB'"); con.execute("SET threads=2")
 con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
-_assign = pa.table({"h": H.take(pa.array(order)), "pos": pa.array(np.arange(N, dtype=np.int64))})
+_hall = pa.chunked_array([H] + ([HF] if M else [])).combine_chunks()
+_assign = pa.table({"h": _hall.take(pa.array(order)), "pos": pa.array(np.arange(NT, dtype=np.int64))}); del _hall
 con.register("assign_src", _assign); con.execute("INSERT INTO assign SELECT h, pos FROM assign_src"); con.unregister("assign_src"); del _assign
 leaf_at = {n["lo"]: n for n in leaves}  # DFS position -> the leaf that starts there
 cur = None; jobs = []; V = None; written = 0; seen_rows = 0
@@ -277,24 +351,25 @@ import shutil
 CHUNK = 250_000; stage = os.path.join(work, f"{TMP}.stage"); shutil.rmtree(stage, ignore_errors=True)
 con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
   TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD)""")
-print(f"  staged {N:,} rows in {(N + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
+print(f"  staged {NT:,} rows in {(NT + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
 def _batches():
-    for k in range((N + CHUNK - 1) // CHUNK):
+    for k in range((NT + CHUNK - 1) // CHUNK):
         r = con.execute(f"SELECT * FROM read_parquet('{stage}/chunk={k}/*.parquet', hive_partitioning=false) ORDER BY pos").to_arrow_reader(5_000)
         while True:
             try: yield r.read_next_batch()
             except StopIteration: break
 for b in _batches():
-    cols = {c: b.column(c).to_pylist() for c in ("pos", "ats", "slug", "id", "title", "location", "url", "first_seen_ms", "published_ms", "jd", "enrichment")}
+    cols = {c: b.column(c).to_pylist() for c in ("pos", "ats", "slug", "id", "title", "location", "url", "first_seen_ms", "published_ms", "jd", "enrichment", "tier", "org", "via")}
     for k in range(len(b)):
         p = cols["pos"][k]
         if p != seen_rows: sys.exit(f"group pass out of order at position {p} (expected {seen_rows}); the key join lost or duplicated rows")
         seen_rows += 1
         if cur is None or p >= cur["hi"]:
-            cur = leaf_at[p]; jobs = []; V = X[order[cur["lo"]:cur["hi"]]].astype(np.float32)
+            cur = leaf_at[p]; jobs = []; V = vec_rows(order[cur["lo"]:cur["hi"]])
         r = int(order[p]); a, s_, jid, title, loc, url = cols["ats"][k], cols["slug"][k], cols["id"][k], cols["title"][k], cols["location"][k], cols["url"][k]
-        jd = cols["jd"][k] or ""; enr = cols["enrichment"][k]
-        jobs.append({"ats": a, "slug": s_, "id": jid, "title": title, "company": company(r), "location": loc, "url": url, "seen": int(cols["first_seen_ms"][k] or 0), "pub": int(cols["published_ms"][k] or 0), "jd": jd,
+        jd = cols["jd"][k] or ""; enr = cols["enrichment"][k]; agg = cols["tier"][k] == "aggregator"
+        jobs.append({"ats": a, "slug": s_, "id": jid, "title": title, "company": (cols["org"][k] or s_) if agg else company(r), "location": loc, "url": url, "seen": int(cols["first_seen_ms"][k] or 0), "pub": int(cols["published_ms"][k] or 0), "jd": jd,
+                     **({"t": "agg", "via": cols["via"][k] or s_} if agg else {}),
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s_)]} if (a, s_) in compfull else {}),
                      "v": base64.b64encode(V[p - cur["lo"]].tobytes()).decode()})
         if p + 1 == cur["hi"]:
@@ -305,7 +380,7 @@ for b in _batches():
             if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
 shutil.rmtree(stage, ignore_errors=True)
-if seen_rows != N or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{N} rows")
+if seen_rows != NT or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{NT} rows")
 if uploader:
     failed = uploader.join()
     print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
@@ -313,6 +388,10 @@ if uploader:
 del X
 try: os.remove(_xpath)
 except OSError: pass
+if XF is not None:
+    del XF
+    try: os.remove(_xf)
+    except OSError: pass
 shutil.rmtree(con_tmp, ignore_errors=True)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
 print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")

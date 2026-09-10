@@ -39,7 +39,7 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 	if (manifestHead) {
 		const o = await env.DATA.get("manifest.json", { range: { offset: 0, length: 400 } });
 		const text = o ? await o.text() : "";
-		for (const k of ["recipe", "dims", "jobs", "nodes", "leaves", "groups", "built_at"]) {
+		for (const k of ["recipe", "dims", "jobs", "jobs_aggregator", "jobs_total", "nodes", "leaves", "groups", "built_at"]) {
 			const m = text.match(new RegExp(`"${k}"\\s*:\\s*("[^"]*"|\\d+)`));
 			if (m) manifest[k] = m[1].startsWith('"') ? m[1].slice(1, -1) : Number(m[1]);
 		}
@@ -75,7 +75,7 @@ export async function dataIndex(env: { DATA: R2Bucket }, cors: Record<string, st
 <div class="access"><span>CC0 1.0</span><span>No account</span><span>No API key</span></div>
 </div></div>
 <div class="stats">
-<div><b>${num(manifest.jobs)}</b><span>postings in the search index</span></div>
+<div><b>${num(manifest.jobs)}</b><span>first-party postings in search</span></div>${manifest.jobs_aggregator ? `<div><b>${num(manifest.jobs_aggregator)}</b><span>job-board postings in search</span></div>` : ""}
 <div><b>${num(atsList.length)}</b><span>ATS export files</span></div>
 <div><b class="date-stat">${esc(head) || "Not published"}</b><span>latest export</span></div>
 <div><b class="built-stat">${when(diffs?.snapshot_built_at ?? manifest.built_at) || "Not published"}</b><span>index built</span></div>
