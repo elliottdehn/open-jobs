@@ -173,3 +173,8 @@ The core is local Python/DuckDB/SQLite and static JSON/NDJSON. Replace the `put`
 transport functions with an S3-compatible or filesystem/HTTP publisher to move providers;
 the same fake-store publication and transactional replay fixtures apply. No production upload,
 deployment or crawler scheduling change is part of this PR.
+
+**2026-09-10 note on `published_at` in the change key.** A `published_at` difference counts as a change only when its
+UTC calendar date moves (a re-stamp). Time-of-day and zone shifts do not: the export moved from a laptop in Eastern
+time to a container in UTC that night, and date-only posting dates would otherwise have produced 829k spurious
+`changed` rows. Every export script now pins DuckDB to UTC.

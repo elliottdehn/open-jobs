@@ -41,6 +41,7 @@ for d in ("jobs", "boards"):
     os.makedirs(os.path.join(root, d), exist_ok=True)
 
 con = duckdb.connect()
+con.execute("SET TimeZone='UTC'")  # date-only posting dates cast to the session zone; the laptop (EDT) and the container (UTC) disagreed by 4 h on 2026-09-10
 if from_r2: r2.duckdb(con)
 con.execute("SET preserve_insertion_order = false")
 con.execute("SET threads = 2")

@@ -27,6 +27,7 @@ t0 = time.time()
 COLS = ("{ats:'VARCHAR', slug:'VARCHAR', jobs:'STRUCT(id VARCHAR, title VARCHAR, location VARCHAR, url VARCHAR, publishedAt VARCHAR, "
         "contentHash VARCHAR, firstSeenAt BIGINT, lastSeenAt BIGINT, changedAt BIGINT, removedAt BIGINT, detailStatus VARCHAR, embedStatus VARCHAR)[]'}")
 con = duckdb.connect(); con.execute("SET preserve_insertion_order=false")
+con.execute("SET TimeZone='UTC'")  # date-only posting dates cast to the session zone; the laptop (EDT) and the container (UTC) disagreed by 4 h on 2026-09-10
 lst = ", ".join(f"'{f}'" for f in files)
 outd = os.path.join(a.out, a.date); os.makedirs(outd, exist_ok=True)
 for f in glob.glob(os.path.join(outd, "*.parquet")): os.remove(f)

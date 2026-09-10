@@ -59,6 +59,7 @@ if prev == new or not _has_jobs(prev):
 os.makedirs(a.out, exist_ok=True)
 t0 = time.time()
 con = duckdb.connect()
+con.execute("SET TimeZone='UTC'")  # date-only posting dates cast to the session zone; the laptop (EDT) and the container (UTC) disagreed by 4 h on 2026-09-10
 con.execute(f"SET memory_limit='{os.environ.get('DIFF_MEMORY', '20GB')}'"); os.makedirs(os.path.join(a.out, ".tmp"), exist_ok=True); con.execute(f"SET temp_directory='{os.path.join(a.out, '.tmp')}'"); con.execute("SET preserve_insertion_order=false")
 if r2: r2.duckdb(con)
 con.execute(f"CREATE VIEW old AS SELECT * FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
@@ -78,7 +79,7 @@ con.execute("CREATE TABLE nk AS SELECT ats, slug, id, title, location, url, embe
 n_old, n_new = con.execute("SELECT (SELECT count(*) FROM ok), (SELECT count(*) FROM nk)").fetchone()
 con.execute("CREATE TABLE addk AS SELECT n.ats, n.slug, n.id FROM nk n WHERE NOT EXISTS (SELECT 1 FROM ok o WHERE o.ats=n.ats AND o.slug=n.slug AND o.id=n.id)")
 con.execute("CREATE TABLE gonek AS SELECT o.ats, o.slug, o.id FROM ok o WHERE NOT EXISTS (SELECT 1 FROM nk n WHERE n.ats=o.ats AND n.slug=o.slug AND n.id=o.id)")
-con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch OR n.embed_status IS DISTINCT FROM o.embed_status OR n.published_at IS DISTINCT FROM o.published_at")
+con.execute("CREATE TABLE chgk AS SELECT n.ats, n.slug, n.id FROM nk n JOIN ok o USING (ats, slug, id) WHERE n.title IS DISTINCT FROM o.title OR n.location IS DISTINCT FROM o.location OR n.url IS DISTINCT FROM o.url OR n.ch <> o.ch OR n.embed_status IS DISTINCT FROM o.embed_status OR CAST(n.published_at AT TIME ZONE 'UTC' AS DATE) IS DISTINCT FROM CAST(o.published_at AT TIME ZONE 'UTC' AS DATE)")
 # boards with rows yesterday and none at all today
 con.execute("""CREATE TABLE absent AS
   SELECT g.ats, g.slug, count(*) AS old_jobs FROM gonek g
