@@ -4,6 +4,7 @@
 #
 #   scripts/container-run.sh build                    # build the image for this machine's architecture
 #   scripts/container-run.sh all [--date D]           # pull .. report, in order (the nightly run)
+#   scripts/container-run.sh from <stage> [--date D]  # resume: that stage through report, the date fixed once
 #   scripts/container-run.sh <stage> [--date D] ...   # one stage, e.g. parquet --only jazzhr
 #   scripts/container-run.sh shell                    # a shell inside the image, same mounts and env
 #
@@ -31,10 +32,19 @@ stage() {
 }
 case "$cmd" in
   shell) exec "$DOCKER" run --rm -it "${ENVARGS[@]}" -v "$VOL:/work" --entrypoint bash "$IMAGE" ;;
-  all)
+  all|from)
+    # `from <stage>`: resume a run from that stage. The date is fixed here once, so a resume that crosses midnight
+    # keeps the run's date (each stage picks "today" otherwise, which is a different work dir and lock holder).
+    ALL=(pull ledger parquet diff tree estimators finalize history feed retention)
+    if [ "$cmd" = from ]; then
+      start="${ARGS[0]}"; ARGS=("${ARGS[@]:1}"); idx=-1
+      for i in "${!ALL[@]}"; do [ "${ALL[$i]}" = "$start" ] && idx=$i; done
+      [ "$idx" -ge 0 ] || { echo "unknown stage: $start (one of ${ALL[*]})"; exit 1; }
+      STAGES=("${ALL[@]:$idx}")
+    else STAGES=("${ALL[@]}"); fi
     mkdir -p logs; LOG="logs/container-$DATE.log"; exec > >(tee -a "$LOG") 2>&1
-    echo "=== container consolidation $DATE $(date '+%H:%M:%S')"
-    for st in pull ledger parquet diff tree estimators finalize history feed retention; do
+    echo "=== container consolidation $DATE from ${STAGES[0]} $(date '+%H:%M:%S')"
+    for st in "${STAGES[@]}"; do
       if ! stage "$st" "${ARGS[@]}"; then
         case "$st" in ledger|diff|history|feed) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
       fi

@@ -109,6 +109,9 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
 - **Secrets:** `ADMIN_TOKEN` (Worker admin endpoints for `/export` and the vanished-board check),
   R2 S3 credentials scoped to `jobscream-data`, `OPENAI_KEY` only for `build-location-table.py`
   (it embeds new location strings; pennies).
+- **Resuming across midnight.** `scripts/container-run.sh from <stage> --date <run date>`: the date is fixed once for
+  the remaining stages. Running stages one by one after midnight without `--date` targets the new day (a different
+  work dir and lock holder), which the lock refuses; that is how the first night's diff was refused at 03:03.
 - **One publisher at a time.** Done (2026-09-09): the Worker's `/lock` Durable Object; stage.py acquires it for every
   publishing stage, renews it, and retention releases it. Laptop and container cannot both write the bucket.
 - **Observability, a requirement not a nicety.** The point of the container is that the project
