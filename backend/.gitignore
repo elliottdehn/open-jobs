@@ -171,3 +171,4 @@ export-slim/
 export-full/
 __pycache__/
 scripts/BUILD
+scripts/BUILD.digest

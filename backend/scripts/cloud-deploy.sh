@@ -7,14 +7,15 @@ export PATH=/Applications/Docker.app/Contents/Resources/bin:$PATH
 T=$(tr -d '[:space:]' < admin_token.txt); W=${WORKER_URL:-https://backend.dehnbostele.workers.dev}
 if [ "$1" != "--wait" ]; then
   BUILD="$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"; echo "$BUILD" > scripts/BUILD; echo "build id $BUILD"
-  npx wrangler deploy 2>&1 | grep -E 'Current Version|Building image|digest|error|Error' || true
-else BUILD=$(cat scripts/BUILD); echo "waiting for build $BUILD"; fi
+  npx wrangler deploy 2>&1 | tee /tmp/cloud-deploy.out | grep -E 'Current Version|Building image|digest|error|Error' || true
+  DIGEST=$(grep -o 'sha256:[0-9a-f]\{64\}' /tmp/cloud-deploy.out | tail -1); echo "$DIGEST" > scripts/BUILD.digest
+else BUILD=$(cat scripts/BUILD); DIGEST=$(cat scripts/BUILD.digest 2>/dev/null); echo "waiting for build $BUILD ($DIGEST)"; fi
 APP=$(npx wrangler containers list 2>/dev/null | grep backend-consolidate | awk -F'│' '{print $2}' | tr -d ' ')
 [ -n "$APP" ] || { echo "container app not found"; exit 1; }
 for i in $(seq 1 240); do
-  s=$(npx wrangler containers info "$APP" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); h=d.get('health',{}).get('instances',{}); print(('rollout' if d.get('active_rollout_id') else 'settled'), 'starting', h.get('starting',0), 'failed', h.get('failed',0), 'healthy', h.get('healthy',0), 'stopped', h.get('stopped',0))" 2>/dev/null || echo "?")
+  s=$(npx wrangler containers info "$APP" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); h=d.get('health',{}).get('instances',{}); img=d.get('configuration',{}).get('image',''); print(('rollout' if d.get('active_rollout_id') else 'settled'), ('new-image' if '$DIGEST' and img.endswith('$DIGEST') else 'old-image'), 'starting', h.get('starting',0), 'failed', h.get('failed',0), 'healthy', h.get('healthy',0))" 2>/dev/null || echo "?")
   echo "  $(date +%T) $s"
-  case "$s" in settled\ starting\ 0*) break;; esac
+  case "$s" in settled\ new-image\ starting\ 0*) break;; esac
   sleep 5
 done
 curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
