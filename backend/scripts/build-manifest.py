@@ -349,8 +349,11 @@ CHUNK = 250_000
 _bucket_stage = bool(is_s3 and r2 and os.environ.get("STAGE_TO_BUCKET") == "1")
 stage = f"s3://{r2.bucket}/tmp/{TMP}.stage" if _bucket_stage else os.path.join(work, f"{TMP}.stage")
 if not _bucket_stage: shutil.rmtree(stage, ignore_errors=True)
+# Rows carry their 6 KB vector now, and a partitioned write buffers up to 524,288 rows per open partition by default:
+# 18 partitions of that ran DuckDB out of its cap (2026-09-11). Flush every few thousand rows instead.
+con.execute("SET partitioned_write_flush_threshold=5000")
 con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
-  TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD)""")
+  TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD, ROW_GROUP_SIZE 10000)""")
 print(f"  staged {NT:,} rows in {(NT + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
 def _batches():
     for k in range((NT + CHUNK - 1) // CHUNK):
