@@ -102,6 +102,11 @@ input::placeholder, textarea::placeholder { color: #8e9f90; opacity: 1; }
 .btn.primary:hover .icon { transform: translateX(3px); }
 .btn:disabled { opacity: .6; cursor: wait; transform: none; }
 .btn.sm { padding: 7px 12px; font-size: 14px; }
+.support-cta { margin-top: 28px; max-width: 440px; }
+.support-btn { text-decoration: none; }
+.support-sub { margin-top: 10px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.support-sub a { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.support-sub a:hover { color: var(--green); }
 .prep { min-height: 20px; color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
 .prep i { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
 .prep.busy i { background: var(--amber); animation: blink 1.2s infinite; }
@@ -327,6 +332,13 @@ dialog#fresh button { background: var(--green); color: #142a20; border: 0; borde
         <span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Built in the open.</span>
       </div>
       <div class="hero-caption mono">Less searching. More possibility.</div>
+      <div class="support-cta">
+        <a class="btn primary support-btn" href="https://forms.gle/S1mZXwLZ1ZzrXbv37" target="_blank" rel="noopener">
+          <span>Request dataset support</span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg>
+        </a>
+        <div class="support-sub">Building on the data? Say what you need. The whole thing is free, CC0, and
+          <a href="https://github.com/elliottdehn/open-jobs" target="_blank" rel="noopener">open source on GitHub</a>.</div>
+      </div>
     </div>
 
     <div class="search-panel">
