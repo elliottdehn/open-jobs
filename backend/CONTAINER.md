@@ -168,6 +168,21 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   rebuilt image, which is therefore the first full-scale run of the parts, the dedup across parts, the tree
   without the second memmap, and the gzip ledger pull (the ledger stage itself had already run on the old image).
 
+- **2026-09-10 (second night), the rest of it.** Completed at 11:13 EDT after thirteen resumes, all published: index
+  4,450,859 postings (3,251,298 first-party + 1,199,561 job-board) in 11,572 groups, diff +1,390,185 / -101,317 /
+  ~36,398, ledger, feed generation bea8d075, tar 18.6 GB. Faults after the UUID slug, in order: the diff selected
+  columns the older export lacks (typed NULLs now); its output dir kept a killed attempt's partial file (cleared);
+  it buffered five full scans (two labeled scans now, DIFF_MEMORY 6 GB, threads 8, write retried on bucket errors,
+  bytes-based progress); the Mac's maintenance sleep stalled the chain and skewed the VM clock into R2 403s
+  (container-run.sh caffeinates itself); the tree's staging write blew DuckDB's cap twice (partition flush 5000,
+  row groups 10k, arrays and memmap freed before pass 2, cap 8 GB, s3 uploader 4 threads) and a leftover bucket
+  staging prefix blocked a rerun (cleared, incomplete multipart uploads aborted); the location table's kNN vote ran
+  the container out of memory at 587k distinct locations (256-row chunks, dict and DuckDB freed first). Also: the
+  diff stage is no longer warning-only; ESTIMATORS_ONLY=build-location-table reran just that model. Snapshot cap
+  raised to 2M rows (two aggregators were skipped at 400k); dark no longer parks rows as detail 'na' and the 4.16M
+  already parked were re-queued. Flat groups/<id>.json now resolves through manifest-head.json to the current
+  build's prefix, and the flat mirror is trimmed by name after each publish.
+
 ## Running the container locally
 
 ```sh
