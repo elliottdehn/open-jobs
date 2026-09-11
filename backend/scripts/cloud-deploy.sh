@@ -20,10 +20,13 @@ for i in $(seq 1 240); do
   case "$s" in settled\ new-image\ starting\ 0*) break;; esac
   sleep 5
 done
-curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
-for i in $(seq 1 30); do
-  sleep 3
+# Verify from inside: ask the container for its build id, fresh each attempt (the instance can still be switching for
+# a minute after the rollout reads settled, and an early answer comes from the old process).
+for i in $(seq 1 20); do
+  curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
+  sleep 8
   live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); t=(d.get('lastOutput') or {}).get('text') or ''; print(t.strip().splitlines()[-1] if t.strip() else '')" 2>/dev/null || echo '?')
   [ "$live" = "$BUILD" ] && { echo "image $BUILD live"; exit 0; }
+  echo "  $(date +%T) container reports '$live'"
 done
 echo "container reports '$live', expected $BUILD"; exit 1
