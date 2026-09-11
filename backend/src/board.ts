@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { fetchers, parseBoardName } from "./ats";
 import type { FetchResult, Job, JobDetail } from "./ats/types";
 import { ENRICH_BATCH, ENRICH_CONCURRENCY, enricher, enrichOne, jdText, type JobEnrichment } from "./enrich";
-import { EMBED_TAG, embedTexts } from "./openai";
+import { EMBED_TAG, embedTexts, EMBED_HEADROOM } from "./openai";
 import { deriveCandidates } from "./company";
 import { resolveCompany, type CompanyEnrichment } from "./company";
 import { usd } from "./pricing";
@@ -1076,8 +1076,10 @@ export class Board extends DurableObject<Env> {
 			chars += t.length;
 		}
 		try {
-			const { vectors } = await embedTexts(this.env, texts);
-			meta.embedBackoffUntil = null;
+			const { vectors, headroom, resetMs } = await embedTexts(this.env, texts);
+			// Leave EMBED_HEADROOM of the org's per-minute budget to interactive /embed callers: when this call saw less
+			// than that left, this board sleeps until the window resets (plus jitter so the fleet does not wake at once).
+			meta.embedBackoffUntil = headroom < EMBED_HEADROOM ? Date.now() + Math.max(resetMs, 5_000) + Math.floor(Math.random() * 10_000) : null;
 			this.ctx.storage.transactionSync(() => {
 				for (let i = 0; i < rows.length; i++) {
 					this.ctx.storage.sql.exec(

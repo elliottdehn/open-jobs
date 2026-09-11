@@ -100,7 +100,17 @@ export const EMBED_RECIPE = 3;
 export const EMBED_TAG = `${EMBED_MODEL}:${EMBED_DIMS}:v${EMBED_RECIPE}`;
 
 /** Embed up to 2048 texts in one call; returns float32 vectors in input order. */
-export async function embedTexts(env: Env, texts: string[], retries = 0): Promise<{ vectors: Float32Array[]; tokens: number }> {
+/** Backfill headroom: the fleet's job embedding yields whenever OpenAI reports less than this share of the org's
+ *  per-minute budget (tokens or requests) left, so an interactive /embed always finds room. */
+export const EMBED_HEADROOM = 0.075;
+/** OpenAI's x-ratelimit-reset-* values look like "6ms", "1.2s", "1m0.5s". */
+function parseReset(v: string | null): number {
+	if (!v) return 0;
+	let ms = 0;
+	for (const m of v.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) ms += Number(m[1]) * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000 } as Record<string, number>)[m[2]];
+	return ms;
+}
+export async function embedTexts(env: Env, texts: string[], retries = 0): Promise<{ vectors: Float32Array[]; tokens: number; headroom: number; resetMs: number }> {
 	if (!env.OPENAI_KEY) throw new Error("OPENAI_KEY secret not set");
 	let res: Response;
 	for (let attempt = 0; ; attempt++) {
@@ -119,7 +129,14 @@ export async function embedTexts(env: Env, texts: string[], retries = 0): Promis
 	if (!res.ok || json.error || !json.data) throw new Error(`openai embeddings ${res.status}: ${json.error?.message ?? "request failed"}`);
 	const vectors: Float32Array[] = new Array(texts.length);
 	for (const d of json.data) vectors[d.index] = Float32Array.from(d.embedding);
-	return { vectors, tokens: json.usage?.total_tokens ?? 0 };
+	// share of the org's per-minute budget still unused after this call (1 when the headers are absent)
+	const share = (kind: string) => {
+		const lim = Number(res.headers.get(`x-ratelimit-limit-${kind}`)), rem = Number(res.headers.get(`x-ratelimit-remaining-${kind}`));
+		return lim > 0 && Number.isFinite(rem) ? rem / lim : 1;
+	};
+	const headroom = Math.min(share("tokens"), share("requests"));
+	const resetMs = Math.max(parseReset(res.headers.get("x-ratelimit-reset-tokens")), parseReset(res.headers.get("x-ratelimit-reset-requests")));
+	return { vectors, tokens: json.usage?.total_tokens ?? 0, headroom, resetMs };
 }
 
 /**
