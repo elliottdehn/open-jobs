@@ -28,7 +28,7 @@ unreachable, means our pull lost it -> its rows are `carried` (appended to today
 boards/<ats>.parquet so the index and tomorrow's diff see them). jobCount == 0 means it really emptied ->
 `removed`. Without this, one bad pull would look like 50,000 postings closing and reopening the next day.
 """
-import argparse, concurrent.futures, glob, hashlib, json, os, sys, time, urllib.parse, urllib.request
+import shutil, argparse, concurrent.futures, glob, hashlib, json, os, sys, time, urllib.parse, urllib.request
 import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from r2 import R2
@@ -138,8 +138,7 @@ removal_counts = dict(con.execute(f"SELECT {removal_sql} AS removal, count(*) FR
 
 # one file, every event with the full record
 outd = os.path.join(a.out, f"{pd}__{nd}")
-if os.path.isdir(outd):
-    for f in glob.glob(os.path.join(outd, "*.parquet")): os.remove(f)
+if os.path.isdir(outd): shutil.rmtree(outd)  # a killed earlier attempt leaves partial files DuckDB then refuses to write over
 con.execute(f"""COPY (
   SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
   UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {old_collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
