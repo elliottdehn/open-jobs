@@ -46,7 +46,7 @@ case "$cmd" in
     echo "=== container consolidation $DATE from ${STAGES[0]} $(date '+%H:%M:%S')"
     for st in "${STAGES[@]}"; do
       if ! stage "$st" "${ARGS[@]}"; then
-        case "$st" in ledger|diff|history|feed|archive) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
+        case "$st" in ledger|history|feed|archive) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; stage report || true; exit 1;; esac
       fi
     done
     stage report || true; echo "=== done $(date '+%H:%M:%S')" ;;
