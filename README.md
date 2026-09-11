@@ -161,25 +161,42 @@ timestamps, straight from the crawler's records.
 
 ### Mirror the search index
 
-Several people already take the whole tree every night, so here is the contract. The index is static
-files: `manifest.json`, `centroids.bin`, and one JSON per group.
+Several people already copy the whole search index every night. This is the contract.
 
-1. `GET /data/manifest.json`. Read `groups` (this build's prefix, e.g. `groups/2026-09-09/`), `built_at`
-   (ms), `jobs_total`, and `tree`: the nodes, each with an `id` and `children`. The group files are the
-   leaves, the nodes with no children, one file per leaf named by its `id`. Ids are not `0..leaves-1`:
-   they are node ids and share the space with the internal nodes, so take them from the tree.
-2. Fetch `/data/centroids.bin` and `/data/<groups><id>.json` for every leaf id. One publish is one
-   prefix: a build's files never change once its manifest is live, and the previous build's prefix is
-   kept for a day, so a walk that overlaps a publish still gets one consistent tree.
-3. Repeat when `built_at` changes. Publishes land once a day, in the morning UTC.
+**What it is.** Three kinds of static file under [`/data/`](https://backend.dehnbostele.workers.dev/data/):
 
-Sizes as of 2026-09-11: 11,372 files, 37 GB, median 3 MB, largest 100 MB. `uv run tools/jobs.py fetch
---groups <root id>` does the same walk into a local parquet with the leaf id on every row (`--groups` takes
-any node id and fetches every leaf under it). Walk from the manifest's prefix, not the flat `groups/` mirror, which
-exists for readers that predate the dated layout. There is no rate limit on the data path and egress
-costs nothing, so pace yourself however you like. Put a contact in your `User-Agent`; two people already
-do, and it is how a broken publish becomes an email instead of a mystery. Every public read allows any
-origin, so a browser can also read the tree straight from here without a mirror in between.
+- `manifest.json`: the tree. Every node has an `id` and a list of `children`; the nodes with no
+  children are the groups. The manifest also carries `groups` (this build's prefix, for example
+  `groups/2026-09-09/`), `built_at` (milliseconds since the epoch), and `jobs_total`.
+- `centroids.bin`: one float16 unit vector per node, 1536 dimensions, in the same order as the tree.
+  A query is routed to groups by cosine against these.
+- `<groups prefix><id>.json`: one file per group, named by the node id. Each holds the postings in
+  that group: title, company, location, URL, first seen, the full description, and a base64 float32
+  vector per posting.
+
+**How to copy it.**
+
+1. Fetch `manifest.json`.
+2. Fetch `centroids.bin`.
+3. For every node with no children, fetch `<groups prefix><id>.json`.
+4. Once a day, fetch the manifest again. If `built_at` changed, repeat from step 2.
+
+**Why a copy is always one build.** Each build is published under its own dated prefix, and the
+manifest switches to it once, after every file is in place. Files under a prefix are never modified,
+and the previous prefix stays for a day. So a copy that starts from one manifest is one consistent
+tree, even if a publish happens while you are copying. Use the prefix from the manifest; the bare
+`groups/` path exists only for readers written before the dated layout.
+
+**Size and pace.** 11,372 files, 37 GB, median 3 MB, largest 100 MB (as of 2026-09-11). There is no
+rate limit on `/data/` and egress is free, so copy at whatever pace suits you.
+
+**Shortcut.** `uv run tools/jobs.py fetch --groups 0` does the same walk into a local parquet with the
+group id on every row. Node 0 is the root, and `--groups` fetches every group under the nodes you name.
+
+**Two asks.** Put a contact in your `User-Agent`; two mirrors already do, and it turns a bad publish
+into an email instead of a mystery. And know that you may not need a mirror at all: every read on
+`/data/` allows any origin, so a browser can route a query through the centroids and fetch the few
+groups it needs straight from here.
 
 History is published too. Every day's diff against the day before, one row per event with the
 full job record (added, removed, changed, and the previous version of changed), sits under
