@@ -138,6 +138,16 @@ if a.stage == "ingest":
 elif a.stage == "pull":
     if r2_mode: stamp("nothing to pull: snapshots are read from the bucket in place")
     else: run(["node", "scripts/pull-snapshots.mjs", a.worker, f"--out={export_local}", "--exclude=jobscore,governmentjobs"])
+elif a.stage == "ledger" and r2_mode:
+    # Derived from yesterday's ledger and today's export (derive-ledger.py); runs after the parquet stage. The pulled
+    # ledger (status=all through the Worker) is kept for local runs only.
+    r2 = r2c()
+    ldays = sorted({k.split("/")[1] for k, _, _ in r2.list("ledger/") if k.count("/") == 2 and k.endswith(".parquet") and k.split("/")[1] < a.date})
+    xdays = sorted({k.split("/")[1] for k, _, _ in r2.list("exports/") if k.count("/") >= 2 and k.split("/")[1] < a.date})
+    if not ldays: sys.exit("no previous ledger in the bucket to derive from")
+    cmd = ["uv", "run", "scripts/derive-ledger.py", "--date", a.date, "--export", f"s3://{BUCKET}/exports/{a.date}", "--prev-ledger", f"s3://{BUCKET}/ledger/{ldays[-1]}", "--out", "export/ledger"]
+    if xdays and ldays[-1] <= "2026-09-10": cmd += ["--prev-export", f"s3://{BUCKET}/exports/{xdays[-1]}"]  # first derived day: drop never-published rows of the pulled ledger
+    run(cmd)
 elif a.stage == "ledger":
     raw = os.path.join(work, "ledger-raw"); os.makedirs(raw, exist_ok=True)
     # LOW_DISK (20 GB cloud container): pages land as gzip parts (~2 GB for the whole fleet instead of 14 GB of ndjson,

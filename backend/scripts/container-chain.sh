@@ -4,7 +4,7 @@
 #   container-chain.sh <all | from-stage> <date>
 set -o pipefail
 FROM="${1:-all}"; DATE="${2:-$(date -u +%Y-%m-%d)}"
-ALL=(pull ledger parquet diff tree estimators finalize history feed archive retention)
+ALL=(pull parquet diff ledger tree estimators finalize history feed archive retention)
 if [ "$FROM" != all ]; then
   idx=-1; for i in "${!ALL[@]}"; do [ "${ALL[$i]}" = "$FROM" ] && idx=$i; done
   [ "$idx" -ge 0 ] || { echo "unknown stage: $FROM (one of ${ALL[*]})"; exit 2; }
