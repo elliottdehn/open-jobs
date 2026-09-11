@@ -164,16 +164,18 @@ timestamps, straight from the crawler's records.
 Several people already take the whole tree every night, so here is the contract. The index is static
 files: `manifest.json`, `centroids.bin`, and one JSON per group.
 
-1. `GET /data/manifest.json`. Read `groups` (this build's prefix, e.g. `groups/2026-09-09/`), `leaves`
-   (the group count), `built_at` (ms), and `jobs_total`.
-2. Fetch `/data/centroids.bin` and `/data/<groups><id>.json` for `id` from `0` to `leaves - 1`. One
-   publish is one prefix: a build's files never change once its manifest is live, and the previous
-   build's prefix is kept for a day, so a walk that overlaps a publish still gets one consistent tree.
+1. `GET /data/manifest.json`. Read `groups` (this build's prefix, e.g. `groups/2026-09-09/`), `built_at`
+   (ms), `jobs_total`, and `tree`: the nodes, each with an `id` and `children`. The group files are the
+   leaves, the nodes with no children, one file per leaf named by its `id`. Ids are not `0..leaves-1`:
+   they are node ids and share the space with the internal nodes, so take them from the tree.
+2. Fetch `/data/centroids.bin` and `/data/<groups><id>.json` for every leaf id. One publish is one
+   prefix: a build's files never change once its manifest is live, and the previous build's prefix is
+   kept for a day, so a walk that overlaps a publish still gets one consistent tree.
 3. Repeat when `built_at` changes. Publishes land once a day, in the morning UTC.
 
 Sizes as of 2026-09-11: 11,372 files, 37 GB, median 3 MB, largest 100 MB. `uv run tools/jobs.py fetch
---groups 0` does the same walk into a local parquet with the leaf id on every row (group ids include the
-internal nodes; 0 is the root). Walk from the manifest's prefix, not the flat `groups/` mirror, which
+--groups <root id>` does the same walk into a local parquet with the leaf id on every row (`--groups` takes
+any node id and fetches every leaf under it). Walk from the manifest's prefix, not the flat `groups/` mirror, which
 exists for readers that predate the dated layout. There is no rate limit on the data path and egress
 costs nothing, so pace yourself however you like. Put a contact in your `User-Agent`; two people already
 do, and it is how a broken publish becomes an email instead of a mystery. Every public read allows any
