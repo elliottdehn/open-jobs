@@ -170,3 +170,4 @@ logs/
 export-slim/
 export-full/
 __pycache__/
+scripts/BUILD

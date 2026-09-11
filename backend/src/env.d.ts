@@ -20,4 +20,6 @@ interface Env {
 	SLACK_RUN_WEBHOOK?: string;
 	/** the consolidation container's Durable Object (wrangler.jsonc containers + durable_objects) */
 	CONSOLIDATE: DurableObjectNamespace<import("./consolidate").Consolidate>;
+	/** this Worker, as a service binding: the container's http://worker.internal requests are forwarded over it */
+	SELF: Fetcher;
 }

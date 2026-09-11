@@ -4,10 +4,14 @@
  * image as the laptop. No ports: the process runs to completion and onStop records the exit. The object keeps a
  * journal (started / stopped with exit code / errors) that GET /run returns: the first half of the run tap.
  */
-import { Container } from "@cloudflare/containers";
+import { Container, type OutboundHandler } from "@cloudflare/containers";
 
-type Journal = { t: number; ev: "start" | "stop" | "error"; label?: string; exitCode?: number; reason?: string; elapsedMs?: number; message?: string };
+type Journal = { t: number; ev: "start" | "stop" | "error" | "output"; label?: string; exitCode?: number; reason?: string; elapsedMs?: number; message?: string };
 type Current = { label: string; startedAt: number; args: string[] };
+
+/** The hostname the container uses for our own API. Containers cannot reach *.workers.dev; requests to this name run
+ *  as an outbound handler in the Workers runtime and are forwarded to this Worker over the SELF service binding. */
+export const WORKER_INTERNAL = "http://worker.internal";
 
 export class Consolidate extends Container<Env> {
 	sleepAfter = "14h"; // a batch run has no activity in the Container sense; the process ends on its own well before this
@@ -18,7 +22,7 @@ export class Consolidate extends Container<Env> {
 		return {
 			ADMIN_TOKEN: e.ADMIN_TOKEN ?? "", OPENAI_KEY: e.OPENAI_KEY ?? "",
 			R2_ACCOUNT_ID: e.R2_ACCOUNT_ID ?? "", R2_ACCESS_KEY_ID: e.R2_ACCESS_KEY_ID ?? "", R2_SECRET_ACCESS_KEY: e.R2_SECRET_ACCESS_KEY ?? "",
-			SLACK_RUN_WEBHOOK: e.SLACK_RUN_WEBHOOK ?? "", WORKER_URL: "https://backend.dehnbostele.workers.dev",
+			SLACK_RUN_WEBHOOK: e.SLACK_RUN_WEBHOOK ?? "", WORKER_URL: WORKER_INTERNAL,
 		};
 	}
 	private async journal(entry: Journal): Promise<void> {
@@ -32,8 +36,25 @@ export class Consolidate extends Container<Env> {
 		if (cur && (st.status === "running" || st.status === "healthy")) return { started: false, reason: `busy: ${cur.label} since ${new Date(cur.startedAt).toISOString()}` };
 		await this.ctx.storage.put("current", { label, startedAt: Date.now(), args } satisfies Current);
 		await this.journal({ t: Date.now(), ev: "start", label });
-		await this.start({ entrypoint: args, envVars: { ...this.baseEnv(), ...extra }, enableInternet: true });
+		// Wrapped so the process's own output comes back to this object (POST /run/output) with its exit code: the platform's
+		// log pipeline is not something a stage can depend on, and a failed run must carry its traceback.
+		const wrap = String.raw`set -o pipefail; "$@" 2>&1 | tee /tmp/run.out; code=$PIPESTATUS
+/usr/local/bin/python3 - "$code" <<'PY'
+import sys, os, urllib.request
+code = sys.argv[1]; data = open('/tmp/run.out', 'rb').read()[-200000:]
+req = urllib.request.Request(os.environ['WORKER_URL'] + '/run/output?code=' + code, data=data, headers={'authorization': 'Bearer ' + os.environ['ADMIN_TOKEN'], 'content-type': 'text/plain'})
+try: urllib.request.urlopen(req, timeout=30)
+except Exception as e: print('output post failed', e)
+PY
+exit $code`;
+		await this.start({ entrypoint: ["/bin/bash", "-c", wrap, "run", ...args], envVars: { ...this.baseEnv(), ...extra }, enableInternet: true });
 		return { started: true };
+	}
+	/** The process's captured output (last 200 KB) and exit code, posted by the wrapper above. */
+	async output(code: number, text: string): Promise<void> {
+		await this.ctx.storage.put("lastOutput", { t: Date.now(), code, text });
+		const tail = text.trim().split("\n").slice(-3).join(" | ");
+		await this.journal({ t: Date.now(), ev: "output" as Journal["ev"], exitCode: code, message: tail.slice(0, 300) });
 	}
 	override async onStop(params: { exitCode: number; reason: string }): Promise<void> {
 		const cur = await this.ctx.storage.get<Current>("current");
@@ -48,8 +69,17 @@ export class Consolidate extends Container<Env> {
 	override async onError(error: unknown): Promise<void> {
 		await this.journal({ t: Date.now(), ev: "error", message: error instanceof Error ? error.message : String(error) });
 	}
-	async status(): Promise<{ state: unknown; current: Current | null; journal: Journal[] }> {
-		return { state: await this.getState(), current: (await this.ctx.storage.get<Current>("current")) ?? null, journal: ((await this.ctx.storage.get<Journal[]>("journal")) ?? []).slice(-50) };
+	async status(): Promise<{ state: unknown; current: Current | null; journal: Journal[]; lastOutput: { t: number; code: number; text: string } | null }> {
+		const lo = (await this.ctx.storage.get<{ t: number; code: number; text: string }>("lastOutput")) ?? null;
+		return { state: await this.getState(), current: (await this.ctx.storage.get<Current>("current")) ?? null, journal: ((await this.ctx.storage.get<Journal[]>("journal")) ?? []).slice(-50), lastOutput: lo && { ...lo, text: lo.text.slice(-20000) } };
 	}
 	async halt(): Promise<void> { await this.stop("SIGTERM"); }
 }
+
+// The documented form: assigned through the base class's static setter (a static field on the subclass shadows the accessor).
+Consolidate.outboundByHost = {
+	"worker.internal": (async (req: Request, env: unknown) => {
+		const u = new URL(req.url); u.protocol = "https:"; u.host = "backend.dehnbostele.workers.dev";
+		return (env as Env).SELF.fetch(new Request(u.toString(), req));
+	}) as OutboundHandler,
+};

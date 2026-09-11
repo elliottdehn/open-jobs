@@ -14,6 +14,7 @@ import { JD_ESTIMATE_USD, JD_MODELS, expandJd, type JdModel } from "./jd";
 import { dataIndex } from "./dataindex";
 export { Registry } from "./registry";
 export { Consolidate } from "./consolidate";
+export { ContainerProxy } from "@cloudflare/containers"; // required by the container's outbound handlers (worker.internal)
 
 const EXPORT_CONCURRENCY = 20;
 
@@ -431,10 +432,12 @@ export default {
 		if (parts[0] === "run") {
 			const c = env.CONSOLIDATE.getByName("consolidate");
 			if (request.method === "GET") return Response.json(await c.status());
+			if (parts[1] === "output" && request.method === "POST") { await c.output(Number(url.searchParams.get("code") ?? -1), await request.text()); return Response.json({ ok: true }); }
 			const b = (await request.json().catch(() => ({}))) as { date?: string; from?: string; stage?: string; env?: Record<string, string> };
 			const date = b.date ?? new Date().toISOString().slice(0, 10);
-			if (parts[1] === "chain" && request.method === "POST") return Response.json(await c.run(["bash", "/app/scripts/container-chain.sh", b.from ?? "all", date], b.env ?? {}, `chain ${date} from ${b.from ?? "all"}`));
-			if (parts[1] === "stage" && request.method === "POST" && b.stage) return Response.json(await c.run(["uv", "run", "--script", "/app/scripts/stage.py", b.stage, "--date", date, "--source", "r2"], b.env ?? {}, `${b.stage} ${date}`));
+			if (parts[1] === "exec" && request.method === "POST" && Array.isArray((b as { args?: string[] }).args)) return Response.json(await c.run((b as { args: string[] }).args, b.env ?? {}, `exec ${(b as { args: string[] }).args.join(" ").slice(0, 80)}`));
+			if (parts[1] === "chain" && request.method === "POST") return Response.json(await c.run(["/bin/bash", "/app/scripts/container-chain.sh", b.from ?? "all", date], b.env ?? {}, `chain ${date} from ${b.from ?? "all"}`));
+			if (parts[1] === "stage" && request.method === "POST" && b.stage) return Response.json(await c.run(["/usr/local/bin/uv", "run", "--script", "/app/scripts/stage.py", b.stage, "--date", date, "--source", "r2"], b.env ?? {}, `${b.stage} ${date}`));
 			if (parts[1] === "stop" && request.method === "POST") { await c.halt(); return Response.json({ stopped: true }); }
 			return new Response("POST /run/chain {date, from, env} | POST /run/stage {stage, date, env} | POST /run/stop | GET /run", { status: 400 });
 		}

@@ -10,7 +10,7 @@ if [ "$FROM" != all ]; then
   [ "$idx" -ge 0 ] || { echo "unknown stage: $FROM (one of ${ALL[*]})"; exit 2; }
   STAGES=("${ALL[@]:$idx}")
 else STAGES=("${ALL[@]}"); fi
-run() { echo "--- $1 $(date -u '+%H:%M:%S')"; uv run --script /app/scripts/stage.py "$1" --date "$DATE" --source r2; }
+run() { echo "--- $1 $(date -u '+%H:%M:%S')"; /usr/local/bin/uv run --script /app/scripts/stage.py "$1" --date "$DATE" --source r2; }
 echo "=== container consolidation $DATE from ${STAGES[0]} (cloud) $(date -u '+%H:%M:%S')"
 for st in "${STAGES[@]}"; do
   if ! run "$st"; then

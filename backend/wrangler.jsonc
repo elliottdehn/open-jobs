@@ -17,6 +17,9 @@
 		{ "tag": "v7", "new_sqlite_classes": ["Dedupe"] },
 		{ "tag": "v8", "new_sqlite_classes": ["Consolidate"] }
 	],
+	// The Worker bound to itself: the consolidation container reaches the API through an outbound handler on
+	// http://worker.internal (containers cannot reach *.workers.dev hostnames), which forwards over this binding.
+	"services": [{ "binding": "SELF", "service": "backend" }],
 	// The consolidation container (CONTAINER.md): the same image as the laptop (backend/Dockerfile, built for
 	// linux/amd64 and pushed by `wrangler deploy`), the largest self-serve instance, one at a time.
 	"containers": [

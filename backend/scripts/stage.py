@@ -83,22 +83,7 @@ def lock_release(force=False):
     except Exception as e: print(f"WARNING: lock release failed: {e}", flush=True)
 if a.stage == "unlock":
     lock_release(force=True); sys.exit(0)
-if a.stage == "selftest":
-    # No lock, no publishing: what this box is, whether the bucket is reachable, and how fast it reads (CONTAINER.md).
-    import platform, shutil
-    print(f"host {socket.gethostname()} {platform.machine()} python {platform.python_version()} cpus {os.cpu_count()}", flush=True)
-    try: print(f"memory {int(open('/proc/meminfo').readline().split()[1]) // 1024} MiB", flush=True)
-    except Exception: pass
-    du = shutil.disk_usage(WORK_ROOT if os.path.isdir(WORK_ROOT) else "/"); print(f"disk {WORK_ROOT}: {du.free // 10**9} GB free of {du.total // 10**9} GB", flush=True)
-    print("env:", {k: bool(os.environ.get(k)) for k in ("ADMIN_TOKEN", "OPENAI_KEY", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "SLACK_RUN_WEBHOOK", "LOW_DISK", "STAGE_TO_BUCKET")}, flush=True)
-    r2 = r2c(); import duckdb; con = duckdb.connect(); r2.duckdb(con)
-    keys = sorted(((k, sz) for k, sz, _ in r2.list("exports/") if k.endswith("/jobs/workday.parquet")), reverse=True)
-    if keys:
-        k, sz = keys[0]; t0 = time.time(); n = con.execute(f"SELECT count(*) FROM read_parquet('{r2.url(k)}')").fetchone()[0]
-        t1 = time.time(); m = con.execute(f"SELECT max(length(content)) FROM read_parquet('{r2.url(k)}')").fetchone()[0]; t2 = time.time()
-        print(f"bucket read: {k} ({sz / 1e9:.2f} GB): footer+count in {t1 - t0:.1f}s, full text column scan in {t2 - t1:.1f}s = {sz / max(t2 - t1, 0.01) / 1e6:.0f} MB/s (n={n:,}, max content {m})", flush=True)
-    print("selftest ok", flush=True); sys.exit(0)
-if a.stage not in ("ingest", "report") and not a.dry_run:
+if a.stage not in ("ingest", "report", "selftest") and not a.dry_run:
     if not token: sys.exit("ADMIN_TOKEN is required: the publisher lock lives behind the admin endpoints")
     holder = lock_holder()
     r = lock_call("acquire", {"holder": holder, "ttlMs": LOCK_TTL_MS, "note": f"{a.stage} on {socket.gethostname()}", "force": a.force_lock})
@@ -128,6 +113,24 @@ def stamp(msg):
     print(f"=== {a.stage} {a.date}: {msg} ({time.time() - t0:.0f}s)", flush=True); record(True, msg)
 def r2c():
     sys.path.insert(0, HERE); from r2 import R2; return R2()
+
+if a.stage == "selftest":
+    # No lock, no publishing: what this box is, whether the bucket is reachable, and how fast it reads (CONTAINER.md).
+    import platform, shutil
+    try: print("image build", open(os.path.join(HERE, "BUILD")).read().strip(), flush=True)
+    except OSError: print("image build unknown (no scripts/BUILD)", flush=True)
+    print(f"host {socket.gethostname()} {platform.machine()} python {platform.python_version()} cpus {os.cpu_count()}", flush=True)
+    try: print(f"memory {int(open('/proc/meminfo').readline().split()[1]) // 1024} MiB", flush=True)
+    except Exception: pass
+    du = shutil.disk_usage(WORK_ROOT if os.path.isdir(WORK_ROOT) else "/"); print(f"disk {WORK_ROOT}: {du.free // 10**9} GB free of {du.total // 10**9} GB", flush=True)
+    print("env:", {k: bool(os.environ.get(k)) for k in ("ADMIN_TOKEN", "OPENAI_KEY", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "SLACK_RUN_WEBHOOK", "LOW_DISK", "STAGE_TO_BUCKET")}, flush=True)
+    r2 = r2c(); import duckdb; con = duckdb.connect(); r2.duckdb(con)
+    keys = sorted(((k, sz) for k, sz, _ in r2.list("exports/") if k.endswith("/jobs/workday.parquet")), reverse=True)
+    if keys:
+        k, sz = keys[0]; t0 = time.time(); n = con.execute(f"SELECT count(*) FROM read_parquet('{r2.url(k)}')").fetchone()[0]
+        t1 = time.time(); m = con.execute(f"SELECT max(length(content)) FROM read_parquet('{r2.url(k)}')").fetchone()[0]; t2 = time.time()
+        print(f"bucket read: {k} ({sz / 1e9:.2f} GB): footer+count in {t1 - t0:.1f}s, full text column scan in {t2 - t1:.1f}s = {sz / max(t2 - t1, 0.01) / 1e6:.0f} MB/s (n={n:,}, max content {m})", flush=True)
+    print("selftest ok", flush=True); sys.exit(0)
 
 if a.stage == "ingest":
     run(["node", "--experimental-strip-types", "scripts/fetch-local.mjs", f"--ingest={a.worker}"])
