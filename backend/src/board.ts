@@ -771,7 +771,9 @@ export class Board extends DurableObject<Env> {
 					const r = queue.shift();
 					if (!r) return;
 					const job = JSON.parse(r.data) as Job;
-					if ((job.content ?? "").length >= DETAIL_MIN_CONTENT) {
+					if ((job.content ?? "").length >= DETAIL_MIN_CONTENT && meta.ats !== "dark") {
+						// a listing that already carried the description needs no detail page; not for dark, whose employer and
+						// location only come from the detail page's JobPosting (4.16M rows were parked here, 2026-09-11)
 						this.ctx.storage.sql.exec(`UPDATE jobs SET detail_status = 'na' WHERE id = ?`, r.id);
 						continue;
 					}
@@ -1112,8 +1114,10 @@ export class Board extends DurableObject<Env> {
 	 * Backfill kick (fleet sweep): if this board has any detail/embed/enrich backlog, fire the alarm
 	 * now so the minute-tick loop drains it. Returns the backlog sizes. Cheap and idempotent.
 	 */
-	async kick(name: string): Promise<{ details: number; embeds: number; enrich: number; kicked: boolean }> {
+	async kick(name: string, opts: { resetNa?: boolean } = {}): Promise<{ details: number; embeds: number; enrich: number; kicked: boolean }> {
 		const meta = await this.ensureScheduled(name);
+		// POST /backfill?reset=na: dark rows parked as 'na' (description present, detail never fetched) go back to pending
+		if (opts.resetNa && meta.ats === "dark") this.ctx.storage.sql.exec(`UPDATE jobs SET detail_status = NULL WHERE detail_status = 'na' AND removed_at IS NULL`);
 		const details = fetchers[meta.ats]?.fetchDetail ? this.pendingDetailCount() : 0;
 		const embeds = this.autoEmbed() ? this.pendingEmbedCount() : 0;
 		const enrich = this.autoEnrich() ? this.pendingCount() : 0;

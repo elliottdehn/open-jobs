@@ -63,12 +63,12 @@ function jobQuery(url: URL): JobQuery {
 
 async function syncAll(
 	env: Env,
-	opts: { mode?: SyncMode; skipRecentMs?: number; only?: string[] } = {},
+	opts: { mode?: SyncMode; skipRecentMs?: number; only?: string[]; resetNa?: boolean } = {},
 ): Promise<Record<string, unknown>> {
 	const out: Record<string, unknown> = {};
 	for (const ats of opts.only ?? enabledAts) {
 		if (!enabledAts.includes(ats)) continue;
-		out[ats] = await env.REGISTRY.getByName(ats).sync(ats, { mode: opts.mode, skipRecentMs: opts.skipRecentMs });
+		out[ats] = await env.REGISTRY.getByName(ats).sync(ats, { mode: opts.mode, skipRecentMs: opts.skipRecentMs, resetNa: opts.resetNa });
 	}
 	return out;
 }
@@ -429,7 +429,7 @@ export default {
 		//   (`fetched` = boards kicked, `skipped` = boards with nothing to do).
 		if (parts[0] === "backfill" && request.method === "POST" && parts.length === 1) {
 			const only = url.searchParams.get("ats")?.split(",").filter(Boolean);
-			return Response.json(await syncAll(env, { mode: "kick", only }));
+			return Response.json(await syncAll(env, { mode: "kick", only, resetNa: url.searchParams.get("reset") === "na" }));
 		}
 
 		// POST /fetch-all[?ats=a,b][&skipRecent=<ms>] -> on-demand fetch of every board (arms if needed),

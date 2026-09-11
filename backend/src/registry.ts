@@ -17,6 +17,7 @@ export type SyncMode = "arm" | "fetch" | "kick";
 const STALE_MS = 20 * 60_000;
 
 export interface SyncState {
+	resetNa?: boolean; // kick mode: re-queue dark rows parked as detail 'na'
 	ats: string;
 	/** "arm" = ensure every board has an alarm; "fetch" = also fetch each board now; "kick" = fire the alarm now on boards with a detail/embed/enrich backlog. */
 	mode: SyncMode;
@@ -45,7 +46,7 @@ export interface SyncState {
  * invocation ever needing thousands of subrequests.
  */
 export class Registry extends DurableObject<Env> {
-	async sync(ats: string, opts: { mode?: SyncMode; skipRecentMs?: number } = {}): Promise<SyncState> {
+	async sync(ats: string, opts: { mode?: SyncMode; skipRecentMs?: number; resetNa?: boolean } = {}): Promise<SyncState> {
 		const existing = await this.ctx.storage.get<SyncState>("sync");
 		if (existing && existing.finishedAt === null && Date.now() - (existing.updatedAt ?? existing.startedAt) < STALE_MS) {
 			return existing; // already running
@@ -53,7 +54,7 @@ export class Registry extends DurableObject<Env> {
 		const state: SyncState = {
 			ats,
 			mode: opts.mode ?? "arm",
-			skipRecentMs: opts.skipRecentMs ?? DEFAULT_FRESH_MS,
+			skipRecentMs: opts.skipRecentMs ?? DEFAULT_FRESH_MS, resetNa: opts.resetNa,
 			cursor: 0,
 			total: slugsFor(ats).length,
 			startedAt: Date.now(),
@@ -99,7 +100,7 @@ export class Registry extends DurableObject<Env> {
 			const stub = this.env.BOARD.getByName(name);
 			if (state.mode === "fetch") return stub.forceFetch(name, state.skipRecentMs);
 			if (state.mode === "kick") {
-				const k = await stub.kick(name);
+				const k = await stub.kick(name, { resetNa: state.resetNa });
 				state.pendingDetails = (state.pendingDetails ?? 0) + k.details; // sweeps started before this field existed
 				state.pendingEmbeds = (state.pendingEmbeds ?? 0) + k.embeds;
 				return k.kicked;
