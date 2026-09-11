@@ -198,8 +198,20 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   rollout settles (no container starts), and verifies the id from inside. The lock-free `selftest` stage measured:
   x86_64, 4 vCPU, 12,220 MiB, 15 GB free of 19 GB, all secrets present, 94 MB/s on a single-stream 1 GB bucket read
   (the app's network limit is 4 Gbit/s; DuckDB's parallel range reads are the real number, still to measure).
-  Not yet: a real stage in the cloud (needs the publisher lock, held by the laptop run until morning; first test is
-  `estimators` with ESTIMATORS_ONLY=train-salary), the chain, the cron/Workflow trigger, the missed-run alarm.
+  Later the same evening: the disk budget for a whole chain on 19 GB. Group files never sit on the disk (the tree
+  stage's uploader deletes each one after its upload under `LOW_DISK` and records the sizes in
+  `.published-groups.json`; finalize verifies those against the bucket listing instead of local files), and the diff's
+  full parts go to the bucket right after the diff stage (local copies become empty placeholders that upload-history
+  recognises; the lite parts and the sidecar stay for the feed). Scratch-tested end to end under `tmp/lowdisk-test/`:
+  1,640 groups uploaded and deleted as written, finalize verified all of them, manifest + head + mirror published,
+  then cleaned up. The container's output tail is posted back every two minutes while a stage runs (code -1 in
+  `lastOutput`), and the tree's filler read is capped at `TREE_FILL_MEMORY` 3 GB for the 12 GiB box. The silence
+  alarm exists: a `0 10 * * *` cron posts to Slack when `manifest-head.json` is older than 26 h.
+  Deploys: `scripts/cloud-deploy.sh` (fails loudly when the registry rejects a layer, which it did once while a scratch
+  test saturated the uplink; waits for the app's image to be the pushed digest, not merely "no rollout active").
+  Plan for the first real cloud run: a watcher starts `POST /run/chain {date: 2026-09-12}` the moment the laptop run
+  of 2026-09-11 reports and the lock frees, so a failure harms nothing published and a success is a second build that
+  morning. No parallel week: the laptop stays the nightly until one cloud chain has completed.
 
 ## Running the container locally
 
