@@ -38,21 +38,26 @@ export class Consolidate extends Container<Env> {
 		await this.journal({ t: Date.now(), ev: "start", label });
 		// Wrapped so the process's own output comes back to this object (POST /run/output) with its exit code: the platform's
 		// log pipeline is not something a stage can depend on, and a failed run must carry its traceback.
-		const wrap = String.raw`set -o pipefail; "$@" 2>&1 | tee /tmp/run.out; code=$PIPESTATUS
-/usr/local/bin/python3 - "$code" <<'PY'
+		// The process runs in the background of the wrapper; its output tail is posted every two minutes while it runs
+		// (code -1) and once more with the real exit code when it ends, so a three-hour chain is watchable in GET /run.
+		const wrap = String.raw`post() { /usr/local/bin/python3 - "$1" <<'PY'
 import sys, os, urllib.request
 code = sys.argv[1]; data = open('/tmp/run.out', 'rb').read()[-200000:]
 req = urllib.request.Request(os.environ['WORKER_URL'] + '/run/output?code=' + code, data=data, headers={'authorization': 'Bearer ' + os.environ['ADMIN_TOKEN'], 'content-type': 'text/plain'})
 try: urllib.request.urlopen(req, timeout=30)
 except Exception as e: print('output post failed', e)
 PY
-exit $code`;
+}
+: > /tmp/run.out; ( "$@" 2>&1 | tee -a /tmp/run.out; echo $PIPESTATUS > /tmp/run.code ) &
+while kill -0 $! 2>/dev/null; do sleep 120; kill -0 $! 2>/dev/null && post -1; done
+code=$(cat /tmp/run.code 2>/dev/null || echo 1); post "$code"; exit "$code"`;
 		await this.start({ entrypoint: ["/bin/bash", "-c", wrap, "run", ...args], envVars: { ...this.baseEnv(), ...extra }, enableInternet: true });
 		return { started: true };
 	}
 	/** The process's captured output (last 200 KB) and exit code, posted by the wrapper above. */
 	async output(code: number, text: string): Promise<void> {
 		await this.ctx.storage.put("lastOutput", { t: Date.now(), code, text });
+		if (code === -1) return;  // an interim tail while the process runs: kept in lastOutput, not in the journal
 		const tail = text.trim().split("\n").slice(-3).join(" | ");
 		await this.journal({ t: Date.now(), ev: "output" as Journal["ev"], exitCode: code, message: tail.slice(0, 300) });
 	}
