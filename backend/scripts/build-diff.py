@@ -28,7 +28,7 @@ unreachable, means our pull lost it -> its rows are `carried` (appended to today
 boards/<ats>.parquet so the index and tomorrow's diff see them). jobCount == 0 means it really emptied ->
 `removed`. Without this, one bad pull would look like 50,000 postings closing and reopening the next day.
 """
-import shutil, argparse, concurrent.futures, glob, hashlib, json, os, sys, time, urllib.parse, urllib.request
+import shutil, argparse, concurrent.futures, glob, hashlib, json, os, re, sys, time, urllib.parse, urllib.request
 import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from r2 import R2
@@ -152,13 +152,28 @@ def _ats_in(t):
 ats_new, ats_old = _ats_in("evk_new"), _ats_in("evk_old")
 new_collist = ", ".join(f'n."{c}"' for c in cols)
 n_events = con.execute("SELECT (SELECT count(*) FROM evk_new) + (SELECT count(*) FROM evk_old)").fetchone()[0]
+def _ats_set(t): return {r[0] for r in con.execute(f"SELECT DISTINCT ats FROM {t}").fetchall()}
+def _scope_bytes():
+    """Bytes the write will read: today's jobs files for the sources with new-side events, yesterday's for old-side ones.
+    Events are dense in some files (a new aggregator source) and sparse in others, so bytes, not events, pace the write."""
+    def total(root, atss):
+        stem = lambda name: re.sub(r"(\.p\d+)?\.parquet$", "", name)
+        if root.startswith("s3://"): return sum(sz for k, sz, _ in r2.list(_key(root) + "/jobs/") if k.endswith(".parquet") and stem(k.rsplit("/", 1)[-1]) in atss)
+        return sum(os.path.getsize(f) for f in glob.glob(os.path.join(root, "jobs", "*.parquet")) if stem(os.path.basename(f)) in atss)
+    try: return total(new, _ats_set("evk_new")) + total(prev, _ats_set("evk_old"))
+    except Exception: return 0
+def _rx():
+    """Bytes received by this host so far (Linux; the container's only traffic is this read), or None."""
+    try:
+        with open("/proc/net/dev") as f: return sum(int(l.split()[1]) for l in f if ":" in l and not l.strip().startswith("lo:"))
+    except Exception: return None
 def _written():
-    """Events already in finished output parts (a part still being written has no footer yet and is skipped)."""
-    rows = size = parts = 0; local = duckdb.connect()  # own connection: the write owns `con` while it runs
+    """Finished output parts and their size (a part still being written is counted by size only)."""
+    size = parts = 0
     for f in glob.glob(os.path.join(outd, "*.parquet")):
-        try: rows += local.execute(f"SELECT num_rows FROM parquet_file_metadata('{f}')").fetchone()[0]; size += os.path.getsize(f); parts += 1
-        except duckdb.Error: pass
-    local.close(); return rows, size, parts
+        try: size += os.path.getsize(f); parts += 1
+        except OSError: pass
+    return size, parts
 def _copy_with_progress(sql):
     """Run the write on a cursor in a thread; the main thread reports progress and an ETA every 30 s."""
     import threading
@@ -166,13 +181,18 @@ def _copy_with_progress(sql):
     def go():
         try: con.execute(sql)  # the configured connection (bucket credentials, memory cap, temp dir); a cursor has none of them
         except BaseException as e: err.append(e)
+    scope = _scope_bytes(); rx0 = _rx()
     th = threading.Thread(target=go, daemon=True); t = time.time(); th.start()
+    print(f"  diff write: {n_events:,} events from {scope / 1e9:.1f} GB of parquet in scope", flush=True)
     while th.is_alive():
         th.join(30)
         if not th.is_alive(): break
-        rows, size, parts = _written(); el = time.time() - t
-        eta = f"~{(n_events - rows) * el / rows / 60:.0f} min left" if rows else "no part finished yet"
-        print(f"  diff write: {rows:,}/{n_events:,} events ({100 * rows / max(n_events, 1):.0f}%), {parts} parts, {size / 1e9:.1f} GB, {el / 60:.0f} min elapsed, {eta}", flush=True)
+        size, parts = _written(); el = time.time() - t; rx = _rx()
+        if scope and rx is not None and rx0 is not None and rx > rx0:
+            frac = min((rx - rx0) / scope, 0.99)
+            print(f"  diff write: {100 * frac:.0f}% of the bytes read ({(rx - rx0) / 1e9:.1f}/{scope / 1e9:.1f} GB, {(rx - rx0) / el / 1e6:.0f} MB/s), {parts} parts / {size / 1e9:.1f} GB written, {el / 60:.0f} min elapsed, ~{el * (1 - frac) / frac / 60:.0f} min left", flush=True)
+        else:
+            print(f"  diff write: {parts} parts / {size / 1e9:.1f} GB written, {el / 60:.0f} min elapsed", flush=True)
     if err: raise err[0]
 for _attempt in range(4):
     try:
