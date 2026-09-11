@@ -80,6 +80,18 @@ class R2:
             for o in page.get("Contents", []): yield o["Key"], o["Size"], o.get("ETag", "").strip('"')
 
     def delete(self, key): self.client.delete_object(Bucket=self.bucket, Key=key)
+    def abort_stale_multipart(self, prefix="", older_than_s=0):
+        """Abort incomplete multipart uploads under a prefix (a killed writer leaves its parts behind: billable, invisible
+        to listings, and DuckDB refuses to write over the key). Returns how many were aborted."""
+        import datetime as _dt
+        cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=older_than_s); n = 0; kw = {"Bucket": self.bucket, "Prefix": prefix}
+        while True:
+            resp = self.client.list_multipart_uploads(**kw)
+            for u in resp.get("Uploads", []):
+                if u["Initiated"] <= cut: self.client.abort_multipart_upload(Bucket=self.bucket, Key=u["Key"], UploadId=u["UploadId"]); n += 1
+            if not resp.get("IsTruncated"): break
+            kw.update(KeyMarker=resp.get("NextKeyMarker"), UploadIdMarker=resp.get("NextUploadIdMarker"))
+        return n
     def copy(self, src, dst, content_type="application/octet-stream"):
         """Server-side copy within the bucket (no download; one class A operation)."""
         self.client.copy_object(Bucket=self.bucket, CopySource={"Bucket": self.bucket, "Key": src}, Key=dst, ContentType=content_type, MetadataDirective="REPLACE")

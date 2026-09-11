@@ -206,6 +206,9 @@ elif a.stage == "archive":
     if not r2_mode and not a.publish: stamp("skipped (no bucket)"); sys.exit(0)
     run(["uv", "run", "scripts/build-archive.py", "--export", export_local])
 elif a.stage == "retention":
+    # incomplete multipart uploads (a killed stage's parts) are billable and invisible to listings: abort any older than a day
+    try: n_mp = r2c().abort_stale_multipart("", 86_400); print(f"aborted {n_mp} stale incomplete multipart upload(s)", flush=True)
+    except Exception as e: print(f"WARNING: multipart cleanup failed ({e})", flush=True)
     if a.keep_full: stamp("kept (--keep-full)"); sys.exit(0)
     side = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
     ok = bool(side) and json.load(open(side[-1])).get("ok_to_prune") and json.load(open(side[-1])).get("carry_done")

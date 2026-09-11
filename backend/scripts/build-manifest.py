@@ -353,7 +353,8 @@ else:
     # a killed earlier attempt leaves its partial chunks under the same prefix and DuckDB refuses to write over them
     _old = [k for k, _, _ in r2.list(f"tmp/{TMP}.stage/")]
     for k in _old: r2.delete(k)
-    if _old: print(f"  cleared {len(_old)} leftover staging objects from the bucket", file=sys.stderr, flush=True)
+    _mp = r2.abort_stale_multipart(f"tmp/{TMP}.stage/")
+    if _old or _mp: print(f"  cleared {len(_old)} leftover staging objects and {_mp} incomplete multipart uploads from the bucket", file=sys.stderr, flush=True)
 # Rows carry their 6 KB vector now, and a partitioned write buffers up to 524,288 rows per open partition by default:
 # 18 partitions of that ran DuckDB out of its cap (2026-09-11). Flush every few thousand rows instead.
 con.execute("SET partitioned_write_flush_threshold=5000")
