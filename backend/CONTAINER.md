@@ -186,15 +186,24 @@ Lessons that apply to any host:
 The largest instance is **standard-4: 4 vCPU, 12 GiB memory, 20 GB disk** (custom types cap at the same).
 Measured against the 2026-09-10 run:
 
-1. **`dark` in the parquet stage does not fit 20 GB.** Its first-pass file passed 10 GB on local disk and the
-   tier rewrite and the end-of-run dedup each make a second copy. Write and upload it in parts of a few GB
-   (by board slug range), never holding the whole source locally; cap that DuckDB connection at 6 GB (it has
-   no cap today and sits at 11 GB in the VM).
-2. **The tree stage's two memmaps do not fit 20 GB.** First-party 9.7 GB plus ~9 GB for three million
-   job-board rows. The fix is the sample design: build the tree on a uniform sample of first-party rows
-   (`WHERE_` with `USING SAMPLE`), place every other row through the existing filler descent, and have pass 2
-   take each row's vector from the parquet rows it already streams instead of from a memmap. Memory becomes
-   the sample plus centroids; disk becomes the staging, which `STAGE_TO_BUCKET` already moves to the bucket.
+1. **`dark` in parts. Done 2026-09-10 (evening), not yet in the image.** The parquet stage packs a source
+   whose snapshots exceed `PARQUET_PART_ROWS` (2,000,000) into `jobs/<ats>.p<n>.parquet` and
+   `boards/<ats>.p<n>.parquet` by board slug, converting and publishing one part at a time (`LOW_DISK` drops
+   each local copy after upload); `PARQUET_MEMORY` (6 GB in the image) caps that DuckDB connection. The
+   end-of-run dedup works across the parts: pass A picks one winner per (employer, title, location) over every
+   part, pass B rewrites each part, pulling and pushing one at a time. `build-parquet.py --dedup-only` reruns
+   just that pass. Tested: jazzhr from the bucket in two parts (same 6,156 rows and 388 boards as one file);
+   the scratch dark export split in two with 100 cross-part copies and 50 first-party copies planted, all 150
+   dropped and nothing else (679,832 to 679,682). Readers already glob `jobs/*.parquet`.
+2. **The tree stage's second memmap. Done 2026-09-10 (evening), not yet in the image.** The tree is built on
+   every first-party posting (that set is the sample; `TREE_SAMPLE_ROWS` exists as an emergency lever and is
+   off). Every other embedded row, job-board or not, is placed through the filler descent, and pass 2 takes
+   each row's vector from the parquet rows it already streams, so the job-board memmap is gone and only the
+   first-party memmap remains (~9.8 GB for 3.2M rows, written once in key order; with the export left in the
+   bucket under `LOW_DISK` and staging under `STAGE_TO_BUCKET`, that is the stage's only large local file).
+   Tested on the scratch export: identical tree (3,109 nodes, 1,555 leaves), identical placement (679,657
+   filler rows), manifest `jobs`/`jobs_aggregator`/`jobs_total` now count by tier with `built_on` the builder
+   count, group vectors float32 unit length as before (a NumPy 2 promotion to float64 was caught by the test).
 3. **Split-on-overflow for leaves** (optional): after filling, 9 of 1,605 test leaves exceeded 5k rows.
 4. **Image to the registry** (`build-amd64`), **a Workflow on the Worker's cron** that starts one container per
    stage with the date fixed once and stops on a non-warning failure, **`SLACK_RUN_WEBHOOK`** set, and a

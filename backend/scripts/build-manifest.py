@@ -62,7 +62,7 @@ _tier_cols = "coalesce(tier, 'first_party') AS tier, org, via" if _has_tier else
 q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce(location,'') AS location, coalesce(url,'') AS url,
                epoch_ms(first_seen_at) AS first_seen_ms, epoch_ms(published_at) AS published_ms,
                left(regexp_replace(regexp_replace(coalesce(content,''), '<[^>]+>', ' ', 'g'), '\\s+', ' ', 'g'), 4000) AS jd,
-               json_extract(enrichment_json, '$.data') AS enrichment, {_tier_cols} {WHERE_ROWS}"""
+               json_extract(enrichment_json, '$.data') AS enrichment, {_tier_cols}, embedding {WHERE_ROWS}"""
 # Pass 1 (vectors): stream record batches; vectors go straight into a file-backed float16 array (N x D); the
 # only per-row Python kept is what labels and exemplars need (title, location, company hint, board). Everything
 # else a group file needs (id, url, dates, jd text, enrichment) is streamed back out of the parquet in DFS order
@@ -78,8 +78,16 @@ if os.path.exists(_xpath): os.remove(_xpath)
 # container has.) Same export in, same tree out: the order is the sorted key order, whatever the scan order was.
 import pyarrow as pa, pyarrow.compute as pc
 t2 = time.time()
-Hs = con.execute(f"SELECT {HKEY} {WHERE_} ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
-if len(Hs) != N: sys.exit(f"keys {len(Hs)} != rows {N}")
+# TREE_SAMPLE_ROWS: build the tree on a uniform sample of first-party rows (the cloud instance cannot hold every
+# vector); every other embedded row, first-party or job board, is placed into the tree afterwards (see "filler").
+SAMPLE = int(os.environ.get("TREE_SAMPLE_ROWS", "0"))
+N_FP = N
+if SAMPLE and SAMPLE < N:
+    Hs = con.execute(f"SELECT h FROM (SELECT {HKEY} {WHERE_}) USING SAMPLE reservoir({SAMPLE} ROWS) REPEATABLE (42) ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
+    N = len(Hs); print(f"tree built on a sample of {N:,} of {N_FP:,} first-party rows (TREE_SAMPLE_ROWS)", flush=True)
+else:
+    Hs = con.execute(f"SELECT {HKEY} {WHERE_} ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
+    if len(Hs) != N: sys.exit(f"keys {len(Hs)} != rows {N}")
 con.register("keypos", pa.table({"h": Hs, "pos": pa.array(np.arange(N, dtype=np.int64))}))
 H = Hs  # keys in row order (sorted)
 X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
@@ -101,7 +109,7 @@ while True:
     seen_n += n
     print(f"\r  loaded {seen_n:,}/{N:,}", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
-del reader; con.unregister("keypos")
+del reader  # keypos stays registered: the filler pass anti-joins against it
 assert seen_n == N, f"loaded {seen_n} rows, expected {N}"
 if any(t is None for t in titles): sys.exit("the key join lost rows")
 boards = [None] * len(board_ids)
@@ -243,14 +251,11 @@ for n in nodes:
 # ---- filler: job-board postings (the aggregator tier) are placed into the first-party tree, not used to build it.
 # Each batch descends from the root to a leaf by centroid cosine (the same walk the client does), so the tree's
 # shape, labels, and exemplars stay first-party while the groups carry both tiers. Vectors go to a second memmap.
-M = 0; XF = None; fill_leaf = None; HF = None
-if _has_tier:
-    WHERE_FILL = f"FROM read_parquet('{J}', union_by_name=true) WHERE is_open AND embed_status = 'done' AND embed_model = '{tag}' AND tier = 'aggregator'"
-    M = con.execute(f"SELECT count(*) {WHERE_FILL}").fetchone()[0]
+M = 0; fill_leaf = None; HF = None
+FILL_SRC = f"SELECT {HKEY}, embedding {WHERE_ROWS}"
+M = con.execute(f"SELECT count(*) FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").fetchone()[0]
 if M:
     t = time.time()
-    _xf = os.path.join(work, f"{TMP}.filler.f16.npy")
-    XF = np.lib.format.open_memmap(_xf, mode="w+", dtype=np.float16, shape=(M, D))
     fill_leaf = np.empty(M, dtype=np.int32); HF = []
     kids = {n["id"]: n["children"] for n in nodes}
     CEN = np.stack([n["_cen"] for n in nodes]).astype(np.float32)  # (nodes x D) unit centroids
@@ -269,18 +274,18 @@ if M:
             active = np.concatenate(nxt) if nxt else np.empty(0, dtype=np.int64)
         return node
     pos_ = 0
-    reader = con.execute(f"SELECT {HKEY}, embedding {WHERE_FILL}").to_arrow_reader(50_000)
+    reader = con.execute(f"SELECT j.h, j.embedding FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").to_arrow_reader(50_000)
     while True:
         try: b = reader.read_next_batch()
         except StopIteration: break
         n = len(b); vals = b.column("embedding").values.to_numpy(zero_copy_only=False).reshape(n, -1)[:, :D].astype(np.float32)
         np.nan_to_num(vals, copy=False); vals /= (np.sqrt((vals * vals).sum(axis=1, keepdims=True)) + 1e-9)
-        XF[pos_:pos_ + n] = vals.astype(np.float16); fill_leaf[pos_:pos_ + n] = descend(vals)
+        fill_leaf[pos_:pos_ + n] = descend(vals)  # the vector is not kept: pass 2 reads it back from the parquet rows
         HF.append(pa.array(b.column("h").to_pylist(), type=pa.string())); pos_ += n
-        print(f"\r  placed {pos_:,}/{M:,} job-board postings", end="", file=sys.stderr, flush=True)
+        print(f"\r  placed {pos_:,}/{M:,} rows into the tree", end="", file=sys.stderr, flush=True)
     print(file=sys.stderr); del reader
     assert pos_ == M, f"placed {pos_} filler rows, expected {M}"
-    XF.flush(); HF = pa.chunked_array(HF).combine_chunks()
+    HF = pa.chunked_array(HF).combine_chunks()
     # renumber: every leaf keeps its builder rows first, then its filler rows; internal nodes span their leaves
     fill_order = np.argsort(fill_leaf, kind="stable"); fill_sorted = fill_leaf[fill_order]
     fill_lo = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="left"); fill_hi = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="right")
@@ -299,21 +304,16 @@ if M:
     renumber(nodes[0])
     order = np.concatenate(new_order); assert len(order) == N + M
     for n in nodes: n["size"] = n["hi"] - n["lo"]
-    print(f"placed {M:,} job-board postings into {len(leaves)} first-party groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
+    print(f"placed {M:,} rows into {len(leaves)} groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
 NT = N + M
-def vec_rows(idx):
-    """Vectors for combined row indices: < N from the builder memmap, >= N from the filler memmap."""
-    out = np.empty((len(idx), D), dtype=np.float32)
-    b = idx < N
-    if b.any(): out[b] = X[idx[b]]
-    if (~b).any(): out[~b] = XF[idx[~b] - N]
-    return out
+con.unregister("keypos")
+N_AGG = con.execute(f"SELECT count(*) {WHERE_ROWS} AND coalesce(tier, 'first_party') = 'aggregator'").fetchone()[0] if _has_tier else 0
 
 # outputs
 C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
 C.tofile(os.path.join(out, "centroids.bin"))
 manifest = {
-    "recipe": tag, "dims": D, "jobs": N, "jobs_aggregator": M, "jobs_total": NT, "nodes": len(nodes), "leaves": len(leaves),
+    "recipe": tag, "dims": D, "jobs": N_FP, "jobs_aggregator": N_AGG, "jobs_total": NT, "built_on": N, "nodes": len(nodes), "leaves": len(leaves),
     "groups": args.groups_prefix,   # where this build's group files live under /data/ (per-build prefix; readers must use it)
     "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
     "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
@@ -334,7 +334,11 @@ _hall = pa.chunked_array([H.cast(pa.large_string())] + ([HF.cast(pa.large_string
 _assign = pa.table({"h": _hall.take(pa.array(order)), "pos": pa.array(np.arange(NT, dtype=np.int64))}); del _hall
 con.register("assign_src", _assign); con.execute("INSERT INTO assign SELECT h, pos FROM assign_src"); con.unregister("assign_src"); del _assign
 leaf_at = {n["lo"]: n for n in leaves}  # DFS position -> the leaf that starts there
-cur = None; jobs = []; V = None; written = 0; seen_rows = 0
+cur = None; jobs = []; written = 0; seen_rows = 0
+def _unit(v):
+    """The row's vector as the client expects it: float32, cleaned, unit length (what the memmap used to hold)."""
+    v = np.nan_to_num(np.asarray(v[:D], dtype=np.float32)); v /= np.float32(np.sqrt(float(v @ v)) + 1e-9)  # keep float32 (a float64 scalar would promote)
+    return v
 # One scan of the parquet writes the joined rows to a local staging dir partitioned by position chunk; each chunk
 # is then sorted on its own. A single ORDER BY over the whole corpus needs more buffer than the sort can spill
 # (DuckDB ran out at 5.5 GiB); sorting 250k rows at a time never does.
@@ -356,23 +360,24 @@ def _batches():
             except StopIteration: break
 for b in _batches():
     cols = {c: b.column(c).to_pylist() for c in ("pos", "ats", "slug", "id", "title", "location", "url", "first_seen_ms", "published_ms", "jd", "enrichment", "tier", "org", "via")}
+    _emb = b.column("embedding"); _vals = _emb.values.to_numpy(zero_copy_only=False); _offs = _emb.offsets.to_numpy()
     for k in range(len(b)):
         p = cols["pos"][k]
         if p != seen_rows: sys.exit(f"group pass out of order at position {p} (expected {seen_rows}); the key join lost or duplicated rows")
         seen_rows += 1
         if cur is None or p >= cur["hi"]:
-            cur = leaf_at[p]; jobs = []; V = vec_rows(order[cur["lo"]:cur["hi"]])
+            cur = leaf_at[p]; jobs = []
         r = int(order[p]); a, s_, jid, title, loc, url = cols["ats"][k], cols["slug"][k], cols["id"][k], cols["title"][k], cols["location"][k], cols["url"][k]
         jd = cols["jd"][k] or ""; enr = cols["enrichment"][k]; agg = cols["tier"][k] == "aggregator"
         jobs.append({"ats": a, "slug": s_, "id": jid, "title": title, "company": (cols["org"][k] or s_) if agg else company(r), "location": loc, "url": url, "seen": int(cols["first_seen_ms"][k] or 0), "pub": int(cols["published_ms"][k] or 0), "jd": jd,
                      **({"t": "agg", "via": cols["via"][k] or s_} if agg else {}),
                      **({"e": json.loads(enr)} if enr else {}), **({"co_": compfull[(a, s_)]} if (a, s_) in compfull else {}),
-                     "v": base64.b64encode(V[p - cur["lo"]].tobytes()).decode()})
+                     "v": base64.b64encode(_unit(_vals[_offs[k]:_offs[k + 1]]).tobytes()).decode()})
         if p + 1 == cur["hi"]:
             gpath = os.path.join(out, "groups", f"{cur['id']}.json")
             with open(gpath, "w") as f: json.dump({"leaf": cur["id"], "lo": cur["lo"], "hi": cur["hi"], "jobs": jobs}, f)
             if uploader: uploader.put(f"{args.groups_prefix}{cur['id']}.json", gpath, "application/json")
-            written += 1; jobs = []; V = None
+            written += 1; jobs = []
             if written % 500 == 0: print(f"\r  {written}/{len(leaves)} group files, {time.time()-t:.0f}s", end="", file=sys.stderr, flush=True)
 print(file=sys.stderr)
 if _bucket_stage:
@@ -386,10 +391,6 @@ if uploader:
 del X
 try: os.remove(_xpath)
 except OSError: pass
-if XF is not None:
-    del XF
-    try: os.remove(_xf)
-    except OSError: pass
 shutil.rmtree(con_tmp, ignore_errors=True)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
 print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")

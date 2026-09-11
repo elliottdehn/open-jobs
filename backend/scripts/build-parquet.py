@@ -7,7 +7,7 @@ memory stays bounded (the full job set with content + raw is several GB):
   export/jobs/<ats>.parquet    one row per job      -> read_parquet('export/jobs/*.parquet')
   export/boards/<ats>.parquet  one row per board    -> read_parquet('export/boards/*.parquet')
 Run: uv run scripts/build-parquet.py"""
-import time, glob, os, sys
+import time, glob, os, re, sys
 import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from r2 import R2
@@ -20,6 +20,7 @@ date_name = os.path.basename(os.path.realpath(root))
 argv = sys.argv[1:]
 only = set(next((a.split("=", 1)[1] for a in argv if a.startswith("--ats=")), "").split(",")) - {""}
 publish = "--publish" in argv
+dedup_only = "--dedup-only" in argv  # rerun just the end-of-run aggregator dedup over the day's dark part files
 from_r2 = os.environ.get("SNAPSHOT_SOURCE", "local") == "r2"
 r2 = R2() if (from_r2 or publish) else None
 files = sorted(glob.glob(os.path.join(root, "*.ndjson")))
@@ -35,7 +36,7 @@ else:
     snap_ats = {os.path.basename(d) for d in snap_dirs}
 if only:
     files = [f for f in files if os.path.basename(f)[:-len(".ndjson")] in only]; snap_dirs = [d for d in snap_dirs if os.path.basename(d) in only]; snap_r2 = [a for a in snap_r2 if a in only]
-if not files and not snap_dirs and not snap_r2:
+if not dedup_only and not files and not snap_dirs and not snap_r2:
     sys.exit("no export/*.ndjson files or snapshots/; run scripts/pull-snapshots.mjs or scripts/export.mjs first")
 for d in ("jobs", "boards"):
     os.makedirs(os.path.join(root, d), exist_ok=True)
@@ -45,7 +46,7 @@ con.execute("SET TimeZone='UTC'")  # date-only posting dates cast to the session
 if from_r2: r2.duckdb(con)
 con.execute("SET preserve_insertion_order = false")
 con.execute("SET threads = 2")
-con.execute("SET memory_limit = '10GB'")
+con.execute(f"SET memory_limit = '{os.environ.get('PARQUET_MEMORY', '10GB')}'")  # the image sets PARQUET_MEMORY for a 12 GiB instance
 con.execute(f"SET temp_directory = '{os.path.join(root, '.duckdb_tmp')}'")
 
 # Keys are read via JSON paths so files where a key never occurs (e.g. no resolved company yet,
@@ -166,7 +167,8 @@ def split_ndjson(f, jobs_out, boards_out):
                 j["ats"] = b["ats"]; j["slug"] = b["slug"]
                 jo.write(json.dumps(j) + "\n")
 
-def finalize(ats, outs):
+def finalize(ats, outs, name=None):
+    name = name or ats
     """Shared tail for both sources: the tier columns, the dark aggregator tier, count, optional publish.
 
     Every jobs row carries `tier` ('first_party' | 'aggregator'), `via` (the board a second-tier posting came
@@ -192,7 +194,7 @@ def finalize(ats, outs):
         con.execute(f"COPY (SELECT *, 'first_party' AS tier, CAST(NULL AS VARCHAR) AS via FROM read_parquet('{outs['jobs']}')) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     if publish:
-        for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{ats}.parquet", outs[k], "application/octet-stream")
+        for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{name}.parquet", outs[k], "application/octet-stream")
         if os.environ.get("LOW_DISK") == "1":  # cloud container (20 GB disk): the bucket copy is the copy
             for k in ("jobs", "boards"): os.remove(outs[k])
     print(f"{ats:16} {n:>9,} jobs" + (f"  -> exports/{date_name}/" if publish else ""), flush=True)
@@ -200,7 +202,7 @@ def finalize(ats, outs):
 tmp = os.path.join(root, ".split")
 os.makedirs(tmp, exist_ok=True)
 force = "--force" in sys.argv
-for f in files:
+for f in ([] if dedup_only else files):
     ats = os.path.basename(f)[: -len(".ndjson")]
     if ats in snap_ats:
         print(f"{ats:16} (ndjson skipped: R2 snapshots present)", flush=True)
@@ -221,16 +223,17 @@ for f in files:
 
 # ---- per-board R2 snapshot parquets: local (scripts/pull-snapshots.mjs) or read from the bucket in place ----
 import datetime as _dt
-def _published_recently(ats):
+PART_ROWS = int(os.environ.get("PARQUET_PART_ROWS", "2000000"))
+def _published_recently(name):
     """Same-day resume: both published objects exist and were written in the last 12 hours -> this run already did it."""
     if not (publish and from_r2 and not force): return False
     cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=12)
     for k in ("jobs", "boards"):
-        h = r2.head(f"exports/{date_name}/{k}/{ats}.parquet")
+        h = r2.head(f"exports/{date_name}/{k}/{name}.parquet")
         if not h or not h.get("modified") or h["modified"] < cut: return False
     return True
 
-for src in (snap_dirs or snap_r2):
+for src in ([] if dedup_only else (snap_dirs or snap_r2)):
     if from_r2:
         ats = src; pq = r2.url(f"snapshots/{ats}/*.parquet")
         outs = {k: os.path.join(root, k, f"{ats}.parquet") for k in ("jobs", "boards")}
@@ -258,84 +261,115 @@ for src in (snap_dirs or snap_r2):
         except Exception as e:
             if attempt == 3: raise
             print(f"{ats:16} bucket read failed ({str(e)[:120]}); retrying in {15 * (attempt + 1)}s", flush=True); time.sleep(15 * (attempt + 1))
-    bl = os.path.join(tmp, f"{ats}.boards.jsonl")
-    # a big board is written as parts (<slug>.parquet, <slug>.p1.parquet, ...), each with the same board_meta in its
-    # footer: one boards row per slug, exported_jobs summed over its parts
-    per_slug = {}
-    for fn, meta_json in kv:
-        try: meta = json.loads(meta_json)
-        except Exception: meta = None
-        if not isinstance(meta, dict): continue
-        row = per_slug.setdefault(meta.get("slug"), {"ats": ats, "slug": meta.get("slug"), "meta": meta, "exported_jobs": 0, "error": None})
-        row["exported_jobs"] += counts.get(fn, 0)
-    with open(bl, "w") as bo:
-        for row in per_slug.values(): bo.write(json.dumps(row) + "\n")
-    bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
-    # union_by_name: snapshot files are written over months and a board whose snapshot predates a schema change has
-    # its columns in another order; a positional read then decodes a binary column as text (dark, 2026-09-09).
-    jsrc = f"read_parquet('{pq}', union_by_name=true)"
-    con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
-    os.remove(bl)
-    try:
-        # a transient storage error on the big read is retried here; only a repeatable failure goes to the per-file scan
-        for attempt in range(4):
-            try:
-                con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)"); break
-            except Exception as e:
-                if attempt == 3 or "HTTP" not in str(e): raise
-                print(f"{ats:16} bucket read failed ({str(e)[:100]}); retrying the scan in {20 * (attempt + 1)}s", flush=True); time.sleep(20 * (attempt + 1))
-    except BaseException as e:
-        # One bad snapshot (invalid UTF-8, a truncated upload) must not stop the night: find it, quarantine it, go on
-        # without it, and say so. The board's next snapshot replaces the bad file; nothing here is permanent.
-        print(f"{ats:16} snapshot scan failed ({type(e).__name__}: {e!r}"[:200] + "); testing each file", flush=True)
-        files = [k for k, _, _ in r2.list(f"snapshots/{ats}/")] if from_r2 else sorted(glob.glob(pq))
-        good, bad = [], []
-        for k in files:
-            one = r2.url(k) if from_r2 else k
-            try: con.execute(f"SELECT count(*) FROM ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({one!r})')}) WHERE length(content) >= 0 AND length(title) >= 0 AND length(location) >= 0")
-            except BaseException as e2: bad.append({"file": k, "error": f"{type(e2).__name__}: {e2!r}"[:200]}); print(f"  QUARANTINED {k}: {bad[-1]['error']}", flush=True); continue
-            good.append(one)
-        if not good: raise
-        lst = "[" + ", ".join(repr(g) for g in good) + "]"
-        con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({lst}, union_by_name=true)')}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
-        qf = os.path.join(root, "quarantine.json"); q = json.load(open(qf)) if os.path.exists(qf) else []
-        q += [{"ats": ats, **b} for b in bad]; json.dump(q, open(qf, "w"), indent=1)
-        print(f"{ats:16} WARNING: {len(bad)} snapshot file(s) skipped (see {qf}); the board's next snapshot replaces them", flush=True)
-    finalize(ats, outs)
+    # A source bigger than PARQUET_PART_ROWS is converted and published in parts (jobs/<ats>.p<n>.parquet), each a few
+    # GB at most, so the local disk never holds the whole source (dark is ~17M rows; the cloud instance has 20 GB).
+    # Files are packed by board (a board's own part files stay together), so per-board rules still hold per part.
+    total_rows = sum(counts.values())
+    if from_r2 and total_rows > PART_ROWS:
+        by_slug = {}
+        for fn in counts: by_slug.setdefault(re.sub(r"(\.p\d+)?\.parquet$", "", fn.rsplit("/", 1)[-1]), []).append(fn)
+        packs, cur, n = [], [], 0
+        for slug in sorted(by_slug):
+            fns = by_slug[slug]; rows = sum(counts[f] for f in fns)
+            if cur and n + rows > PART_ROWS: packs.append(cur); cur, n = [], 0
+            cur += fns; n += rows
+        if cur: packs.append(cur)
+        print(f"{ats:16} {total_rows:,} rows -> {len(packs)} parts of <= {PART_ROWS:,}", flush=True)
+    else: packs = [None]
+    for pi, files in enumerate(packs):
+        name = ats if files is None else f"{ats}.p{pi}"
+        outs = {k: os.path.join(root, k, f"{name}.parquet") for k in ("jobs", "boards")}
+        if files is not None and _published_recently(name):
+            print(f"{name:16} published earlier this run; skipped", flush=True); continue
+        fileset = None if files is None else set(files)
+        bl = os.path.join(tmp, f"{name}.boards.jsonl")
+        # a big board is written as parts (<slug>.parquet, <slug>.p1.parquet, ...), each with the same board_meta in its
+        # footer: one boards row per slug, exported_jobs summed over its parts
+        per_slug = {}
+        for fn, meta_json in kv:
+            if fileset is not None and fn not in fileset: continue
+            try: meta = json.loads(meta_json)
+            except Exception: meta = None
+            if not isinstance(meta, dict): continue
+            row = per_slug.setdefault(meta.get("slug"), {"ats": ats, "slug": meta.get("slug"), "meta": meta, "exported_jobs": 0, "error": None})
+            row["exported_jobs"] += counts.get(fn, 0)
+        with open(bl, "w") as bo:
+            for row in per_slug.values(): bo.write(json.dumps(row) + "\n")
+        bsrc = f"read_ndjson('{bl}', maximum_object_size=67108864)"
+        # union_by_name: snapshot files are written over months and a board whose snapshot predates a schema change has
+        # its columns in another order; a positional read then decodes a binary column as text (dark, 2026-09-09).
+        jsrc = f"read_parquet('{pq}', union_by_name=true)" if files is None else f"read_parquet({files!r}, union_by_name=true)"
+        con.execute(f"COPY ({BOARDS_SQL.format(src=bsrc)}) TO '{outs['boards']}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+        os.remove(bl)
+        try:
+            # a transient storage error on the big read is retried here; only a repeatable failure goes to the per-file scan
+            for attempt in range(4):
+                try:
+                    con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=jsrc)}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)"); break
+                except Exception as e:
+                    if attempt == 3 or "HTTP" not in str(e): raise
+                    print(f"{name:16} bucket read failed ({str(e)[:100]}); retrying the scan in {20 * (attempt + 1)}s", flush=True); time.sleep(20 * (attempt + 1))
+        except BaseException as e:
+            # One bad snapshot (invalid UTF-8, a truncated upload) must not stop the night: find it, quarantine it, go on
+            # without it, and say so. The board's next snapshot replaces the bad file; nothing here is permanent.
+            print(f"{name:16} snapshot scan failed ({type(e).__name__}: {e!r}"[:200] + "); testing each file", flush=True)
+            cand = files if files is not None else ([k for k, _, _ in r2.list(f"snapshots/{ats}/")] if from_r2 else sorted(glob.glob(pq)))
+            good, bad = [], []
+            for k in cand:
+                one = k if (files is not None or not from_r2) else r2.url(k)
+                try: con.execute(f"SELECT count(*) FROM ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({one!r})')}) WHERE length(content) >= 0 AND length(title) >= 0 AND length(location) >= 0")
+                except BaseException as e2: bad.append({"file": k, "error": f"{type(e2).__name__}: {e2!r}"[:200]}); print(f"  QUARANTINED {k}: {bad[-1]['error']}", flush=True); continue
+                good.append(one)
+            if not good: raise
+            con.execute(f"COPY ({SNAPSHOT_JOBS_SQL.format(src=f'read_parquet({good!r}, union_by_name=true)')}) TO '{outs['jobs']}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)")
+            qf = os.path.join(root, "quarantine.json"); q = json.load(open(qf)) if os.path.exists(qf) else []
+            q += [{"ats": ats, **b} for b in bad]; json.dump(q, open(qf, "w"), indent=1)
+            print(f"{name:16} WARNING: {len(bad)} snapshot file(s) skipped (see {qf}); the board's next snapshot replaces them", flush=True)
+        finalize(ats, outs, name)
 
 SUFFIX = r"\b(inc|incorporated|llc|ltd|limited|gmbh|ag|sa|sas|sarl|srl|bv|nv|oy|ab|as|plc|co|corp|corporation|company|group|holding|holdings|kg|mbh|e\.?v\.?|se|s\.?p\.?a\.?|kk|k\.k\.)\b"
 def dedup_aggregators():
     """Second-tier dedup, once every ATS is written: an aggregator posting whose (employer, title, location) a
     first-party board already carries is the same job seen through a job board; and the same job seen through
     several boards is kept once (earliest first seen). Employers of first-party rows come from boards/ (company
-    name, else slug). Rewrites jobs/dark.parquet in place and re-publishes it."""
-    dj = os.path.join(root, "jobs", "dark.parquet")
+    name, else slug). Works over dark's part files: pass A picks the winners from every part's keys, pass B
+    rewrites each part in place (pulling and pushing one part at a time under LOW_DISK) and re-publishes it."""
     low = os.environ.get("LOW_DISK") == "1" and publish and from_r2
-    if low and not os.path.exists(dj):  # local files were dropped after upload: pull dark back, read the rest from the bucket
-        os.makedirs(os.path.dirname(dj), exist_ok=True); r2.get_file(f"exports/{date_name}/jobs/dark.parquet", dj)
-    if not os.path.exists(dj): return
+    if low: names = sorted(k.rsplit("/", 1)[-1] for k, _, _ in r2.list(f"exports/{date_name}/jobs/") if re.match(r"dark(\.p\d+)?\.parquet$", k.rsplit("/", 1)[-1]))
+    else: names = sorted(os.path.basename(f) for f in glob.glob(os.path.join(root, "jobs", "dark*.parquet")))
+    if not names: return
+    src = lambda n: r2.url(f"exports/{date_name}/jobs/{n}") if low else os.path.join(root, "jobs", n)
     con.execute(f"""CREATE OR REPLACE MACRO norm(s) AS trim(regexp_replace(regexp_replace(regexp_replace(lower(coalesce(s, '')), '[^a-z0-9 ]+', ' ', 'g'), '{SUFFIX}', ' ', 'g'), ' +', ' ', 'g'))""")
     con.execute("""CREATE OR REPLACE MACRO ntitle(s) AS trim(regexp_replace(regexp_replace(lower(coalesce(s, '')), '\\(.*?\\)|\\[.*?\\]|[^a-z0-9 ]+', ' ', 'g'), ' +', ' ', 'g'))""")
-    before = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet('{dj}')").fetchone()
+    allsrc = "[" + ", ".join(repr(src(n)) for n in names) + "]"
+    before = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet({allsrc}, union_by_name=true)").fetchone()
     if not before[0]: return
+    J_ = r2.url(f"exports/{date_name}/jobs/*.parquet") if low else J; B_ = r2.url(f"exports/{date_name}/boards/*.parquet") if low else B
     con.execute(f"""CREATE OR REPLACE TABLE fp_keys AS
         SELECT DISTINCT norm(coalesce(b.company_name, b.slug)) AS org, ntitle(j.title) AS t, norm(j.location) AS loc
-        FROM read_parquet('{r2.url(f"exports/{date_name}/jobs/*.parquet") if low else J}', union_by_name=true) j JOIN read_parquet('{r2.url(f"exports/{date_name}/boards/*.parquet") if low else B}', union_by_name=true) b USING (ats, slug)
+        FROM read_parquet('{J_}', union_by_name=true) j JOIN read_parquet('{B_}', union_by_name=true) b USING (ats, slug)
         WHERE j.is_open AND coalesce(j.tier, 'first_party') = 'first_party'""")
-    tmp = dj + ".dedup"
-    con.execute(f"""COPY (
-        SELECT * EXCLUDE (k_org, k_t, k_loc) FROM (
-          SELECT d.*, norm(d.org) AS k_org, ntitle(d.title) AS k_t, norm(d.location) AS k_loc FROM read_parquet('{dj}') d)
-        WHERE tier = 'first_party'
-           OR (coalesce(embed_status, '') != 'dup'   -- the crawler's dedup index already called it a copy
-               AND NOT EXISTS (SELECT 1 FROM fp_keys f WHERE f.org = k_org AND f.t = k_t AND f.loc = k_loc))
-        QUALIFY tier = 'first_party' OR row_number() OVER (PARTITION BY tier, k_org, k_t, k_loc ORDER BY first_seen_at, slug, id) = 1
-      ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
-    os.replace(tmp, dj)
-    after = con.execute(f"SELECT count(*) FILTER (tier = 'aggregator'), count(*) FROM read_parquet('{dj}')").fetchone()
-    print(f"aggregator tier: {before[0]:,} -> {after[0]:,} postings after dedup against first-party boards and across job boards", flush=True)
-    if publish: r2.put_file(f"exports/{date_name}/jobs/dark.parquet", dj, "application/octet-stream"); print("  re-published jobs/dark.parquet", flush=True)
-    if low: os.remove(dj)
+    # pass A: one winner per (employer, title, location) across every part, earliest first seen; index-marked copies never win
+    con.execute(f"""CREATE OR REPLACE TABLE winners AS
+        SELECT ats, slug, id FROM (
+          SELECT ats, slug, id, first_seen_at, norm(org) AS k_org, ntitle(title) AS k_t, norm(location) AS k_loc
+          FROM read_parquet({allsrc}, union_by_name=true) WHERE tier = 'aggregator' AND coalesce(embed_status, '') != 'dup')
+        WHERE NOT EXISTS (SELECT 1 FROM fp_keys f WHERE f.org = k_org AND f.t = k_t AND f.loc = k_loc)
+        QUALIFY row_number() OVER (PARTITION BY k_org, k_t, k_loc ORDER BY first_seen_at, slug, id) = 1""")
+    # pass B: rewrite each part keeping first-party rows and winning aggregator rows
+    kept = 0
+    for n in names:
+        local = os.path.join(root, "jobs", n)
+        if low and not os.path.exists(local): os.makedirs(os.path.dirname(local), exist_ok=True); r2.get_file(f"exports/{date_name}/jobs/{n}", local)
+        tmpf = local + ".dedup"
+        con.execute(f"""COPY (SELECT d.* FROM read_parquet('{local}') d
+                        WHERE d.tier = 'first_party' OR EXISTS (SELECT 1 FROM winners w WHERE w.ats = d.ats AND w.slug = d.slug AND w.id = d.id))
+                        TO '{tmpf}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
+        os.replace(tmpf, local)
+        kept += con.execute(f"SELECT count(*) FILTER (tier = 'aggregator') FROM read_parquet('{local}')").fetchone()[0]
+        if publish: r2.put_file(f"exports/{date_name}/jobs/{n}", local, "application/octet-stream")
+        if low: os.remove(local)
+    print(f"aggregator tier: {before[0]:,} -> {kept:,} postings after dedup against first-party boards and across job boards ({len(names)} part file(s){'; re-published' if publish else ''})", flush=True)
 
 def show(sql):
     con.sql(sql).show(max_rows=50, max_width=200)
