@@ -204,6 +204,13 @@ Measured against the 2026-09-10 run:
    Tested on the scratch export: identical tree (3,109 nodes, 1,555 leaves), identical placement (679,657
    filler rows), manifest `jobs`/`jobs_aggregator`/`jobs_total` now count by tier with `built_on` the builder
    count, group vectors float32 unit length as before (a NumPy 2 promotion to float64 was caught by the test).
+2b. **The ledger's raw pull. Found and fixed 2026-09-10 (evening), not yet in the image.** Measured on the second
+   night: `work/<date>/ledger-raw` held 14 GB of slim status=all ndjson for the whole run, 12 GB of it dark, and
+   that file grows daily because the ledger keeps removed rows forever (~9 GB per 20M rows). Under `LOW_DISK`
+   the export now writes every page as its own gzip part (`<ats>.ndjson.d/<offset>.ndjson.gz`, ~9x smaller,
+   `--resume` skips pages already on disk) and `build-ledger.py --low-disk` converts one ATS at a time to
+   `ledger/<date>/<ats>.parquet`, deleting each raw input as soon as its parquet exists. Tested on jazzhr against
+   the live Worker: identical ledger rows from both paths (9,617 jobs, 436 boards), 7.1 MB to 768 KB.
 3. **Split-on-overflow for leaves** (optional): after filling, 9 of 1,605 test leaves exceeded 5k rows.
 4. **Image to the registry** (`build-amd64`), **a Workflow on the Worker's cron** that starts one container per
    stage with the date fixed once and stops on a non-warning failure, **`SLACK_RUN_WEBHOOK`** set, and a

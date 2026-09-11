@@ -121,8 +121,11 @@ elif a.stage == "pull":
     else: run(["node", "scripts/pull-snapshots.mjs", a.worker, f"--out={export_local}", "--exclude=jobscore,governmentjobs"])
 elif a.stage == "ledger":
     raw = os.path.join(work, "ledger-raw"); os.makedirs(raw, exist_ok=True)
-    run(["python3", "-u", "scripts/pull-pool.py", "--base", a.worker, "--out", raw, "--", "--status=all", "--slim", "--resume"])
-    run(["uv", "run", "scripts/build-ledger.py", "--raw", raw, "--date", a.date], env={"EXPORT_DIR": export_local})
+    # LOW_DISK (20 GB cloud container): pages land as gzip parts (~2 GB for the whole fleet instead of 14 GB of ndjson,
+    # 12 GB of it the aggregator tier, which grows daily) and each ATS's raw input is deleted once its parquet exists
+    low_disk = os.environ.get("LOW_DISK") == "1"
+    run(["python3", "-u", "scripts/pull-pool.py", "--base", a.worker, "--out", raw, "--", "--status=all", "--slim", "--resume"] + (["--gzip"] if low_disk else []))
+    run(["uv", "run", "scripts/build-ledger.py", "--raw", raw, "--date", a.date] + (["--low-disk"] if low_disk else []), env={"EXPORT_DIR": export_local})
 elif a.stage == "parquet":
     # the /export fallback for ATSes without snapshots (local-only providers) lands as ndjson in the local export dir
     boards = json.load(open("src/boards.json"))

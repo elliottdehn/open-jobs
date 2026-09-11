@@ -7,7 +7,8 @@
 //   --embed includes each job's 1536-float embedding (large: ~3 KB/job in JSON).
 //   env ADMIN_TOKEN=... if the worker has one configured; env WORKER_URL as default base.
 //   e.g. node scripts/export.mjs greenhouse https://x.workers.dev --status=open --skip-empty
-import { mkdirSync, createWriteStream, createReadStream, existsSync, readFileSync, writeFileSync, truncateSync, unlinkSync, readdirSync } from "node:fs";
+import { mkdirSync, createWriteStream, createReadStream, existsSync, readFileSync, writeFileSync, truncateSync, unlinkSync, readdirSync, renameSync } from "node:fs";
+import { createGzip } from "node:zlib";
 import { createInterface } from "node:readline";
 import { pipeline } from "node:stream/promises";
 
@@ -23,12 +24,21 @@ mkdirSync(outDir, { recursive: true });
 const pageSize = flags.embed ? 5 : 200;
 const workers = Math.max(1, Number(flags.workers || 8));
 const file = `${outDir}/${ats}.ndjson`;
+// --gzip: every page is written as its own gzip file <ats>.ndjson.d/<offset>.ndjson.gz (renamed into place when
+// complete) and nothing is concatenated: a 12 GB slim export of the aggregator tier lands as ~2 GB of parts that
+// DuckDB reads as one glob, and --resume simply skips the pages already on disk. For the 20 GB cloud container.
+const gzipDir = flags.gzip ? `${outDir}/${ats}.ndjson.d` : null;
+if (gzipDir) {
+	mkdirSync(gzipDir, { recursive: true });
+	for (const p of readdirSync(gzipDir)) if (p.endsWith(".part") || !flags.resume) try { unlinkSync(`${gzipDir}/${p}`); } catch { /* ignore */ }
+}
 
 let offset = 0;
+let skipped = 0;
 let boards = 0;
 let jobs = 0;
 let errors = 0;
-if (flags.resume && existsSync(file)) {
+if (flags.resume && !gzipDir && existsSync(file)) {
 	// Keep whole pages only. Stream the file (it can be many GB), tracking the byte offset of each line, and
 	// truncate after the last complete page (page size recorded in <file>.page by the run that wrote it).
 	const prevPage = Number((existsSync(`${file}.page`) ? readFileSync(`${file}.page`, "utf8") : "").trim() || pageSize);
@@ -58,7 +68,7 @@ if (flags.resume && existsSync(file)) {
 	process.stderr.write(`resuming ${ats} at offset ${offset} (kept ${keepBytes} bytes / ${lastBoundary} boards)\n`);
 }
 writeFileSync(`${file}.page`, String(pageSize));
-const out = createWriteStream(file, { flags: flags.resume ? "a" : "w" });
+const out = gzipDir ? null : createWriteStream(file, { flags: flags.resume ? "a" : "w" });
 // Fetch one page of boards at `off`, with the same retry + mid-stream-truncation check as before.
 // Returns { lines, boards, total, next } (next = x-next-offset, or null at the end).
 async function fetchPage(off) {
@@ -119,12 +129,12 @@ async function fetchPageToTmp(off) {
 	if (flags["skip-empty"]) qs.set("skipEmpty", "1");
 	if (flags.embed) qs.set("embed", "1");
 	for (let attempt = 0; ; attempt++) {
-		const tmp = `${file}.part.${off}`;
+		const tmp = gzipDir ? `${gzipDir}/${off}.ndjson.gz.part` : `${file}.part.${off}`;
 		try {
 			const res = await fetch(`${base}/export/${ats}?${qs}`, { headers });
 			if (res.status >= 500 || res.status === 429) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
 			if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}: ${await res.text()}`), { fatal: true });
-			const ws = createWriteStream(tmp);
+			const fs_ = createWriteStream(tmp); const ws = gzipDir ? createGzip({ level: 1 }) : fs_; if (gzipDir) ws.pipe(fs_);
 			const seen = new Set(); let njobs = 0, nerr = 0, carry = ""; const dec = new TextDecoder();
 			const handle = (l) => {
 				if (!l) return;
@@ -139,8 +149,9 @@ async function fetchPageToTmp(off) {
 				let nl; while ((nl = carry.indexOf("\n")) >= 0) { handle(carry.slice(0, nl)); carry = carry.slice(nl + 1); }
 			}
 			carry += dec.decode(); if (carry.trim()) handle(carry);
-			await new Promise((r, j) => ws.end((e) => (e ? j(e) : r())));
+			await new Promise((r, j) => { fs_.once("error", j); fs_.once("finish", r); ws.end(); });
 			const got = seen.size;
+			if (gzipDir && !got) try { unlinkSync(tmp); } catch { /* empty page */ }
 			const expected = Number(res.headers.get("x-page-boards") ?? got);
 			if (!flags["skip-empty"] && got !== expected) throw new Error(`truncated page: ${got}/${expected} boards`);
 			return { off, tmp: got ? tmp : null, boards: got, jobs: njobs, errors: nerr, total: Number(res.headers.get("x-total") ?? 0) };
@@ -175,16 +186,19 @@ if (flags["skip-empty"]) {
 		const offs = [];
 		const cap = total === Infinity ? cur + workers * pageSize : total;
 		for (let i = 0; i < workers && cur + i * pageSize < cap; i++) offs.push(cur + i * pageSize);
-		const pages = await Promise.all(offs.map(fetchPageToTmp));  // in-flight concurrency = workers, each streamed to disk
-		if (total === Infinity) total = pages[0].total || 0;
+		const done = (o) => gzipDir && flags.resume && existsSync(`${gzipDir}/${o}.ndjson.gz`);
+		const pages = await Promise.all(offs.map((o) => (done(o) ? { off: o, tmp: null, skipped: true, boards: 0, jobs: 0, errors: 0, total: 0 } : fetchPageToTmp(o))));  // in-flight concurrency = workers, each streamed to disk
+		if (total === Infinity) { const f = pages.find((p) => !p.skipped); if (f) total = f.total || 0; }
 		for (const p of pages) {                                    // offs is ascending -> concatenated in order
-			if (p.tmp) { await pipeline(createReadStream(p.tmp), out, { end: false }); unlinkSync(p.tmp); }
+			if (p.skipped) skipped++;
+			else if (p.tmp && gzipDir) renameSync(p.tmp, p.tmp.slice(0, -".part".length));
+			else if (p.tmp) { await pipeline(createReadStream(p.tmp), out, { end: false }); unlinkSync(p.tmp); }
 			boards += p.boards; jobs += p.jobs; errors += p.errors;
 		}
 		cur += offs.length * pageSize;
 		process.stderr.write(`\r${boards}/${total} boards, ${jobs} jobs (x${workers})`);
 	}
 }
-out.end();
+if (out) out.end();
 process.stderr.write("\n");
-console.log(`wrote ${outDir}/${ats}.ndjson (${boards} boards, ${jobs} jobs${errors ? `, ${errors} board errors` : ""})`);
+console.log(`wrote ${gzipDir ?? file} (${boards} boards, ${jobs} jobs${errors ? `, ${errors} board errors` : ""}${gzipDir && flags.resume ? `, ${typeof skipped === "number" ? skipped : 0} pages already on disk` : ""})`);
