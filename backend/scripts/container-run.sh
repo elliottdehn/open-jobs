@@ -11,6 +11,10 @@
 # Ingest is not a container stage (those providers block Cloudflare): run `uv run scripts/stage.py ingest` on
 # the laptop whenever. Docker Desktop needs >= 14 GB of memory for the tree stage (Settings > Resources).
 set -eo pipefail   # not -u: the macOS bash 3.2 treats an empty array as unbound
+# The laptop must not sleep mid-run: the Docker VM wakes with a stale clock and every signed bucket request fails
+# until it resyncs (RequestTimeTooSkewed 403s, and hours of maintenance-sleep stalls, 2026-09-11). Hold the system
+# awake for the life of this script.
+command -v caffeinate >/dev/null 2>&1 && { caffeinate -dimsu -w $$ & }
 cd "$(dirname "$0")/.."
 DOCKER="${DOCKER:-$(command -v docker || echo /Applications/Docker.app/Contents/Resources/bin/docker)}"
 IMAGE="${IMAGE:-open-jobs-consolidate}"; VOL="${VOL:-open-jobs-work}"
