@@ -58,7 +58,7 @@ def ts(expr, path):
     return f"to_timestamp({js(expr, path, 'BIGINT')}/1000)"
 
 BOARDS_SQL = f"""
-SELECT ats, slug,
+SELECT ats::VARCHAR AS ats, slug::VARCHAR AS slug,  -- read_ndjson types a column of GUID-shaped slugs (paylocity) as UUID; every reader unions these files by name
        {js('m', '$.lastStatus')} AS last_status,
        {ts('m', '$.lastRunAt')} AS last_run_at,
        {ts('m', '$.lastOkAt')}  AS last_ok_at,
@@ -346,8 +346,8 @@ def dedup_aggregators():
     if not before[0]: return
     J_ = r2.url(f"exports/{date_name}/jobs/*.parquet") if low else J; B_ = r2.url(f"exports/{date_name}/boards/*.parquet") if low else B
     con.execute(f"""CREATE OR REPLACE TABLE fp_keys AS
-        SELECT DISTINCT norm(coalesce(b.company_name, b.slug)) AS org, ntitle(j.title) AS t, norm(j.location) AS loc
-        FROM read_parquet('{J_}', union_by_name=true) j JOIN read_parquet('{B_}', union_by_name=true) b USING (ats, slug)
+        SELECT DISTINCT norm(coalesce(b.company_name::VARCHAR, b.slug::VARCHAR)) AS org, ntitle(j.title) AS t, norm(j.location) AS loc
+        FROM read_parquet('{J_}', union_by_name=true) j JOIN read_parquet('{B_}', union_by_name=true) b ON j.ats = b.ats::VARCHAR AND j.slug = b.slug::VARCHAR
         WHERE j.is_open AND coalesce(j.tier, 'first_party') = 'first_party'""")
     # pass A: one winner per (employer, title, location) across every part, earliest first seen; index-marked copies never win
     con.execute(f"""CREATE OR REPLACE TABLE winners AS
