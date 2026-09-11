@@ -213,6 +213,17 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   of 2026-09-11 reports and the lock frees, so a failure harms nothing published and a success is a second build that
   morning. No parallel week: the laptop stays the nightly until one cloud chain has completed.
 
+- **2026-09-11 (third night): the ledger is derived.** The pulled status=all ledger (two hours through the Worker, then
+  a 12 GiB DuckDB sort that ran the container out of memory) is replaced in r2 mode by `scripts/derive-ledger.py`:
+  yesterday's ledger plus today's export, one pass, 63 s. Rows in today's export are open (first_seen_at carried from
+  the previous ledger); previously open rows absent from the export left the dataset today (removed_at = that day
+  00:00 UTC); removed rows carry. The first derived day drops the pulled ledger's never-published rows (`--prev-export`).
+  Validated on 2026-09-10: open rows equal the export's 4,452,644 exactly, keys unique, 5.7M first-seen dates carried.
+  What changes for readers: the ledger is now "every posting that has ever appeared in the dataset" rather than every
+  row the crawler ever held, and a removal is stamped by day, without the closed-versus-left label (the diff's
+  removal column is `unknown` from here). Chain order is now pull, parquet, diff, ledger, tree, ... The run of
+  2026-09-11 was killed at the OOM and restarted from pull on this code.
+
 ## Running the container locally
 
 ```sh
