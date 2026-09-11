@@ -17,6 +17,7 @@
   },
   "type": "module",
   "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "hyparquet-writer": "^0.16.9"
   }
 }

@@ -31,7 +31,7 @@ import argparse, atexit, glob, json, os, socket, subprocess, sys, threading, tim
 
 HERE = os.path.dirname(os.path.abspath(__file__)); BACKEND = os.path.normpath(os.path.join(HERE, ".."))
 ap = argparse.ArgumentParser()
-ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "archive", "feed", "retention", "report", "unlock"])
+ap.add_argument("stage", choices=["ingest", "pull", "ledger", "parquet", "diff", "tree", "estimators", "finalize", "history", "archive", "feed", "retention", "report", "unlock", "selftest"])
 ap.add_argument("--date", default=time.strftime("%Y-%m-%d"))
 ap.add_argument("--source", choices=["local", "r2"], default=os.environ.get("CONSOLIDATE_SOURCE", "local"))
 ap.add_argument("--publish", action="store_true", help="write parquet to R2 as produced (always on for --source r2); group files always stream up during the tree stage unless --no-publish")
@@ -83,6 +83,21 @@ def lock_release(force=False):
     except Exception as e: print(f"WARNING: lock release failed: {e}", flush=True)
 if a.stage == "unlock":
     lock_release(force=True); sys.exit(0)
+if a.stage == "selftest":
+    # No lock, no publishing: what this box is, whether the bucket is reachable, and how fast it reads (CONTAINER.md).
+    import platform, shutil
+    print(f"host {socket.gethostname()} {platform.machine()} python {platform.python_version()} cpus {os.cpu_count()}", flush=True)
+    try: print(f"memory {int(open('/proc/meminfo').readline().split()[1]) // 1024} MiB", flush=True)
+    except Exception: pass
+    du = shutil.disk_usage(WORK_ROOT if os.path.isdir(WORK_ROOT) else "/"); print(f"disk {WORK_ROOT}: {du.free // 10**9} GB free of {du.total // 10**9} GB", flush=True)
+    print("env:", {k: bool(os.environ.get(k)) for k in ("ADMIN_TOKEN", "OPENAI_KEY", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "SLACK_RUN_WEBHOOK", "LOW_DISK", "STAGE_TO_BUCKET")}, flush=True)
+    r2 = r2c(); import duckdb; con = duckdb.connect(); r2.duckdb(con)
+    keys = sorted(((k, sz) for k, sz, _ in r2.list("exports/") if k.endswith("/jobs/workday.parquet")), reverse=True)
+    if keys:
+        k, sz = keys[0]; t0 = time.time(); n = con.execute(f"SELECT count(*) FROM read_parquet('{r2.url(k)}')").fetchone()[0]
+        t1 = time.time(); m = con.execute(f"SELECT max(length(content)) FROM read_parquet('{r2.url(k)}')").fetchone()[0]; t2 = time.time()
+        print(f"bucket read: {k} ({sz / 1e9:.2f} GB): footer+count in {t1 - t0:.1f}s, full text column scan in {t2 - t1:.1f}s = {sz / max(t2 - t1, 0.01) / 1e6:.0f} MB/s (n={n:,}, max content {m})", flush=True)
+    print("selftest ok", flush=True); sys.exit(0)
 if a.stage not in ("ingest", "report") and not a.dry_run:
     if not token: sys.exit("ADMIN_TOKEN is required: the publisher lock lives behind the admin endpoints")
     holder = lock_holder()

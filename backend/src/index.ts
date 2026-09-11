@@ -13,6 +13,7 @@ import { EMBED_TAG, embedQueryText } from "./openai";
 import { JD_ESTIMATE_USD, JD_MODELS, expandJd, type JdModel } from "./jd";
 import { dataIndex } from "./dataindex";
 export { Registry } from "./registry";
+export { Consolidate } from "./consolidate";
 
 const EXPORT_CONCURRENCY = 20;
 
@@ -422,6 +423,21 @@ export default {
 			});
 		}
 
+		// The cloud consolidation container (src/consolidate.ts, CONTAINER.md):
+		//   POST /run/chain {date?, from?, env?}   the nightly chain (scripts/container-chain.sh), optionally from a stage
+		//   POST /run/stage {stage, date?, env?}   one stage
+		//   POST /run/stop                          SIGTERM the process
+		//   GET  /run                               state, what is running, the journal (starts, exits with codes, errors)
+		if (parts[0] === "run") {
+			const c = env.CONSOLIDATE.getByName("consolidate");
+			if (request.method === "GET") return Response.json(await c.status());
+			const b = (await request.json().catch(() => ({}))) as { date?: string; from?: string; stage?: string; env?: Record<string, string> };
+			const date = b.date ?? new Date().toISOString().slice(0, 10);
+			if (parts[1] === "chain" && request.method === "POST") return Response.json(await c.run(["bash", "/app/scripts/container-chain.sh", b.from ?? "all", date], b.env ?? {}, `chain ${date} from ${b.from ?? "all"}`));
+			if (parts[1] === "stage" && request.method === "POST" && b.stage) return Response.json(await c.run(["uv", "run", "--script", "/app/scripts/stage.py", b.stage, "--date", date, "--source", "r2"], b.env ?? {}, `${b.stage} ${date}`));
+			if (parts[1] === "stop" && request.method === "POST") { await c.halt(); return Response.json({ stopped: true }); }
+			return new Response("POST /run/chain {date, from, env} | POST /run/stage {stage, date, env} | POST /run/stop | GET /run", { status: 400 });
+		}
 		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
 		if (parts[0] === "rowmeter" && request.method === "POST") return Response.json(await env.BOARD.getByName("rowmeter/scratch").rowMeter());
 		if (parts[0] === "rowmeter" && request.method === "GET") return Response.json(await env.BOARD.getByName(url.searchParams.get("board") ?? "rowmeter/scratch").debugState());

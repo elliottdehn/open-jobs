@@ -12,4 +12,12 @@ interface Env {
 	SLACK_STATS_WEBHOOK?: string;
 	/** who to @-mention on every idea: a Slack member ID (U…) or "@name" (default "@egd") */
 	IDEAS_MENTION?: string;
+	/** `wrangler secret put R2_ACCOUNT_ID|R2_ACCESS_KEY_ID|R2_SECRET_ACCESS_KEY` — S3 credentials the consolidation container hands to its scripts (the Worker itself uses the DATA binding) */
+	R2_ACCOUNT_ID?: string;
+	R2_ACCESS_KEY_ID?: string;
+	R2_SECRET_ACCESS_KEY?: string;
+	/** `wrangler secret put SLACK_RUN_WEBHOOK` — where the run report goes (the report falls back to the /ideas relay) */
+	SLACK_RUN_WEBHOOK?: string;
+	/** the consolidation container's Durable Object (wrangler.jsonc containers + durable_objects) */
+	CONSOLIDATE: DurableObjectNamespace<import("./consolidate").Consolidate>;
 }
