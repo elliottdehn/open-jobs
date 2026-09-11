@@ -183,6 +183,24 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   already parked were re-queued. Flat groups/<id>.json now resolves through manifest-head.json to the current
   build's prefix, and the flat mirror is trimmed by name after each publish.
 
+- **2026-09-11 (evening): the cloud container exists and answers.** `wrangler.jsonc` declares the `Consolidate`
+  container class (standard-4, `image: ./Dockerfile` built for linux/amd64 and pushed by `wrangler deploy`, build
+  context the repo root) with its Durable Object binding `CONSOLIDATE` and a service binding `SELF` to this Worker.
+  `src/consolidate.ts` starts the image's process with the full command (no ports: `start()` and `onStop`), hands it
+  the secrets as env, and keeps a journal (start, output, stop with exit code) that `GET /run` returns; the process
+  is wrapped so its last 200 KB of output and its exit code come back to the object through `POST /run/output`.
+  Containers cannot reach `*.workers.dev`: requests to `http://worker.internal` run as an outbound handler in the
+  Workers runtime (`Consolidate.outboundByHost`, which needs `ContainerProxy` exported from the entrypoint) and are
+  forwarded over `SELF`; `WORKER_URL` inside the container is that name. Routes (admin): `POST /run/chain {date, from,
+  env}` runs `scripts/container-chain.sh` (all stages in one process, since the disk lives only as long as the
+  container), `POST /run/stage {stage, date, env}`, `POST /run/exec {args}`, `POST /run/stop`, `GET /run`.
+  `scripts/cloud-deploy.sh` writes a build id into the image (`scripts/BUILD`), deploys, polls the platform until the
+  rollout settles (no container starts), and verifies the id from inside. The lock-free `selftest` stage measured:
+  x86_64, 4 vCPU, 12,220 MiB, 15 GB free of 19 GB, all secrets present, 94 MB/s on a single-stream 1 GB bucket read
+  (the app's network limit is 4 Gbit/s; DuckDB's parallel range reads are the real number, still to measure).
+  Not yet: a real stage in the cloud (needs the publisher lock, held by the laptop run until morning; first test is
+  `estimators` with ESTIMATORS_ONLY=train-salary), the chain, the cron/Workflow trigger, the missed-run alarm.
+
 ## Running the container locally
 
 ```sh
