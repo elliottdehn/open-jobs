@@ -160,6 +160,14 @@ old checkouts), the diff's parent chain verified by the feed, and idempotent sta
 to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-usage.py` for the meters;
 `GET /lock`, `GET /stats`, `GET /dedupe`, `GET /rowmeter?board=` for the fleet's state.
 
+- **2026-09-10 (second night), outcome.** Every source converted (325 min through parquet, dark 2,618,955 rows kept
+  for the aggregator tier, workday 838,527) and then the end-of-run dedup failed on the boards join: `read_ndjson`
+  had typed paylocity's GUID-shaped slugs as UUID, and the union of boards files mixed UUID with VARCHAR. Fixed at
+  the source (boards parquet casts `ats`/`slug` to VARCHAR) with defensive casts in the join; the published
+  paylocity boards file was rewritten by hand and the run resumed with `from parquet --date 2026-09-10` on the
+  rebuilt image, which is therefore the first full-scale run of the parts, the dedup across parts, the tree
+  without the second memmap, and the gzip ledger pull (the ledger stage itself had already run on the old image).
+
 ## Running the container locally
 
 ```sh
