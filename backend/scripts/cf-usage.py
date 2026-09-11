@@ -11,7 +11,7 @@ Account id from `wrangler whoami` (CLOUDFLARE_ACCOUNT_ID overrides).
 """
 import argparse, datetime, json, os, re, subprocess, sys, urllib.request
 
-ap = argparse.ArgumentParser(); ap.add_argument("--days", type=int, default=31); ap.add_argument("--hours", type=int, help="per-hour view of the last N hours instead of per-day (steady-state check)"); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("--days", type=int, default=31); ap.add_argument("--egress", action="store_true", help="bytes served to users by the backend Worker: rolling 24 h windows (T-24h, T-48h, T-72h) and UTC day buckets over --days"); ap.add_argument("--hours", type=int, help="per-hour view of the last N hours instead of per-day (steady-state check)"); a = ap.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__))
 tok = os.environ.get("CLOUDFLARE_API_TOKEN")
 whoami = ""
@@ -33,6 +33,23 @@ def gql(q):
     d = json.load(urllib.request.urlopen(r, timeout=120))
     if d.get("errors"): sys.exit(json.dumps(d["errors"])[:800])
     return d["data"]["viewer"]["accounts"][0]
+if a.egress:
+    # Egress = the Worker's response bodies (tar, parquet, group files, API), all free on Workers + R2. The R2-side
+    # "responseObjectSize" is the size of the object touched, not bytes moved (a range read of the 13 GB tar counts
+    # 13 GB), so it is not used. Container reads via the S3 API are not in here either.
+    now = datetime.datetime.utcnow().replace(microsecond=0)
+    def win(h0, h1):
+        s_, e_ = (now - datetime.timedelta(hours=h0)).isoformat() + "Z", (now - datetime.timedelta(hours=h1)).isoformat() + "Z"
+        g = gql(f'{{ viewer {{ accounts(filter:{{accountTag:"{acc}"}}) {{ w: workersInvocationsAdaptive(limit:5, filter:{{scriptName:"backend", datetime_geq:"{s_}", datetime_lt:"{e_}"}}) {{ sum {{ requests responseBodySize }} }} }} }} }}')["w"]
+        r = sum(x["sum"]["requests"] for x in g); b = sum(x["sum"]["responseBodySize"] for x in g); return r, b
+    print(f"backend Worker egress (bytes to users), rolling 24 h windows ending {now.isoformat()}Z:")
+    for label, h0, h1 in (("T-24h..now", 24, 0), ("T-48h..T-24h", 48, 24), ("T-72h..T-48h", 72, 48)):
+        r, b = win(h0, h1); print(f"  {label:14} {r:>10,} requests  {b/1e9:8.1f} GB")
+    days = min(a.days, 31); since = (now - datetime.timedelta(days=days)).date().isoformat()
+    g = gql(f'{{ viewer {{ accounts(filter:{{accountTag:"{acc}"}}) {{ w: workersInvocationsAdaptive(limit:100, filter:{{scriptName:"backend", date_geq:"{since}"}}, orderBy:[date_ASC]) {{ dimensions {{ date }} sum {{ requests responseBodySize }} }} }} }} }}')["w"]
+    print(f"\nUTC day buckets (the current day is partial):")
+    for x in g: print(f"  {x['dimensions']['date']}   {x['sum']['requests']:>10,} requests  {x['sum']['responseBodySize']/1e9:8.1f} GB")
+    sys.exit(0)
 if a.hours:
     t0 = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=a.hours)).replace(minute=0, second=0, microsecond=0)
     f = f'datetime_geq:"{t0.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
