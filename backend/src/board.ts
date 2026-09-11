@@ -224,7 +224,7 @@ const FETCH_DETAIL_TIMEOUT_MS = 45_000;
 /** Snapshot staleness escape: write even with a pending embed backlog after this long dirty. */
 const SNAPSHOT_STALE_MS = 48 * 60 * 60 * 1000;
 /** Boards with more open jobs than this skip snapshotting (isolate memory); they're aggregator-shaped anyway. */
-const SNAPSHOT_MAX_JOBS = 400_000; // 80 parts of SNAPSHOT_PART_ROWS; beyond this something is wrong with the board
+const SNAPSHOT_MAX_JOBS = 2_000_000; // 400 parts of SNAPSHOT_PART_ROWS (= the discovery ceiling); the two largest aggregators held 800k and 720k open rows and were silently skipped at 400k (2026-09-11)
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 	let t: ReturnType<typeof setTimeout>;
