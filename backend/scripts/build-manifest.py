@@ -328,7 +328,15 @@ t = time.time()
 # the buffer cap makes the sort spill to temp_directory instead of growing (the key join + sort refuse to run
 # under 4 GB; 6 GB works), fewer threads mean fewer concurrent sort partitions, and small batches bound the
 # Python-side copy. Output is unaffected.
-con.execute("SET memory_limit='6GB'"); con.execute("SET threads=2")
+# The tree's own arrays are done (pass 2 reads vectors from the parquet rows): free them before DuckDB grows.
+del Z
+try: del X; os.remove(_xpath)
+except (NameError, OSError): pass
+import gc; gc.collect()
+con.execute(f"SET memory_limit='{os.environ.get('TREE_PASS2_MEMORY', '8GB')}'"); con.execute("SET threads=2")
+# The staging write keeps 18 parquet files open in the bucket; DuckDB's uploader holds up to 50 parts in flight per
+# file, gigabytes of buffers outside anything else's control. Four is plenty for one writer per partition.
+con.execute("SET s3_uploader_thread_limit=4")
 con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
 _hall = pa.chunked_array([H.cast(pa.large_string())] + ([HF.cast(pa.large_string())] if M else [])).combine_chunks()  # DuckDB hands back large_string with arrow_large_buffer_size
 _assign = pa.table({"h": _hall.take(pa.array(order)), "pos": pa.array(np.arange(NT, dtype=np.int64))}); del _hall
@@ -397,7 +405,6 @@ if uploader:
     failed = uploader.join()
     print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
     json.dump({"prefix": args.groups_prefix, "published": r2.uploaded, "failed": failed}, open(os.path.join(out, ".published-groups.json"), "w"))
-del X
 try: os.remove(_xpath)
 except OSError: pass
 shutil.rmtree(con_tmp, ignore_errors=True)
