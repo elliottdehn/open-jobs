@@ -47,7 +47,14 @@ function clampTokens(s: string, maxTokens: number): string {
 }
 /** Rows the embed stage still owes: never embedded, pending, a stale recipe, or an error older than a day. A permanent
  *  400 retried every minute kept 13 boards alive around the clock (September 2026). Params: EMBED_TAG, now - DAY. */
-const EMBED_TODO = `(embed_status IS NULL OR embed_status = 'pending' OR embed_model != ? OR (embed_status = 'error' AND (embed_tried_at IS NULL OR embed_tried_at < ?)))`;
+// Backlog predicates. Each names its partial index's WHERE verbatim (SQLite only uses a partial index when the query's
+// WHERE contains the index's terms), so a backlog probe touches only the rows still waiting, never the finished ones.
+// Rows finished with an older embedding recipe are re-queued by a one-time sweep in arm() (meta.embedRecipe), not here.
+const DETAIL_INDEX_WHERE = `removed_at IS NULL AND detail_status IS NOT 'done' AND detail_status IS NOT 'na'`;
+const EMBED_INDEX_WHERE = `removed_at IS NULL AND embed_status IS NOT 'done' AND embed_status IS NOT 'dup'`;
+const DETAIL_TODO = `${DETAIL_INDEX_WHERE} AND (detail_status = 'pending' OR detail_status IS NULL OR (detail_status = 'error' AND detail_fetched_at < ?))`;
+const DETAIL_PENDING = `${DETAIL_INDEX_WHERE} AND (detail_status = 'pending' OR detail_status IS NULL)`;
+const EMBED_TODO = `${EMBED_INDEX_WHERE} AND (embed_status IS NULL OR embed_status = 'pending' OR (embed_status = 'error' AND (embed_tried_at IS NULL OR embed_tried_at < ?)))`;
 /**
  * Chars of JD text that go into the embedding. text-embedding-3-small accepts 8,191 tokens per
  * input; ~28k chars of English stays under that. Everything about the job is embedded (company,
@@ -89,6 +96,7 @@ export interface BoardMeta {
 	companyAttemptedAt?: number | null;
 	/** Set when the embeddings API rate-limited us; the next backlog tick waits until then. */
 	embedBackoffUntil?: number | null;
+	embedRecipe?: string | null; // the EMBED_TAG this board last re-queued stale vectors for (see arm())
 	/** Adaptive detail-fetch concurrency for this board, and the site-imposed pause (Retry-After, 429, bot wall). */
 	detailConc?: number;
 	detailBackoffUntil?: number | null;
@@ -343,7 +351,6 @@ export class Board extends DurableObject<Env> {
 					enrichment TEXT,
 					enrich_error TEXT
 				);
-				CREATE INDEX IF NOT EXISTS jobs_enrich ON jobs (enrich_status, removed_at);
 				CREATE TABLE IF NOT EXISTS runs (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					run_at INTEGER NOT NULL,
@@ -362,17 +369,24 @@ export class Board extends DurableObject<Env> {
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN detail TEXT`);
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN detail_error TEXT`);
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN detail_fetched_at INTEGER`);
-				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_detail ON jobs (detail_status, removed_at)`);
 			}
 			if (!cols.has("embedding")) {
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embedding BLOB`);
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_model TEXT`);
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_status TEXT`);
 				ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_error TEXT`);
-				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_embed ON jobs (embed_status, removed_at)`);
 			}
 			if (!cols.has("embed_tried_at")) ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN embed_tried_at INTEGER`);
 			if (!cols.has("dup_of")) ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN dup_of TEXT`);
+			// Indexes cover only the backlog (partial): a finished row is in no index, so a removal writes 1 metered row
+			// instead of 4 and an insert 4 instead of 5, and the indexes hold thousands of rows instead of every job.
+			// The old full indexes (three, each including removed_at) are dropped once per board (2026-09-11).
+			const idx = new Set(ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'jobs'`).toArray().map((r) => r.name));
+			if (!idx.has("jobs_detail_todo") || !idx.has("jobs_embed_todo") || idx.has("jobs_enrich") || idx.has("jobs_detail") || idx.has("jobs_embed")) {
+				for (const old of ["jobs_enrich", "jobs_detail", "jobs_embed"]) ctx.storage.sql.exec(`DROP INDEX IF EXISTS ${old}`);
+				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_detail_todo ON jobs (detail_status) WHERE ${DETAIL_INDEX_WHERE}`);
+				ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_embed_todo ON jobs (embed_status) WHERE ${EMBED_INDEX_WHERE}`);
+			}
 		});
 	}
 
@@ -422,11 +436,18 @@ export class Board extends DurableObject<Env> {
 
 	/** Set the single alarm to whichever is sooner: the next fetch, or a near-term backlog tick. */
 	private async arm(meta: BoardMeta): Promise<void> {
+		// Embedding recipe changed: rows embedded under an older recipe go back to pending once, here rather than in every
+		// backlog probe (keeping the hot predicate inside the partial index).
+		if (meta.embedRecipe !== EMBED_TAG) {
+			this.ctx.storage.sql.exec(`UPDATE jobs SET embed_status = 'pending' WHERE removed_at IS NULL AND embed_status = 'done' AND embed_model IS NOT ?`, EMBED_TAG);
+			meta.embedRecipe = EMBED_TAG;
+			await this.ctx.storage.put("meta", meta);
+		}
 		let at = meta.nextFetchAt ?? Date.now();
 		const backlog =
 			(this.autoEnrich() && this.hasPending(`enrich_status = 'pending' AND removed_at IS NULL`)) ||
-			(this.autoEmbed() && this.hasPending(`removed_at IS NULL AND ${EMBED_TODO} AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`, EMBED_TAG, Date.now() - DAY)) ||
-			(!!fetchers[meta.ats]?.fetchDetail && this.hasPending(`removed_at IS NULL AND (detail_status = 'pending' OR detail_status IS NULL)`));
+			(this.autoEmbed() && this.hasPending(`${EMBED_TODO} AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`, Date.now() - DAY)) ||
+			(!!fetchers[meta.ats]?.fetchDetail && this.hasPending(DETAIL_PENDING));
 		if (backlog) {
 			let tick = Date.now() + MINUTE;
 			if (meta.embedBackoffUntil && meta.embedBackoffUntil > tick) tick = meta.embedBackoffUntil;
@@ -735,7 +756,7 @@ export class Board extends DurableObject<Env> {
 	private pendingDetailCount(): number {
 		return this.ctx.storage.sql
 			.exec<{ n: number }>(
-				`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL AND (detail_status = 'pending' OR detail_status IS NULL)`,
+				`SELECT COUNT(*) AS n FROM jobs WHERE ${DETAIL_PENDING}`,
 			)
 			.one().n;
 	}
@@ -756,8 +777,7 @@ export class Board extends DurableObject<Env> {
 		while (!stop && Date.now() < deadline && used < DETAIL_TICK_SUBREQUESTS) {
 			const rows = this.ctx.storage.sql
 				.exec<JobRow>(
-					`SELECT * FROM jobs WHERE removed_at IS NULL
-					   AND (detail_status = 'pending' OR detail_status IS NULL OR (detail_status = 'error' AND detail_fetched_at < ?))
+					`SELECT * FROM jobs WHERE ${DETAIL_TODO}
 					 LIMIT ?`,  // no ORDER BY: sorting a 100k-row backlog for every small batch was billions of rows read a day
 					start - DAY,
 					Math.min(conc * 4, DETAIL_TICK_SUBREQUESTS - used),
@@ -1008,10 +1028,9 @@ export class Board extends DurableObject<Env> {
 	private pendingEmbedCount(): number {
 		return this.ctx.storage.sql
 			.exec<{ n: number }>(
-				`SELECT COUNT(*) AS n FROM jobs WHERE removed_at IS NULL
-				   AND ${EMBED_TODO}
+				`SELECT COUNT(*) AS n FROM jobs WHERE ${EMBED_TODO}
 				   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)`,
-				EMBED_TAG, Date.now() - DAY,
+				Date.now() - DAY,
 			)
 			.one().n;
 	}
@@ -1052,11 +1071,10 @@ export class Board extends DurableObject<Env> {
 			if (meta.embedBackoffUntil && meta.embedBackoffUntil > Date.now()) return;
 			const rows = this.ctx.storage.sql
 				.exec<JobRow>(
-					`SELECT * FROM jobs WHERE removed_at IS NULL
-					   AND ${EMBED_TODO}
+					`SELECT * FROM jobs WHERE ${EMBED_TODO}
 					   AND (detail_status IN ('done','na','error') OR detail_status IS NULL)
 					 LIMIT ?`,  // no ORDER BY (see runDetails); error rows are already pushed a day out by EMBED_TODO
-					EMBED_TAG, Date.now() - DAY,
+					Date.now() - DAY,
 					EMBED_BATCH,
 				)
 				.toArray();
