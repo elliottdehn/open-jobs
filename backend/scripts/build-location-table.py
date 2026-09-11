@@ -82,8 +82,8 @@ A_cc = np.array([placed[s] for s in A_keys])
 def vote(Q, A, A_cc, k=10):
     """returns (country, confidence, best_sim) per query row"""
     out = []
-    for i in range(0, len(Q), 2048):
-        S = Q[i:i + 2048] @ A.T
+    for i in range(0, len(Q), 256):  # 2048-row chunks against a placed set of hundreds of thousands were gigabytes per chunk (killed at 16 GB, 2026-09-11)
+        S = Q[i:i + 256] @ A.T
         top = np.argpartition(-S, k, axis=1)[:, :k]
         for r in range(len(top)):
             sims = S[r, top[r]]; w = collections.Counter()
@@ -109,6 +109,7 @@ cov, MIN_SIM, MIN_CONF, acc = best
 print(f"chosen: min_sim {MIN_SIM}, min_conf {MIN_CONF} -> {acc:.1%} accurate on {cov:.0%} of held-out strings")
 
 Q_keys = [s for s in unplaced if s in emb]; Q = np.stack([emb[s] for s in Q_keys]); Q /= np.linalg.norm(Q, axis=1, keepdims=True) + 1e-9
+del emb; _con.close()  # the dictionary and the DuckDB buffers are dead weight during the vote
 table = {}
 for s, (cc, conf, sim) in zip(Q_keys, vote(Q, A, A_cc)):
     if conf >= MIN_CONF and sim >= MIN_SIM: table[s] = [cc, round(conf, 2)]
