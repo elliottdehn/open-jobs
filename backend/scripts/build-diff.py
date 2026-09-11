@@ -71,7 +71,8 @@ _oldc = {r[0] for r in con.execute("DESCRIBE old").fetchall()}
 _missing = [(c, t) for c, t in _newt if c not in _oldc]
 if _missing:
     print(f"old export lacks {len(_missing)} column(s) of the new one ({', '.join(c for c, _ in _missing)}); treated as NULL")
-    con.execute(f"CREATE OR REPLACE VIEW old AS SELECT *, {', '.join(f'NULL::{t} AS \"{c}\"' for c, t in _missing)} FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
+    _extra = ", ".join('NULL::%s AS "%s"' % (t, c) for c, t in _missing)
+    con.execute(f"CREATE OR REPLACE VIEW old AS SELECT *, {_extra} FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
 cols = [r[0] for r in con.execute("DESCRIBE new").fetchall()]
 collist = ", ".join(f'"{c}"' for c in cols)
 old_collist = ", ".join(f'o."{c}"' for c in cols)
