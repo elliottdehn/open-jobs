@@ -124,12 +124,13 @@ if a.stage == "selftest":
     except Exception: pass
     du = shutil.disk_usage(WORK_ROOT if os.path.isdir(WORK_ROOT) else "/"); print(f"disk {WORK_ROOT}: {du.free // 10**9} GB free of {du.total // 10**9} GB", flush=True)
     print("env:", {k: bool(os.environ.get(k)) for k in ("ADMIN_TOKEN", "OPENAI_KEY", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "SLACK_RUN_WEBHOOK", "LOW_DISK", "STAGE_TO_BUCKET")}, flush=True)
-    r2 = r2c(); import duckdb; con = duckdb.connect(); r2.duckdb(con)
+    r2 = r2c()
     keys = sorted(((k, sz) for k, sz, _ in r2.list("exports/") if k.endswith("/jobs/workday.parquet")), reverse=True)
     if keys:
-        k, sz = keys[0]; t0 = time.time(); n = con.execute(f"SELECT count(*) FROM read_parquet('{r2.url(k)}')").fetchone()[0]
-        t1 = time.time(); m = con.execute(f"SELECT max(length(content)) FROM read_parquet('{r2.url(k)}')").fetchone()[0]; t2 = time.time()
-        print(f"bucket read: {k} ({sz / 1e9:.2f} GB): footer+count in {t1 - t0:.1f}s, full text column scan in {t2 - t1:.1f}s = {sz / max(t2 - t1, 0.01) / 1e6:.0f} MB/s (n={n:,}, max content {m})", flush=True)
+        k, sz = keys[0]; want = min(sz, 1_000_000_000); t0 = time.time()
+        body = r2.client.get_object(Bucket=r2.bucket, Key=k, Range=f"bytes=0-{want - 1}")["Body"]; got = 0
+        for chunk in iter(lambda: body.read(8 << 20), b""): got += len(chunk)
+        dt = time.time() - t0; print(f"bucket read: {got / 1e9:.2f} GB of {k} in {dt:.1f}s = {got / max(dt, 0.01) / 1e6:.0f} MB/s (single stream)", flush=True)
     print("selftest ok", flush=True); sys.exit(0)
 
 if a.stage == "ingest":
