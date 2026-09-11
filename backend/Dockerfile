@@ -20,17 +20,21 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 # scripts, the board list, and the tools/ helpers the estimators import; no exports, no logs, no secrets
 # (build context is the repo root; see /.dockerignore)
+# Pre-resolve every script's inline dependencies into the image so the first run is not a download, and fetch
+# DuckDB's httpfs extension (read_parquet over S3) so a stage never needs the extension repo at run time.
+# The scripts are copied to a scratch path for this step so the ~1 GB dependency layer only changes when a
+# script's inline dependencies change, not on every edit (uv keys an environment by the script's name and its
+# requirements, not by its path); the real copy of scripts/ comes after, as its own small layer.
+COPY backend/scripts/*.py /opt/script-deps/
+RUN for s in stage build-parquet build-diff build-ledger build-manifest publish-web upload-history \
+             train-salary train-arrangement train-seniority train-age build-city-table build-location-table \
+             build-job-changes build-archive; do uv sync --script /opt/script-deps/$s.py || exit 1; done \
+ && uv run --with duckdb python -c "import duckdb; duckdb.connect().execute('INSTALL httpfs'); print('httpfs installed')" \
+ && rm -rf /opt/script-deps
 COPY backend/scripts/ /app/scripts/
 COPY backend/src/boards.json /app/src/boards.json
 COPY backend/package.json /app/package.json
 COPY tools/*.py tools/*.json /tools/
-
-# Pre-resolve every script's inline dependencies into the image so the first run is not a download, and fetch
-# DuckDB's httpfs extension (read_parquet over S3) so a stage never needs the extension repo at run time.
-RUN for s in stage build-parquet build-diff build-ledger build-manifest publish-web upload-history \
-             train-salary train-arrangement train-seniority train-age build-city-table build-location-table \
-             build-job-changes build-archive; do uv sync --script /app/scripts/$s.py || exit 1; done \
- && uv run --with duckdb python -c "import duckdb; duckdb.connect().execute('INSTALL httpfs'); print('httpfs installed')"
 
 # scratch and state
 RUN mkdir -p /work && ln -s /work/export /app/export && ln -s /work/logs /app/logs
