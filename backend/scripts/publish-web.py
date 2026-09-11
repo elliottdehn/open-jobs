@@ -27,18 +27,30 @@ ap.add_argument("--root-prefix", default=os.environ.get("ROOT_PREFIX", ""), help
 a = ap.parse_args()
 web = a.web; r2 = R2(); t0 = time.time()
 manifest = json.load(open(os.path.join(web, "manifest.json")))
-local = {f: os.path.getsize(os.path.join(web, "groups", f)) for f in os.listdir(os.path.join(web, "groups")) if f.endswith(".json")}
-if len(local) != manifest["leaves"]: sys.exit(f"web/groups has {len(local)} files but the manifest has {manifest['leaves']} leaves; refusing to publish")
-remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
-todo = sorted(f for f, s in local.items() if remote.get(f) != s)
-print(f"groups: {len(local)} local, {len(remote)} in R2, {len(todo)} to upload (missing or size differs)", flush=True)
-up = Uploader(r2, workers=a.workers)
-for f in todo: up.put(f"{a.groups_prefix}{f}", os.path.join(web, "groups", f), "application/json")
-failed = up.join()
-if failed: sys.exit(f"{len(failed)} group uploads failed after retries, e.g. {failed[0]}; manifest NOT published. Re-run to retry.")
-remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
-bad = [f for f, s in local.items() if remote.get(f) != s]
-if bad: sys.exit(f"{len(bad)} group files still differ in R2 after upload (e.g. {bad[0]}); manifest NOT published")
+_pubf = os.path.join(web, ".published-groups.json"); _pub = json.load(open(_pubf)) if os.path.exists(_pubf) else {}
+_gdir = os.path.join(web, "groups"); _local_files = [f for f in os.listdir(_gdir) if f.endswith(".json")] if os.path.isdir(_gdir) else []
+if _pub.get("sizes") and not _local_files:
+    # LOW_DISK (cloud): the tree stage uploaded every group as it was written and deleted the local copy; the sizes it
+    # recorded are checked against the bucket, and nothing is uploaded here.
+    local = {k.split("/")[-1]: s for k, s in _pub["sizes"].items() if k.startswith(a.groups_prefix)}
+    if len(local) != manifest["leaves"]: sys.exit(f"the tree stage recorded {len(local)} uploaded groups under {a.groups_prefix} but the manifest has {manifest['leaves']} leaves; refusing to publish")
+    remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
+    bad = [f for f, s in local.items() if remote.get(f) != s]
+    if bad: sys.exit(f"{len(bad)} group files missing or differing in R2 (e.g. {bad[0]}); manifest NOT published. Re-run the tree stage.")
+    print(f"groups: {len(local)} published by the tree stage, all verified in R2", flush=True)
+else:
+    local = {f: os.path.getsize(os.path.join(web, "groups", f)) for f in _local_files}
+    if len(local) != manifest["leaves"]: sys.exit(f"web/groups has {len(local)} files but the manifest has {manifest['leaves']} leaves; refusing to publish")
+    remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
+    todo = sorted(f for f, s in local.items() if remote.get(f) != s)
+    print(f"groups: {len(local)} local, {len(remote)} in R2, {len(todo)} to upload (missing or size differs)", flush=True)
+    up = Uploader(r2, workers=a.workers)
+    for f in todo: up.put(f"{a.groups_prefix}{f}", os.path.join(web, "groups", f), "application/json")
+    failed = up.join()
+    if failed: sys.exit(f"{len(failed)} group uploads failed after retries, e.g. {failed[0]}; manifest NOT published. Re-run to retry.")
+    remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
+    bad = [f for f, s in local.items() if remote.get(f) != s]
+    if bad: sys.exit(f"{len(bad)} group files still differ in R2 after upload (e.g. {bad[0]}); manifest NOT published")
 for name in ("salary-model.json", "arrangement-model.json", "seniority-model.json", "age-model.json", "location-countries.json"):
     p = os.path.join(web, name)
     if os.path.exists(p): r2.put_file(a.root_prefix + name, p, "application/json"); print(f"  {name}", flush=True)

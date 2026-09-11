@@ -116,9 +116,10 @@ class R2:
 class Uploader:
     """Background upload queue: hand it (key, path, content_type) as files are produced; join() at the end.
     Failures are collected, not raised mid-build, so the producer never stalls; the caller decides."""
-    def __init__(self, r2, workers=8):
+    def __init__(self, r2, workers=8, delete_after=False):
         import queue
         self.r2 = r2; self.q = queue.Queue(maxsize=workers * 4); self.failed = []; self._lock = threading.Lock()
+        self.delete_after = delete_after; self.sizes = {}  # key -> bytes uploaded (what a reader can verify against the bucket)
         self.threads = [threading.Thread(target=self._run, daemon=True) for _ in range(workers)]
         for t in self.threads: t.start()
 
@@ -127,7 +128,10 @@ class Uploader:
             item = self.q.get()
             if item is None: self.q.task_done(); return
             key, path, ctype = item
-            try: self.r2.put_file(key, path, ctype)
+            try:
+                size = os.path.getsize(path); self.r2.put_file(key, path, ctype)
+                with self._lock: self.sizes[key] = size
+                if self.delete_after: os.remove(path)  # 20 GB cloud disk: the bucket copy is the copy
             except Exception as e:
                 with self._lock: self.failed.append((key, str(e)[:160]))
             finally: self.q.task_done()

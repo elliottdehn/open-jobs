@@ -39,7 +39,7 @@ J = f"{root.rstrip('/')}/jobs/*.parquet"
 con = duckdb.connect()
 r2 = R2() if (is_s3 or args.publish) else None
 if is_s3: r2.duckdb(con)
-uploader = Uploader(r2, workers=8) if args.publish else None
+uploader = Uploader(r2, workers=8, delete_after=os.environ.get("LOW_DISK") == "1") if args.publish else None  # LOW_DISK: 52 GB of group files never sit on the disk
 con.execute("SET threads=4"); con.execute("SET memory_limit='6GB'"); con.execute("SET arrow_large_buffer_size=true")  # >2 GB of jd strings
 con.execute(f"SET temp_directory='{con_tmp}'"); con.execute("SET preserve_insertion_order=false")
 t = time.time()
@@ -421,7 +421,7 @@ if seen_rows != NT or written != len(leaves): sys.exit(f"group pass wrote {writt
 if uploader:
     failed = uploader.join()
     print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
-    json.dump({"prefix": args.groups_prefix, "published": r2.uploaded, "failed": failed}, open(os.path.join(out, ".published-groups.json"), "w"))
+    json.dump({"prefix": args.groups_prefix, "published": r2.uploaded, "failed": failed, "sizes": uploader.sizes}, open(os.path.join(out, ".published-groups.json"), "w"))
 try: os.remove(_xpath)
 except OSError: pass
 shutil.rmtree(con_tmp, ignore_errors=True)

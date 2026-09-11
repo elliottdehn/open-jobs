@@ -171,6 +171,16 @@ elif a.stage == "diff":
         if prev and os.path.basename(prev) == a.date: prev = ""
     if not prev: stamp("no previous export to diff against; skipping"); sys.exit(0)
     run(["uv", "run", "scripts/build-diff.py", "--prev", prev, "--new", export_root, "--base", a.worker, "--out", "export/diffs"])
+    if os.environ.get("LOW_DISK") == "1":
+        # 20 GB disk: the full diff parts (6.7 GB on 2026-09-10) go to the bucket now, before the tree's memmap needs the
+        # room. The local copies become empty placeholders; upload-history sees the keys in the bucket and takes sizes
+        # and hashes from the sidecar. The lite parts and the sidecar stay (the feed stage reads them).
+        sides = sorted(glob.glob(f"export/diffs/*__{a.date}.json"))
+        if sides:
+            d = sides[-1][:-5]; name = os.path.basename(d); r2 = r2c(); n = 0
+            for part in sorted(glob.glob(os.path.join(d, "*.parquet"))):
+                r2.put_file(f"diffs/{name}/{os.path.basename(part)}", part, "application/octet-stream"); open(part, "w").close(); n += 1
+            print(f"uploaded {n} diff part(s) to diffs/{name}/ and freed the local copies (LOW_DISK)", flush=True)
 elif a.stage == "tree":
     # group files stream to R2 while the tree writes them (the 2026-09-08 run skipped this and finalize spent 26 min
     # uploading 37 GB instead); finalize still reconciles by size, so a missed upload here is caught there
