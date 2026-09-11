@@ -139,13 +139,22 @@ removal_counts = dict(con.execute(f"SELECT {removal_sql} AS removal, count(*) FR
 # one file, every event with the full record
 outd = os.path.join(a.out, f"{pd}__{nd}")
 if os.path.isdir(outd): shutil.rmtree(outd)  # a killed earlier attempt leaves partial files DuckDB then refuses to write over
-con.execute(f"""COPY (
+# The write scans both exports in full over the bucket (40+ min); a transient bucket error (403/5xx on one of the range
+# reads, 2026-09-11) must not cost the key computation above, so only the COPY is retried.
+for _attempt in range(4):
+  try:
+    con.execute(f"""COPY (
   SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
   UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {old_collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
   UNION ALL SELECT 'changed', '{pd}', '{nd}', NULL, NULL, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
   UNION ALL SELECT 'changed_prev', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
   UNION ALL SELECT 'carried', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
+    break
+  except duckdb.Error as e:
+    if _attempt == 3 or not isinstance(e, (duckdb.HTTPException, duckdb.IOException)): raise
+    print(f"WARNING: diff write failed ({str(e)[:160]}); retrying in 60s ({_attempt + 1}/3)", flush=True)
+    shutil.rmtree(outd, ignore_errors=True); time.sleep(60)
 parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
 # lite projection: the same events without the vector or the raw provider / enrichment JSON. The description text
 # stays on `added` and `changed` rows (a mirror has to be able to show a new job) and is dropped where only the key
