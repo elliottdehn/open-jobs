@@ -73,6 +73,20 @@ async function syncAll(
 	return out;
 }
 
+// The current build's groups prefix, from the small manifest-head.json publish-web writes next to the manifest;
+// memoized per isolate for a minute so a flat group request costs one HEAD, not a manifest read.
+let _groupsPrefix: { value: string; at: number } | null = null;
+async function currentGroupsPrefix(env: Env): Promise<string> {
+	if (_groupsPrefix && Date.now() - _groupsPrefix.at < 60_000) return _groupsPrefix.value;
+	let value = "groups/";
+	try {
+		const o = await env.DATA.get("manifest-head.json");
+		if (o) value = ((await o.json()) as { groups?: string }).groups || "groups/";
+	} catch { /* keep the flat path */ }
+	_groupsPrefix = { value, at: Date.now() };
+	return value;
+}
+
 export default {
 	/** Daily sweep: (re)arm every board's alarm. Self-heals boards that lost their alarm. */
 	async scheduled(_controller, env, ctx): Promise<void> {
@@ -343,8 +357,15 @@ export default {
 
 		// GET /data/<key>  -> object from the DATA R2 bucket (manifest, group files, parquet) with Range support
 		if (parts[0] === "data" && (parts.length >= 2) && (request.method === "GET" || request.method === "HEAD")) {
-			const key = parts.slice(1).join("/");
+			let key = parts.slice(1).join("/");
 			const range = request.headers.get("range");
+			// Flat groups/<id>.json (readers written before the dated layout) resolve to the current build's prefix, so
+			// they never see the copied mirror mid-rewrite; the flat object itself is the fallback.
+			const flat = /^groups\/(\d+)\.json$/.exec(key);
+			if (flat) {
+				const prefix = await currentGroupsPrefix(env);
+				if (prefix && prefix !== "groups/" && (await env.DATA.head(`${prefix}${flat[1]}.json`))) key = `${prefix}${flat[1]}.json`;
+			}
 			const obj = request.method === "HEAD" ? await env.DATA.head(key) : await env.DATA.get(key, { range: range ? request.headers : undefined });
 			if (!obj) return new Response("not found", { status: 404, headers: cors });
 			if (request.method === "GET" && /^groups\/.*\.json$/.test(key)) {

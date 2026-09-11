@@ -44,6 +44,10 @@ for name in ("salary-model.json", "arrangement-model.json", "seniority-model.jso
     if os.path.exists(p): r2.put_file(a.root_prefix + name, p, "application/json"); print(f"  {name}", flush=True)
 r2.put_file(a.root_prefix + "centroids.bin", os.path.join(web, "centroids.bin"), "application/octet-stream")
 r2.put_file(a.root_prefix + "manifest.json", os.path.join(web, "manifest.json"), "application/json")
+# A few hundred bytes next to the 23 MB manifest: the Worker reads this to resolve flat groups/<id>.json requests to the
+# current build's prefix (readers written before the dated layout), and pollers can watch built_at cheaply.
+head = {k: manifest.get(k) for k in ("groups", "built_at", "leaves", "nodes", "jobs", "jobs_aggregator", "jobs_total", "recipe", "dims")}
+r2.put_bytes(a.root_prefix + "manifest-head.json", json.dumps(head).encode(), "application/json")
 if a.mirror_prefix and a.mirror_prefix != a.groups_prefix:
     # Three copies of the group files live in the bucket: this build's dated prefix (what the manifest names), the
     # previous build's (a manifest cached for an hour must still find its files), and this flat mirror for readers
