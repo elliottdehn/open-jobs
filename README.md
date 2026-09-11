@@ -187,8 +187,9 @@ and the previous prefix stays for a day. So a copy that starts from one manifest
 tree, even if a publish happens while you are copying. Use the prefix from the manifest; the bare
 `groups/` path exists only for readers written before the dated layout.
 
-**Size and pace.** 11,372 files, 37 GB, median 3 MB, largest 100 MB (as of 2026-09-11). There is no
-rate limit on `/data/` and egress is free, so copy at whatever pace suits you.
+**Size and pace.** 11,572 files, 52 GB, median 3 MB (as of 2026-09-11). No group file holds more than
+about 2,500 postings, roughly 30 MB: an oversized neighbourhood is published as numbered chunks that share
+one centroid. There is no rate limit on `/data/` and egress is free, so copy at whatever pace suits you.
 
 **Shortcut.** `uv run tools/jobs.py fetch --groups 0` does the same walk into a local parquet with the
 group id on every row. Node 0 is the root, and `--groups` fetches every group under the nodes you name.

@@ -305,6 +305,23 @@ if M:
     order = np.concatenate(new_order); assert len(order) == N + M
     for n in nodes: n["size"] = n["hi"] - n["lo"]
     print(f"placed {M:,} rows into {len(leaves)} groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
+# Split on overflow, so every group file stays fetchable. A leaf the radius rule would not split (a tight cluster of
+# near-identical postings, 11,627 builders in the 2026-09-10 build) plus its filler can reach 200 MB. Such a leaf becomes
+# chunks of its own DFS range: children that share the parent's centroid and label, ids appended to the tree. A query
+# routed to that neighbourhood ranks the chunks together (same centroid), only across files of bounded size.
+MAX_GROUP = int(os.environ.get("MAX_GROUP_ROWS", "2500"))
+_big = [n for n in nodes if not n["children"] and n["hi"] - n["lo"] > MAX_GROUP]
+for n in _big:
+    k = -(-(n["hi"] - n["lo"]) // MAX_GROUP); bounds = np.linspace(n["lo"], n["hi"], k + 1).astype(int)
+    fp_end = n["lo"] + n.get("fp", n["hi"] - n["lo"])  # builder rows come first in a leaf's range, then its filler
+    for i in range(k):
+        c = {kk: vv for kk, vv in n.items() if kk != "children"}
+        c.update(id=len(nodes), parent=n["id"], lo=int(bounds[i]), hi=int(bounds[i + 1]), children=[], depth=n["depth"] + 1)
+        c["size"] = c["hi"] - c["lo"]; c["fp"] = max(0, min(fp_end, c["hi"]) - c["lo"])
+        if n.get("label"): c["label"] = f"{n['label']} · {i + 1}/{k}"
+        nodes.append(c); n["children"].append(c["id"])
+leaves = [n for n in nodes if not n["children"]]
+if _big: print(f"split {len(_big)} oversized groups (> {MAX_GROUP:,} rows) into {sum(len(n['children']) for n in _big)} chunks sharing their parent's centroid; largest group now {max(n['hi'] - n['lo'] for n in leaves):,}", flush=True)
 NT = N + M
 con.unregister("keypos")
 N_AGG = con.execute(f"SELECT count(*) {WHERE_ROWS} AND coalesce(tier, 'first_party') = 'aggregator'").fetchone()[0] if _has_tier else 0

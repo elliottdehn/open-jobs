@@ -234,7 +234,10 @@ Measured against the 2026-09-10 run:
    `--resume` skips pages already on disk) and `build-ledger.py --low-disk` converts one ATS at a time to
    `ledger/<date>/<ats>.parquet`, deleting each raw input as soon as its parquet exists. Tested on jazzhr against
    the live Worker: identical ledger rows from both paths (9,617 jobs, 436 boards), 7.1 MB to 768 KB.
-3. **Split-on-overflow for leaves** (optional): after filling, 9 of 1,605 test leaves exceeded 5k rows.
+3. **Split-on-overflow for leaves. Done 2026-09-11.** After the filler, a leaf over `MAX_GROUP_ROWS` (2,500) becomes
+   chunks of its DFS range: children sharing the parent's centroid and label, ids appended. The 2026-09-10 build's
+   largest group was 18,792 rows (~225 MB); the scratch test went from 11,728 to 2,479 rows, 33 MB, 71 groups into
+   156 chunks, every count reconciled. Readers take leaves from the tree, so nothing changes for them.
 4. **Image to the registry** (`build-amd64`), **a Workflow on the Worker's cron** that starts one container per
    stage with the date fixed once and stops on a non-warning failure, **`SLACK_RUN_WEBHOOK`** set, and a
    **missed-run check** (no report line by 10:00 UTC = post a warning).
