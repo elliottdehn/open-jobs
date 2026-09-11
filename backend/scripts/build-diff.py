@@ -151,9 +151,32 @@ def _ats_in(t):
     return "(" + ", ".join("'%s'" % x.replace("'", "''") for x in v) + ")" if v else "('')"
 ats_new, ats_old = _ats_in("evk_new"), _ats_in("evk_old")
 new_collist = ", ".join(f'n."{c}"' for c in cols)
+n_events = con.execute("SELECT (SELECT count(*) FROM evk_new) + (SELECT count(*) FROM evk_old)").fetchone()[0]
+def _written():
+    """Events already in finished output parts (a part still being written has no footer yet and is skipped)."""
+    rows = size = parts = 0
+    for f in glob.glob(os.path.join(outd, "*.parquet")):
+        try: rows += con.execute(f"SELECT num_rows FROM parquet_file_metadata('{f}')").fetchone()[0]; size += os.path.getsize(f); parts += 1
+        except duckdb.Error: pass
+    return rows, size, parts
+def _copy_with_progress(sql):
+    """Run the write on a cursor in a thread; the main thread reports progress and an ETA every 30 s."""
+    import threading
+    err = []
+    def go():
+        try: con.cursor().execute(sql)
+        except BaseException as e: err.append(e)
+    th = threading.Thread(target=go, daemon=True); t = time.time(); th.start()
+    while th.is_alive():
+        th.join(30)
+        if not th.is_alive(): break
+        rows, size, parts = _written(); el = time.time() - t
+        eta = f"~{(n_events - rows) * el / rows / 60:.0f} min left" if rows else "no part finished yet"
+        print(f"  diff write: {rows:,}/{n_events:,} events ({100 * rows / max(n_events, 1):.0f}%), {parts} parts, {size / 1e9:.1f} GB, {el / 60:.0f} min elapsed, {eta}", flush=True)
+    if err: raise err[0]
 for _attempt in range(4):
     try:
-        con.execute(f"""COPY (
+        _copy_with_progress(f"""COPY (
     SELECT k.op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {new_collist}
     FROM new n JOIN evk_new k ON k.ats=n.ats AND k.slug=n.slug AND k.id=n.id WHERE n.ats IN {ats_new}
     UNION ALL
