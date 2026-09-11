@@ -159,6 +159,26 @@ of groups into a local parquet you can query with DuckDB. The API also answers p
 questions: `POST /status` with a list of `ats/slug#id` keys returns open or removed with
 timestamps, straight from the crawler's records.
 
+### Mirror the search index
+
+Several people already take the whole tree every night, so here is the contract. The index is static
+files: `manifest.json`, `centroids.bin`, and one JSON per group.
+
+1. `GET /data/manifest.json`. Read `groups` (this build's prefix, e.g. `groups/2026-09-09/`), `leaves`
+   (the group count), `built_at` (ms), and `jobs_total`.
+2. Fetch `/data/centroids.bin` and `/data/<groups><id>.json` for `id` from `0` to `leaves - 1`. One
+   publish is one prefix: a build's files never change once its manifest is live, and the previous
+   build's prefix is kept for a day, so a walk that overlaps a publish still gets one consistent tree.
+3. Repeat when `built_at` changes. Publishes land once a day, in the morning UTC.
+
+Sizes as of 2026-09-11: 11,372 files, 37 GB, median 3 MB, largest 100 MB. `uv run tools/jobs.py fetch
+--groups 0` does the same walk into a local parquet with the leaf id on every row (group ids include the
+internal nodes; 0 is the root). Walk from the manifest's prefix, not the flat `groups/` mirror, which
+exists for readers that predate the dated layout. There is no rate limit on the data path and egress
+costs nothing, so pace yourself however you like. Put a contact in your `User-Agent`; two people already
+do, and it is how a broken publish becomes an email instead of a mystery. Every public read allows any
+origin, so a browser can also read the tree straight from here without a mirror in between.
+
 History is published too. Every day's diff against the day before, one row per event with the
 full job record (added, removed, changed, and the previous version of changed), sits under
 `/data/diffs/`, each with a `lite/` twin that drops the vectors and keeps the text only where a mirror needs it, and a daily ledger of every job the crawler has ever recorded, open or removed, with

@@ -93,6 +93,12 @@ the ranked list with labels and exemplars if you want to eyeball it or hand-pick
 title, company, location, url, seen_ms, jd (full text), leaf, sim (cosine to the ideal JD),
 vec_b64`. Query it directly with DuckDB for anything the UI doesn't do.
 
+**Taking the whole tree.** `fetch --groups 0` walks every leaf (group ids include the internal nodes; 0 is
+the root) into `work/jobs.parquet`: about 11k files and 37 GB. Do that only when the person wants a local
+copy of the entire index rather than a neighbourhood. For a nightly mirror, follow "Mirror the search
+index" in the README: walk from `manifest.groups`, re-run when `manifest.built_at` changes, and put a
+contact in the User-Agent.
+
 **Union vs. replace — `fetch` keeps the old slice by default.** A `fetch` does **not** throw away
 what you fetched before. It **unions** the new groups into the existing `work/jobs.parquet`, deduped by
 job key (this fetch wins for any job it re-fetched; prior jobs it didn't touch are kept). So each
