@@ -37,7 +37,7 @@ if _pub.get("sizes") and not _local_files:
     remote = {k.split("/")[-1]: s for k, s, _ in r2.list(a.groups_prefix)}
     bad = [f for f, s in local.items() if remote.get(f) != s]
     if bad: sys.exit(f"{len(bad)} group files missing or differing in R2 (e.g. {bad[0]}); manifest NOT published. Re-run the tree stage.")
-    print(f"groups: {len(local)} published by the tree stage, all verified in R2", flush=True)
+    print(f"groups: {len(local)} published by the tree stage, all verified in R2", flush=True); todo = []
 else:
     local = {f: os.path.getsize(os.path.join(web, "groups", f)) for f in _local_files}
     if len(local) != manifest["leaves"]: sys.exit(f"web/groups has {len(local)} files but the manifest has {manifest['leaves']} leaves; refusing to publish")
