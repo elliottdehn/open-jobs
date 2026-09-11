@@ -141,14 +141,23 @@ outd = os.path.join(a.out, f"{pd}__{nd}")
 if os.path.isdir(outd): shutil.rmtree(outd)  # a killed earlier attempt leaves partial files DuckDB then refuses to write over
 # The write scans both exports in full over the bucket (40+ min); a transient bucket error (403/5xx on one of the range
 # reads, 2026-09-11) must not cost the key computation above, so only the COPY is retried.
+# One labeled key table per side, so today's export is scanned once (added, changed) and yesterday's once (removed,
+# changed_prev, carried) instead of one scan per event type, and each scan only opens the sources that have events.
+con.execute("CREATE TABLE evk_new AS SELECT ats, slug, id, 'added' AS op FROM addk UNION ALL SELECT ats, slug, id, 'changed' FROM chgk")
+con.execute("CREATE TABLE evk_old AS SELECT ats, slug, id, 'removed' AS op FROM remk UNION ALL SELECT ats, slug, id, 'changed_prev' FROM chgk UNION ALL SELECT ats, slug, id, 'carried' FROM carryk")
+def _ats_in(t):
+    v = [r[0] for r in con.execute(f"SELECT DISTINCT ats FROM {t} ORDER BY 1").fetchall()]
+    return "(" + ", ".join("'%s'" % x.replace("'", "''") for x in v) + ")" if v else "('')"
+ats_new, ats_old = _ats_in("evk_new"), _ats_in("evk_old")
+new_collist = ", ".join(f'n."{c}"' for c in cols)
 for _attempt in range(4):
   try:
     con.execute(f"""COPY (
-  SELECT 'added' AS op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM addk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
-  UNION ALL SELECT 'removed', '{pd}', '{nd}', {removal_sql}, led.removed_at, {old_collist} FROM old o JOIN remk k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id
-  UNION ALL SELECT 'changed', '{pd}', '{nd}', NULL, NULL, {collist} FROM new n WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=n.ats AND k.slug=n.slug AND k.id=n.id)
-  UNION ALL SELECT 'changed_prev', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM chgk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
-  UNION ALL SELECT 'carried', '{pd}', '{nd}', NULL, NULL, {collist} FROM old o WHERE EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=o.slug AND k.id=o.id)
+  SELECT k.op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {new_collist}
+  FROM new n JOIN evk_new k ON k.ats=n.ats AND k.slug=n.slug AND k.id=n.id WHERE n.ats IN {ats_new}
+  UNION ALL
+  SELECT k.op, '{pd}', '{nd}', CASE WHEN k.op = 'removed' THEN {removal_sql} END, CASE WHEN k.op = 'removed' THEN led.removed_at END, {old_collist}
+  FROM old o JOIN evk_old k ON k.ats=o.ats AND k.slug=o.slug AND k.id=o.id LEFT JOIN led ON led.ats=o.ats AND led.slug=o.slug AND led.id=o.id WHERE o.ats IN {ats_old}
 ) TO '{outd}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB', ROW_GROUP_SIZE 20000)""")
     break
   except duckdb.Error as e:
