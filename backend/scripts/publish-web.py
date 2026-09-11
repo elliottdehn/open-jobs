@@ -58,4 +58,10 @@ if a.mirror_prefix and a.mirror_prefix != a.groups_prefix:
                 time.sleep(1 + attempt)
     with cf.ThreadPoolExecutor(max_workers=16) as ex: errs = [e for e in ex.map(cp, names) if e]
     print(f"mirrored {len(names) - len(errs)} group files to {a.mirror_prefix} for old readers ({time.time() - tm:.0f}s)" + (f"; {len(errs)} failed, e.g. {errs[0]}" if errs else ""), flush=True)
+    # The mirror only ever overwrote ids 0..N-1: when a build has fewer leaves than an earlier one, the old tail stayed
+    # (22,526 files for an 11,372-leaf tree on 2026-09-11) and a reader walking ids until the first 404 mixed in stale
+    # groups. Delete every flat file this build did not just write.
+    keep = set(names); stale = [k for k, _, _ in r2.list(a.mirror_prefix) if k.count("/") == a.mirror_prefix.count("/") and k[len(a.mirror_prefix):] not in keep]
+    with cf.ThreadPoolExecutor(max_workers=16) as ex: list(ex.map(r2.delete, stale))
+    if stale: print(f"deleted {len(stale)} stale group files from {a.mirror_prefix} (ids past this build's {len(names)} leaves)", flush=True)
 print(f"published centroids + manifest ({manifest['jobs']:,} jobs, {manifest['leaves']:,} groups, built {time.strftime('%Y-%m-%d %H:%M', time.localtime(manifest['built_at']/1000))}); {len(todo)} group files uploaded; {time.time()-t0:.0f}s", flush=True)
