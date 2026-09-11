@@ -208,7 +208,17 @@ Measured against the 2026-09-10 run:
 4. **Image to the registry** (`build-amd64`), **a Workflow on the Worker's cron** that starts one container per
    stage with the date fixed once and stops on a non-warning failure, **`SLACK_RUN_WEBHOOK`** set, and a
    **missed-run check** (no report line by 10:00 UTC = post a warning).
-5. **A week in parallel** with the laptop, diffing manifests and diff counts, then switch. Ingest stays a
+5. **A tap on the run, running or not.** A `Run` Durable Object in the Worker is the run journal: the container
+   posts stage started / done (elapsed) / warning / failure (with the last 200 log lines) and a batched tail of
+   ordinary log lines every few seconds (one row per batch). `GET /run` answers whether or not anything is
+   running: the live stage and its start time, the last event, the previous run's outcome, the next scheduled
+   start. `/run/tail` is a WebSocket on the same object (hibernation API, free while idle) that pushes every
+   event as a frame, so an AI session can keep a persistent monitor on it and react the moment something breaks.
+   Silence is a signal: the object's alarms turn "no started by 00:30 UTC" and "no report by 10:00 UTC" into
+   synthetic failure events (this replaces the missed-run check in 4). `POST /run/stage` (stage, date) restarts a
+   stage as a Workflow step, the remote form of `from <stage> --date`. Containers give no shell into a running
+   instance, so the shipped tail plus a restart is the whole fix loop.
+6. **A week in parallel** with the laptop, diffing manifests and diff counts, then switch. Ingest stays a
    laptop command; the container never waits for it.
 
 ## Open questions
