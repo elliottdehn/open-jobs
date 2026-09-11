@@ -274,6 +274,7 @@ if M:
             active = np.concatenate(nxt) if nxt else np.empty(0, dtype=np.int64)
         return node
     pos_ = 0
+    con.execute(f"SET memory_limit='{os.environ.get('TREE_FILL_MEMORY', '3GB')}'")  # a streaming scan; the box also holds Z, the centroids and the memmap (12 GiB in the cloud)
     reader = con.execute(f"SELECT j.h, j.embedding FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").to_arrow_reader(50_000)
     while True:
         try: b = reader.read_next_batch()
