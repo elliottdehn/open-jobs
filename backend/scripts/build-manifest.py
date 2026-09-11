@@ -349,6 +349,11 @@ CHUNK = 250_000
 _bucket_stage = bool(is_s3 and r2 and os.environ.get("STAGE_TO_BUCKET") == "1")
 stage = f"s3://{r2.bucket}/tmp/{TMP}.stage" if _bucket_stage else os.path.join(work, f"{TMP}.stage")
 if not _bucket_stage: shutil.rmtree(stage, ignore_errors=True)
+else:
+    # a killed earlier attempt leaves its partial chunks under the same prefix and DuckDB refuses to write over them
+    _old = [k for k, _, _ in r2.list(f"tmp/{TMP}.stage/")]
+    for k in _old: r2.delete(k)
+    if _old: print(f"  cleared {len(_old)} leftover staging objects from the bucket", file=sys.stderr, flush=True)
 # Rows carry their 6 KB vector now, and a partitioned write buffers up to 524,288 rows per open partition by default:
 # 18 partitions of that ran DuckDB out of its cap (2026-09-11). Flush every few thousand rows instead.
 con.execute("SET partitioned_write_flush_threshold=5000")
