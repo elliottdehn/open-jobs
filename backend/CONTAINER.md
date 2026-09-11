@@ -129,83 +129,84 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
   either in ten seconds. Each stage keeps printing the summary lines it does today; the Workflow
   keeps them for when the line says something failed.
 
-## Status (2026-09-08)
+## Status (2026-09-10)
 
-Steps 1-3 below are done, each validated on real data:
-- **Write as produced.** `scripts/r2.py` (S3 API, multipart) replaces `wrangler` everywhere: the tree build
-  streams group files to `groups/` while writing them (`--publish`), `publish-web.py` (finalize) reconciles
-  `groups/` by size and then publishes models, centroids, and the manifest last, `upload-history.py` uses the
-  same transport. `upload-web.py` is gone, and with it the 300 MiB cap and the crash-and-retry.
-- **Read in place.** `build-parquet.py --source r2` reads the 62k snapshots straight from the bucket
-  (DuckDB S3, footer metadata included) and publishes `jobs/`/`boards/` to `exports/<date>/`; the tree
-  build, the diff (both roots, carry-forward rewriting the R2 object), and the estimators accept an
-  `s3://` `EXPORT_DIR`. Verified on a one-provider export in the bucket.
-- **Stages.** `scripts/stage.py <stage>` is the unit a container runs; `consolidate.sh` is now a thin
-  wrapper that sequences them, with `--from` to resume. The laptop path is unchanged in behaviour.
+The nightly runs end to end in the container image on the laptop (Docker Desktop, 16 GB VM), reading and
+writing the real bucket. Two nights so far:
 
-Not yet: ingest still runs from the laptop (step 6), and no image, Workflow, or cron trigger exists (step 5).
-Reading 62k snapshots from a laptop through DuckDB's S3 client is ~46 files/s (about 22 min for the
-fleet), comparable to the current pull; inside Cloudflare it should be well under that.
+- **2026-09-09 (first night).** Every stage ran, with restarts. What broke and what changed: the build
+  script's Dockerfile path; the snapshot read race (boards rewriting R2 objects while DuckDB reads them by
+  byte range) -> the snapshot freeze on the lock object; two transient R2 503s -> DuckDB `http_retries`,
+  block retries, and a same-run skip of sources already published; a per-stage resume after local midnight
+  drifted to the new date -> `container-run.sh from <stage> --date D`; the diff OOM-killed under a 20 GB
+  DuckDB default in a 16 GB VM -> `DIFF_MEMORY=10GB` in the image; 829k spurious `changed` rows from
+  date-only posting dates cast in the session zone (laptop EDT vs container UTC) -> every export script pins
+  UTC and the diff compares `published_at` by calendar date; a diff sidecar with no parent link on a fresh
+  volume -> the parent is fetched from the bucket; salary and age trainers OOM-killed -> 250k-row samples,
+  the estimators read the local export copy or the bucket with a 4 GB cap; the location table re-embedded
+  437k strings because its cache gate keyed on the export path -> keyed on bucket mode. Published: manifest
+  (3,160,249 first-party postings), diff, ledger, feed generation, four models.
+- **2026-09-10 (second night, in progress at the time of writing).** First run with `LOW_DISK=1` and
+  `STAGE_TO_BUCKET=1` (the cloud path, on by default in the image), the aggregator tier in the export, the
+  `archive` stage (one tar at a stable URL), and the search tree placing job-board postings into the
+  first-party tree. The `dark` source alone is ~17M snapshot rows after the crawler cap came off.
 
-## Running the container locally (2026-09-09)
+**Publishing safety, done:** one publisher at a time (`/lock` Durable Object; `stage.py` acquires per stage,
+renews, retention releases; `unlock` and `--force-lock`), the snapshot freeze while the parquet stage reads,
+dated group prefixes with the manifest published last (`groups/<date>/`, previous build kept, flat mirror for
+old checkouts), the diff's parent chain verified by the feed, and idempotent stages with a same-run skip.
+
+**Observability, done:** `report` posts one line per run (jobs, diff counts, feed generation, failed stages)
+to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-usage.py` for the meters;
+`GET /lock`, `GET /stats`, `GET /dedupe`, `GET /rowmeter?board=` for the fleet's state.
+
+## Running the container locally
 
 ```sh
-scripts/container-run.sh build                 # image for this machine (arm64); build-amd64 for Cloudflare
-scripts/container-run.sh all                   # the nightly run: pull .. report, one container per stage
-scripts/container-run.sh parquet --only jazzhr # one stage
-scripts/container-run.sh shell                 # look around inside
+scripts/container-run.sh build                       # image for this machine (arm64); build-amd64 for Cloudflare
+uv run scripts/stage.py ingest                       # the laptop-only providers, first
+scripts/container-run.sh all                         # pull .. archive .. retention, then report
+scripts/container-run.sh from tree --date 2026-09-10 # resume from a stage; the date is fixed once (see below)
+scripts/container-run.sh parquet --only jazzhr       # one stage
+scripts/container-run.sh shell                       # look around inside
 ```
 Secrets come from `backend/.dev.vars` (R2_*, OPENAI_KEY) and `admin_token.txt`; nothing is in the image.
-Scratch is the named volume `open-jobs-work`, mounted at `/work`: `work-<date>/` (memmap, staging, web/),
-`export/diffs`, `export/ledger`, `export/feed`. State between runs lives in the bucket, not on disk:
-`exports/<date>/` (the parquet the next diff needs), `state/feed/published.json` (the feed cursor),
-`state/location-embeddings.npz` (the estimator's embedding cache). Docker Desktop needs at least 14 GB of
-memory for the tree stage; `container-run.sh` warns if it has less.
+Scratch is the named volume `open-jobs-work` at `/work`. State between runs lives in the bucket:
+`exports/<date>/`, `state/feed/published.json`, `state/location-embeddings.npz`. Docker Desktop needs 16 GB.
 
-What differs from the laptop run: no ingest (a laptop command), no local export dir (snapshots are read from
-the bucket), the history indexes are rebuilt from the bucket's own listing plus today's parts, retention
-prunes `exports/<date>/` prefixes older than the previous one, and a final `report` stage posts one line
-(date, jobs, diff counts, feed generation, stages passed) to `SLACK_RUN_WEBHOOK` or, without one, to the
-ideas relay. Each stage appends its outcome to `work-<date>/run.jsonl`; that is what the report reads.
+Lessons that apply to any host:
+- Run long chains inside something that survives the shell: on this machine, every `run_in_background`
+  shell died at once twice in one night (containers gone); a persistent Monitor did not.
+- Resume with `from <stage> --date <run date>`. Stages run one by one after local midnight pick the new
+  day, a different work dir and lock holder, and the lock refuses them (correctly).
+- The report stage reads `run.jsonl` cumulatively: interim ❌ lines are normal while resuming.
 
-## Order of work
+## What remains for Cloudflare Containers
 
-Each step is useful on its own and lands on the laptop first, so nothing is a big-bang move.
+The largest instance is **standard-4: 4 vCPU, 12 GiB memory, 20 GB disk** (custom types cap at the same).
+Measured against the 2026-09-10 run:
 
-1. **Tree build streams text and metadata** — DONE 2026-09-08 (see Status). Two passes: pass 1 loads vectors
-   into the float16 memmap and keeps only titles/locations/company hints/board per row; the tree is
-   built unchanged; pass 2 streams the parquet back in DFS order (DuckDB join on the exact job key,
-   sort by position) and writes each group file as its last row arrives. Output verified byte-identical
-   to the original on the 2026-09-07 export: same 22,375-node tree, same centroids, all 11,188 group
-   files identical. Also made the build deterministic: rows are key-sorted after loading, so the tree
-   no longer depends on parquet scan order (the original produced a different tree every run).
-   Measured: 19.3 -> 9.7 GB peak real memory, 4.5 GB during the tree itself; 26.9 -> ~20 min. Three
-   things it took to get there, each found by a footprint sampler rather than by reasoning: keeping an
-   Arrow column from a batch pins the whole batch (19 GB by the end of loading; fixed by copying the
-   keys out); a single ORDER BY over the corpus exhausts DuckDB's buffer at any cap (fixed by staging
-   into 250k-position chunks and sorting each); and `time -l` measures the `uv` wrapper, not Python.
-   The 9.6 GB vector memmap and ~5 GB staging stay on disk (fits the 20 GB instance if parquet is read
-   from R2).
-2. **Write artifacts to R2 as produced** — DONE 2026-09-08 (see Status).
-3. **Read snapshots and exports from R2 in place** — DONE 2026-09-08 as `--source r2` (see Status).
-   With it the run needs ~15 GB of local disk (memmap + staging) and ~10 GB of memory.
-4. **Split `consolidate.sh` into stage commands** — DONE 2026-09-08 (`scripts/stage.py`; see Status).
-5. **Container image + Workflow + cron + the Slack line.** Run it in parallel with the laptop for
-   a week, diffing the two manifests, then switch. The Slack summary and the missed-run check ship
-   with it, not after.
-6. **Ingest** for the local-only ATSes — decided 2026-09-08: it stays a laptop command,
-   `uv run scripts/stage.py ingest`, run nightly or whenever. It only talks to the Worker, and the
-   boards it posts flow into snapshots like every other board, so the container never depends on it
-   and never waits for it; skipping it just leaves those two providers stale until the next run.
-
-Until step 5, a `launchd` job on the laptop at a fixed hour makes the current script hands-off:
-it is re-runnable, prunes its own exports, and publishes everything it produces.
+1. **`dark` in the parquet stage does not fit 20 GB.** Its first-pass file passed 10 GB on local disk and the
+   tier rewrite and the end-of-run dedup each make a second copy. Write and upload it in parts of a few GB
+   (by board slug range), never holding the whole source locally; cap that DuckDB connection at 6 GB (it has
+   no cap today and sits at 11 GB in the VM).
+2. **The tree stage's two memmaps do not fit 20 GB.** First-party 9.7 GB plus ~9 GB for three million
+   job-board rows. The fix is the sample design: build the tree on a uniform sample of first-party rows
+   (`WHERE_` with `USING SAMPLE`), place every other row through the existing filler descent, and have pass 2
+   take each row's vector from the parquet rows it already streams instead of from a memmap. Memory becomes
+   the sample plus centroids; disk becomes the staging, which `STAGE_TO_BUCKET` already moves to the bucket.
+3. **Split-on-overflow for leaves** (optional): after filling, 9 of 1,605 test leaves exceeded 5k rows.
+4. **Image to the registry** (`build-amd64`), **a Workflow on the Worker's cron** that starts one container per
+   stage with the date fixed once and stops on a non-warning failure, **`SLACK_RUN_WEBHOOK`** set, and a
+   **missed-run check** (no report line by 10:00 UTC = post a warning).
+5. **A week in parallel** with the laptop, diffing manifests and diff counts, then switch. Ingest stays a
+   laptop command; the container never waits for it.
 
 ## Open questions
-- Container run-duration limit (undocumented): the tree stage at 23 minutes and the ledger at
-  33 minutes are the long ones. If a hard limit exists below that, the ledger pull splits per ATS.
-- Egress: reading 35 GB of snapshots plus writing ~45 GB per day from inside Cloudflare should be
-  free of egress charges, but R2 class A/B operation counts on 62k small snapshot reads and 11k
-  group writes per day should be checked against the pricing page before committing.
-- Whether to keep the 300-MiB-safe part layout for diffs and ledger once multipart uploads exist
-  (yes: readers benefit from bounded parts regardless of how they were uploaded).
+- Container run-duration limit (undocumented): with the job boards the parquet stage runs 2-3 h and the tree
+  ~70 min. If a hard limit exists below that, parquet splits per source (it already skips published sources
+  on a rerun, so a chain of short containers works).
+- R2 operation counts: ~40 GB read and ~60 GB written per night from inside Cloudflare are egress-free;
+  class A/B counts (114k snapshot reads, 11k group writes, 11k mirror copies, the staging prefix) were ~1M
+  class A and ~2M class B per day on the meter, inside the free tiers.
+- The aggregator tier's own age curve, so job-board postings can carry freshness verdicts on the page.
