@@ -364,7 +364,7 @@ dialog#fresh button { background: var(--green); color: #142a20; border: 0; borde
 
   <div class="wrap stats" aria-label="About the job index">
     <div class="stats-intro eyebrow">A wider search.<br>A clearer picture.</div>
-    <div class="stat"><strong id="index-count">3.1M+</strong><span>open job postings</span></div>
+    <div class="stat"><strong id="index-count">4.4M+</strong><span>open job postings</span></div>
     <div class="stat"><strong>65,000</strong><span>company career sites</span></div>
     <div class="stat"><strong>Daily</strong><span>crawl of career sites</span></div>
   </div>
@@ -717,8 +717,8 @@ function makeLocparse(L) {
       const r = await fetch(`${DATA}/data/manifest.json`);
       if (!r.ok) throw new Error(`manifest ${r.status}`);
       M = await r.json(); T = M.tree;
-      $('#index-count').textContent = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(M.jobs);
-      $('#index-count').title = `${fmtN(M.jobs)} open postings in the current index`;
+      $('#index-count').textContent = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(M.jobs_total ?? M.jobs);
+      $('#index-count').title = `${fmtN(M.jobs_total ?? M.jobs)} open postings in the current index` + (M.jobs_aggregator ? ` (${fmtN(M.jobs)} from company career sites, ${fmtN(M.jobs_aggregator)} via job boards)` : "");
       CNT = new Int32Array(T.length).fill(1);
       for (let i = T.length - 1; i >= 0; i--) for (const c of T[i].children) CNT[i] += CNT[c];
       prep('busy', `Map of ${fmtN(M.jobs)} jobs loaded. Warming up the index…`);
