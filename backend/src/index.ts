@@ -347,7 +347,12 @@ export default {
 			const range = request.headers.get("range");
 			const obj = request.method === "HEAD" ? await env.DATA.head(key) : await env.DATA.get(key, { range: range ? request.headers : undefined });
 			if (!obj) return new Response("not found", { status: 404, headers: cors });
-			if (request.method === "GET" && /^groups\/.*\.json$/.test(key)) bump("group");
+			if (request.method === "GET" && /^groups\/.*\.json$/.test(key)) {
+				bump("group");
+				// who walks the tree: the tools (they announce themselves), browsers (the search page), or scripts
+				const ua = request.headers.get("user-agent") ?? "";
+				bump(`group:${/open-jobs-tools/i.test(ua) ? "tools" : /Mozilla/.test(ua) ? "browser" : "script"}`);
+			}
 			const headers = new Headers(cors);
 			obj.writeHttpMetadata(headers);
 			headers.set("etag", obj.httpEtag);
