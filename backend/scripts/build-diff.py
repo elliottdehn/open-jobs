@@ -64,6 +64,14 @@ con.execute(f"SET memory_limit='{os.environ.get('DIFF_MEMORY', '20GB')}'"); os.m
 if r2: r2.duckdb(con)
 con.execute(f"CREATE VIEW old AS SELECT * FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
 con.execute(f"CREATE VIEW new AS SELECT * FROM read_parquet('{new}/jobs/*.parquet', union_by_name=true)")
+# Schema drift between the two days (a column added to the export, e.g. tier/org/via on 2026-09-10): the older
+# side gets the new columns as typed NULLs so every SELECT below can name the same list on both views.
+_newt = [(r[0], r[1]) for r in con.execute("DESCRIBE new").fetchall()]
+_oldc = {r[0] for r in con.execute("DESCRIBE old").fetchall()}
+_missing = [(c, t) for c, t in _newt if c not in _oldc]
+if _missing:
+    print(f"old export lacks {len(_missing)} column(s) of the new one ({', '.join(c for c, _ in _missing)}); treated as NULL")
+    con.execute(f"CREATE OR REPLACE VIEW old AS SELECT *, {', '.join(f'NULL::{t} AS \"{c}\"' for c, t in _missing)} FROM read_parquet('{prev}/jobs/*.parquet', union_by_name=true)")
 cols = [r[0] for r in con.execute("DESCRIBE new").fetchall()]
 collist = ", ".join(f'"{c}"' for c in cols)
 old_collist = ", ".join(f'o."{c}"' for c in cols)
