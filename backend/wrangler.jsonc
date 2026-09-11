@@ -31,7 +31,7 @@
 	"r2_buckets": [{ "binding": "DATA", "bucket_name": "jobscream-data" }],
 	// The search page (../site/index.html, one self-contained file). Served at / ; every API route is
 	// listed here so the Worker sees it first and the assets layer never shadows an endpoint.
-	"assets": { "directory": "../site", "binding": "ASSETS", "run_worker_first": ["/status", "/probe", "/embed", "/jd", "/enrich", "/enrich/*", "/ideas", "/data/*", "/ats", "/sync", "/sync/*", "/snapshots", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
+	"assets": { "directory": "../site", "binding": "ASSETS", "run_worker_first": ["/", "/status", "/probe", "/embed", "/jd", "/enrich", "/enrich/*", "/ideas", "/data/*", "/ats", "/sync", "/sync/*", "/snapshots", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
 	"triggers": {
 		// Daily sweep that (re)arms every board's alarm. Boards fetch at their own fixed slot.
 		"crons": ["0 0 * * *"]

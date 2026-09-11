@@ -7,7 +7,7 @@ import { DurableObject } from "cloudflare:workers";
  * `<UTC date>:<kind>`. The cron posts yesterday's line to Slack (see scheduled() in index.ts); GET /stats (admin)
  * returns the last days.
  */
-export type StatKind = "embed" | "jd" | "group";
+export type StatKind = "embed" | "jd" | "group" | (string & {});  // "page:/", "page:/data/", "ref:<referrer host>" are counted too
 const KINDS: StatKind[] = ["embed", "jd", "group"];
 const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 
@@ -28,9 +28,12 @@ export class Stats extends DurableObject<Env> {
 		await this.ctx.storage.put(out);
 	}
 	async day(date: string): Promise<Record<StatKind, number>> {
-		const m = await this.ctx.storage.get<number>(KINDS.map((k) => `${date}:${k}`));
+		// every counter the day has (the three fixed kinds always present, then page loads and referrers as they occur)
+		const m = await this.ctx.storage.list<number>({ prefix: `${date}:` });
 		const out = {} as Record<StatKind, number>;
-		for (const k of KINDS) out[k] = (m.get(`${date}:${k}`) ?? 0) + (this.pending.get(`${date}:${k}`) ?? 0);
+		for (const k of KINDS) out[k] = 0;
+		for (const [key, n] of m) out[key.slice(date.length + 1)] = n;
+		for (const [key, n] of this.pending) if (key.startsWith(`${date}:`)) out[key.slice(date.length + 1)] = (out[key.slice(date.length + 1)] ?? 0) + n;
 		return out;
 	}
 	async recent(days = 7): Promise<Record<string, Record<StatKind, number>>> {

@@ -23,7 +23,8 @@ async function postDailyStats(env: Env): Promise<void> {
 	const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 	const s = await env.STATS.getByName("daily").day(day);
 	const n = (x: number) => x.toLocaleString("en-US");
-	const text = `📊 ${day}: ${n(s.embed)} searches embedded · ${n(s.group)} group files fetched · ${n(s.jd)} JDs generated`;
+	const refs = Object.entries(s).filter(([k]) => k.startsWith("ref:")).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k.slice(4)} ${n(v)}`).join(", ");
+	const text = `📊 ${day}: ${n(s.embed)} searches embedded · ${n(s.group)} group files fetched · ${n(s.jd)} JDs generated · ${n(s["page:/"] ?? 0)} search page loads · ${n(s["page:/data/"] ?? 0)} data index loads${refs ? ` · from: ${refs}` : ""}`;
 	await fetch(hook, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
 }
 
@@ -80,9 +81,17 @@ export default {
 	},
 
 	async fetch(request, env, ctx): Promise<Response> {
-		const bump = (kind: "embed" | "jd" | "group") => ctx.waitUntil(env.STATS.getByName("daily").bump(kind).catch(() => {}));
+		const bump = (kind: string) => ctx.waitUntil(env.STATS.getByName("daily").bump(kind).catch(() => {}));
+		// Where do people come from? Page loads of the search page and the data index, plus the referrer's host
+		// (never the path, never the visitor). Answers "who is sharing this" without a tracker.
+		const pageView = (page: string) => {
+			bump(`page:${page}`);
+			try { const h = new URL(request.headers.get("referer") ?? "").hostname; if (h && h !== url.hostname) bump(`ref:${h}`); } catch { /* no referrer */ }
+		};
 		const url = new URL(request.url);
 		const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+		// GET / -> the search page from the assets layer, counted first (run_worker_first lists "/" for this)
+		if (parts.length === 0 && request.method === "GET") { pageView("/"); return env.ASSETS.fetch(request); }
 		const cors = {
 			"access-control-allow-origin": "*",
 			"access-control-allow-methods": "GET, HEAD, POST, OPTIONS",
@@ -322,7 +331,7 @@ export default {
 		}
 
 		// GET /data/  -> HTML index of the public files (rendered from the same indexes a mirror reads)
-		if (parts[0] === "data" && parts.length === 1 && request.method === "GET") return dataIndex(env, cors);
+		if (parts[0] === "data" && parts.length === 1 && request.method === "GET") { pageView("/data/"); return dataIndex(env, cors); }
 
 		// GET /data/exports/[<date>/[jobs/|boards/]]  -> JSON listing of that prefix (the full export has no index file of its own)
 		if (parts[0] === "data" && parts[1] === "exports" && url.pathname.endsWith("/") && request.method === "GET") {
