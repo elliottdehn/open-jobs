@@ -19,6 +19,21 @@ export { ContainerProxy } from "@cloudflare/containers"; // required by the cont
 const EXPORT_CONCURRENCY = 20;
 
 /** The daily use line: yesterday's (UTC) counters to Slack. Runs on the 00:00 UTC cron next to the registry sweep. */
+/** Silence is a signal: if no build has been published in the last 26 hours by 10:00 UTC, say so in Slack. Reads the
+ *  small manifest-head.json publish-web writes beside the manifest, so it covers laptop and cloud runs alike. */
+async function checkPublish(env: Env): Promise<void> {
+	let line: string;
+	try {
+		const o = await env.DATA.get("manifest-head.json");
+		const head = o ? ((await o.json()) as { built_at?: number; jobs_total?: number; groups?: string }) : null;
+		const age = head?.built_at ? (Date.now() - head.built_at) / 3_600_000 : Infinity;
+		if (age <= 26) return;
+		line = head?.built_at ? `❌ no new build: the live index was built ${age.toFixed(0)} h ago (${new Date(head.built_at).toISOString().slice(0, 16)} UTC, ${(head.jobs_total ?? 0).toLocaleString("en-US")} postings, ${head.groups}). Check the run.` : "❌ no manifest-head.json in the bucket: nothing has published since the head file existed. Check the run.";
+	} catch (e) { line = `❌ publish check failed: ${e instanceof Error ? e.message : String(e)}`; }
+	const hook = env.SLACK_RUN_WEBHOOK ?? env.SLACK_STATS_WEBHOOK ?? env.SLACK_IDEAS_WEBHOOK;
+	if (hook) await fetch(hook, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: line }) }).catch(() => {});
+}
+
 async function postDailyStats(env: Env): Promise<void> {
 	const hook = env.SLACK_STATS_WEBHOOK ?? env.SLACK_IDEAS_WEBHOOK;
 	if (!hook) return;
@@ -91,7 +106,9 @@ async function currentGroupsPrefix(env: Env): Promise<string> {
 
 export default {
 	/** Daily sweep: (re)arm every board's alarm. Self-heals boards that lost their alarm. */
-	async scheduled(_controller, env, ctx): Promise<void> {
+	async scheduled(controller, env, ctx): Promise<void> {
+		// 10:00 UTC: the silence alarm (CONTAINER.md). Everything else is the daily sweep at 00:00 UTC.
+		if (controller.cron === "0 10 * * *") { ctx.waitUntil(checkPublish(env)); return; }
 		ctx.waitUntil(syncAll(env));
 		ctx.waitUntil(postDailyStats(env));
 	},

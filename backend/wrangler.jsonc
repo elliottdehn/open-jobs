@@ -44,7 +44,7 @@
 	"assets": { "directory": "../site", "binding": "ASSETS", "run_worker_first": ["/", "/status", "/probe", "/embed", "/jd", "/enrich", "/enrich/*", "/ideas", "/data/*", "/ats", "/sync", "/sync/*", "/snapshots", "/fetch-all", "/backfill", "/boards/*", "/jobs/*", "/export/*", "/comeet/*"] },
 	"triggers": {
 		// Daily sweep that (re)arms every board's alarm. Boards fetch at their own fixed slot.
-		"crons": ["0 0 * * *"]
+		"crons": ["0 0 * * *", "0 10 * * *"]  // 10:00 UTC: the missed-publish check (checkPublish in index.ts)
 	},
 	"vars": {
 		// ADMIN_TOKEN is a *secret* (`wrangler secret put ADMIN_TOKEN`), deliberately not a var: a var here would shadow the secret and the admin endpoints fail closed without it.
