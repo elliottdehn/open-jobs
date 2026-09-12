@@ -205,7 +205,10 @@ elif a.stage == "parquet":
             base = ["/usr/local/bin/uv", "run", "scripts/build-parquet.py", "--publish"]
             print(f"parquet fan-out across {nw} workers: dark parts by index, then {sum(len(x) for x in slots)} other sources by bytes", flush=True)
             fan("parquet", [base + [f"--ats=dark,{','.join(slots[i])}" if slots[i] else "--ats=dark", f"--parts=mod:{nw}:{i}"] for i in range(nw)])
-            fan("dedup", [base + ["--dedup-only", f"--parts=mod:{nw}:{i}"] for i in range(nw)])
+            # The dedup is one worker over every part: pass A reads all parts and pass B rewrites them, so parallel
+            # dedup workers read parts another worker is mid-rewrite (2026-09-11: a worker died on a torn read and the
+            # others computed winners from torn data). ~40 min single; parallelising it needs pass A published once.
+            fan("dedup", [base + ["--dedup-only"]])
         else: run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
     finally:
         if r2_mode and not a.dry_run:
