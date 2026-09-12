@@ -310,6 +310,15 @@ Lessons that apply to any host:
 
 ## What remains for Cloudflare Containers
 
+**Next, before the next night: checkpoint the tree between the fill and pass 2.** Every pass 2 failure on
+2026-09-12 (OOM in the staging write, twice) replayed the vector load (12 min), PCA, the bisection (18 min) and the
+fill (an hour) to get back to the line that broke: about 90 minutes per attempt. The state pass 2 needs is small: the
+row order, the node list with centroids and labels, the leaf boundaries after the split, and the hash-to-position
+table (a few hundred MB). build-manifest.py should write it to the bucket (tmp/<date>.tree/) right after the split
+and take `--resume-pass2` to load it and start at the staging write; stage.py tree passes the flag when the
+checkpoint exists for the date. Then a staging fix costs a minute to retry, not ninety.
+
+
 The largest instance is **standard-4: 4 vCPU, 12 GiB memory, 20 GB disk** (custom types cap at the same).
 Measured against the 2026-09-10 run:
 
