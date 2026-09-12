@@ -81,7 +81,7 @@ import pyarrow as pa
 # are signed) is picked up on its own at the next start of the stage and the build resumes at pass 2.
 _date = export_dir.rstrip("/").rsplit("/", 1)[-1]
 _ck_key = f"tmp/{_date}.tree/"; _ck = os.path.join(work, "tree.ckpt"); os.makedirs(_ck, exist_ok=True)
-_CK_FILES = ["order.npy", "board_of.npy", "H.arrow", "HF.arrow", "manifest.json", "centroids.bin", "meta.json"]  # meta last: its presence means complete
+_CK_FILES = ["order.npy", "board_of.npy", "H.arrow", "HF.arrow", "hints.arrow", "manifest.json", "centroids.bin", "meta.json"]  # meta last: its presence means complete
 def _export_sig():
     """The export's jobs files (name, size): a checkpoint built from a different parquet stage is not resumed."""
     pfx = export_dir.split("/", 3)[3].rstrip("/") + "/jobs/"
@@ -106,9 +106,15 @@ if _meta is not None:
     B = f"{root.rstrip('/')}/boards/*.parquet"
     comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
     compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size, company_hq, company_staffing, company_desc FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+    if os.path.exists(os.path.join(_ck, "hints.arrow")):
+        hints = pa.ipc.open_file(os.path.join(_ck, "hints.arrow")).read_all().column("h").to_pylist()
+    else:  # a checkpoint written before hints were saved (2026-09-12): rebuild them in key order, which is H's order
+        _hq = con.execute(f"SELECT {HKEY}, coalesce(json_extract_string(raw_json, '$.company_name'), '') AS company_hint {WHERE_} ORDER BY 1").fetch_arrow_table()
+        if len(_hq) != N or _hq.column("h")[0].as_py() != H[0].as_py() or _hq.column("h")[-1].as_py() != H[-1].as_py(): sys.exit(f"hint rebuild does not line up with the checkpoint ({len(_hq)} vs {N})")
+        hints = _hq.column("company_hint").to_pylist(); del _hq
     def company(r):
         a, s = boards[board_of[r]]
-        return comp.get((a, s), s)
+        return comp.get((a, s)) or hints[r] or s
     print(f"resumed at pass 2 from {_ck_key}: {NT:,} rows, {len(nodes)} nodes, {len(leaves)} leaves; rss {_rss():.1f} GiB", flush=True)
     RESUMED = True
 if not RESUMED:
@@ -394,6 +400,9 @@ if not RESUMED:
         with pa.ipc.new_file(os.path.join(_ck, "H.arrow"), pa.schema([("h", H.type)])) as w: w.write_table(pa.table({"h": H}))
         if M:
             with pa.ipc.new_file(os.path.join(_ck, "HF.arrow"), pa.schema([("h", HF.type)])) as w: w.write_table(pa.table({"h": HF}))
+        _ha = pa.array(hints, pa.large_string())
+        with pa.ipc.new_file(os.path.join(_ck, "hints.arrow"), pa.schema([("h", _ha.type)])) as w: w.write_table(pa.table({"h": _ha}))
+        del _ha
         import shutil as _sh
         for f in ("manifest.json", "centroids.bin"): _sh.copy(os.path.join(out, f), os.path.join(_ck, f))
         for f in _CK_FILES:
@@ -412,7 +421,7 @@ t = time.time()
 del Z
 try: del X; os.remove(_xpath)
 except (NameError, OSError): pass
-del titles, locs, hints  # the node labels are built; three lists of N strings (~1.5 GB at 3.56M rows) go before DuckDB grows
+del titles, locs  # the node labels are built; two lists of N strings go before DuckDB grows (hints stay: company() in pass 2 reads them)
 import gc; gc.collect()
 print(f"  pass 2 start: rss {_rss():.1f} GiB", file=sys.stderr, flush=True)
 con.execute(f"SET memory_limit='{os.environ.get('TREE_PASS2_MEMORY', '8GB')}'"); con.execute("SET threads=2")
