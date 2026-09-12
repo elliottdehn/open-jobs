@@ -105,7 +105,7 @@ if _meta is not None:
     for f in ("manifest.json", "centroids.bin"): _sh.copy(os.path.join(_ck, f), os.path.join(out, f))
     B = f"{root.rstrip('/')}/boards/*.parquet"
     comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
-    compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size, company_hq, company_staffing, company_desc FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+    compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size_bucket, company_hq_country, company_is_staffing_agency, company_description FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
     if os.path.exists(os.path.join(_ck, "hints.arrow")):
         hints = pa.ipc.open_file(os.path.join(_ck, "hints.arrow")).read_all().column("h").to_pylist()
     else:  # a checkpoint written before hints were saved (2026-09-12): rebuild them in key order, which is H's order
