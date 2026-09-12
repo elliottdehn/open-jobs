@@ -29,7 +29,7 @@ if [ "$busy" = "no" ]; then curl -s -X POST -H "authorization: Bearer $T" "$W/ru
 for i in $(seq 1 6); do
   curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
   sleep 15
-  live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); t=(d.get('lastOutput') or {}).get('text') or ''; print(t.strip().splitlines()[-1] if t.strip() else '')" 2>/dev/null || echo '?')
+  live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); t=(d.get('lastOutput') or {}).get('text') or ''; ls=[l for l in t.strip().splitlines() if l.strip() and not l.startswith('[host')]; print(ls[-1] if ls else '')" 2>/dev/null || echo '?')  # the last line is the host stats; the answer is the line before
   [ "$live" = "$BUILD" ] && { echo "image $BUILD live"; exit 0; }
   echo "  $(date +%T) container reports '$live'; stopping and waiting 60 s"
   curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; sleep 60
