@@ -40,6 +40,9 @@ export class Consolidate extends Container<Env> {
 		await this.journal({ t: Date.now(), ev: "start", label });
 		// Wrapped so the process's own output comes back to this object (POST /run/output) with its exit code: the platform's
 		// log pipeline is not something a stage can depend on, and a failed run must carry its traceback.
+		// The wrapper is PID 1 in the container, which ignores signals it does not trap: it traps SIGTERM and forwards it to
+		// the process group of the command (set -m gives the background job its own group), so POST /run/stop works
+		// without SIGKILL (2026-09-11: SIGTERM was silently ignored and only ?signal=kill stopped a run).
 		// The process runs in the background of the wrapper; its output tail is posted every two minutes while it runs
 		// (code -1) and once more with the real exit code when it ends, so a three-hour chain is watchable in GET /run.
 		const wrap = String.raw`post() { /usr/local/bin/python3 - "$1" <<'PY'
@@ -55,8 +58,11 @@ try: urllib.request.urlopen(req, timeout=30)
 except Exception as e: print('output post failed', e)
 PY
 }
+set -m
 : > /tmp/run.out; ( "$@" 2>&1 | tee -a /tmp/run.out; echo $PIPESTATUS > /tmp/run.code ) &
-while kill -0 $! 2>/dev/null; do sleep 120; kill -0 $! 2>/dev/null && post -1; done
+pid=$!
+trap 'kill -TERM -- -$pid 2>/dev/null; sleep 5; kill -KILL -- -$pid 2>/dev/null; echo 143 > /tmp/run.code' TERM INT
+while kill -0 $pid 2>/dev/null; do sleep 120 & wait $!; kill -0 $pid 2>/dev/null && post -1; done
 code=$(cat /tmp/run.code 2>/dev/null || echo 1); post "$code"; exit "$code"`;
 		await this.start({ entrypoint: ["/bin/bash", "-c", wrap, "run", ...args], envVars: { ...this.baseEnv(), RUN_OBJECT: this.ctx.id.name ?? "consolidate", ...extra }, enableInternet: true });
 		return { started: true };
