@@ -19,10 +19,14 @@ root = _ed.rstrip("/") if _s3 else os.path.join(os.path.dirname(__file__), "..",
 work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), "..", "work-" + _ed.rstrip("/").rsplit("/", 1)[-1]) if _s3 else root)
 J = f"{root}/jobs/*.parquet"
 con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute(f"SET memory_limit='{'4GB' if _s3 else '8GB'}'")  # bucket reads buffer on top of the cap; con.execute("SET arrow_large_buffer_size=true")
+# SALARY_SCAN_ROWS: the scan is sampled at the query like the other trainers (about 44% of these rows state a USD
+# salary, so 600k rows feed the 250k reservoir); the full scan of 6.3M rows over the bucket ran at ~11k rows/min
+# single-threaded through the extractor (2026-09-12), hours in front of the finalize stage.
+SCAN_ROWS = int(os.environ.get("SALARY_SCAN_ROWS", "600000"))
 q = f"""SELECT embed_model, content, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300
           AND (contains(content, '$') OR contains(content, 'USD') OR contains(content, '€') OR contains(content, '£'))
-       """
+        USING SAMPLE {SCAN_ROWS} ROWS"""
 import re
 GATE = re.compile(r"[$€£]\s*\d|\b(?:USD|salary|compensation|pay range)\b", re.I)
 # Bounded memory: a ridge fit on 1536 dims does not need every stated salary. Reservoir-sample up to MAX_ROWS so the
