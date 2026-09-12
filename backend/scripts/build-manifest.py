@@ -10,7 +10,7 @@
 With --publish each group file is uploaded to R2 as it is written; scripts/publish-web.py (finalize) reconciles and
 publishes centroids + manifest. Run: uv run scripts/build-manifest.py [--leaf-max 400] [--leaf-radius 0.30] [--out DIR] [--publish]
 """
-import argparse, base64, collections, glob, json, os, re, sys, time
+import argparse, base64, collections, glob, hashlib, json, os, re, sys, time
 import numpy as np, duckdb
 def _rss():
     """Resident set of this process in GiB (Linux), for the phase lines: the cloud box has 12 GiB and no swap."""
@@ -73,280 +73,332 @@ q_rows = f"""SELECT {HKEY}, ats, slug, id, coalesce(title,'') AS title, coalesce
 # else a group file needs (id, url, dates, jd text, enrichment) is streamed back out of the parquet in DFS order
 # by pass 2 below, so no text is ever held for the whole corpus.
 import pyarrow as pa
-N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
-D = 1536
-_xpath = os.path.join(work, f"{TMP}.vectors.f16.npy")
-if os.path.exists(_xpath): os.remove(_xpath)
-# Deterministic row order without a second copy of the matrix: pass A reads only the keys and sorts them; pass B
-# joins each batch to its sorted position in DuckDB and writes every vector straight to that slot of ONE
-# file-backed float16 array. (The old load + key-sorted copy needed 2x the matrix on disk; 20 GB is all a cloud
-# container has.) Same export in, same tree out: the order is the sorted key order, whatever the scan order was.
-import pyarrow as pa, pyarrow.compute as pc
-t2 = time.time()
-# TREE_SAMPLE_ROWS: build the tree on a uniform sample of first-party rows (the cloud instance cannot hold every
-# vector); every other embedded row, first-party or job board, is placed into the tree afterwards (see "filler").
-SAMPLE = int(os.environ.get("TREE_SAMPLE_ROWS", "0"))
-N_FP = N
-if SAMPLE and SAMPLE < N:
-    Hs = con.execute(f"SELECT h FROM (SELECT {HKEY} {WHERE_}) USING SAMPLE reservoir({SAMPLE} ROWS) REPEATABLE (42) ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
-    N = len(Hs); print(f"tree built on a sample of {N:,} of {N_FP:,} first-party rows (TREE_SAMPLE_ROWS)", flush=True)
-else:
-    Hs = con.execute(f"SELECT {HKEY} {WHERE_} ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
-    if len(Hs) != N: sys.exit(f"keys {len(Hs)} != rows {N}")
-con.register("keypos", pa.table({"h": Hs, "pos": pa.array(np.arange(N, dtype=np.int64))}))
-H = Hs  # keys in row order (sorted)
-X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
-titles = [None] * N; locs = [None] * N; hints = [None] * N
-board_ids = {}; board_of = np.empty(N, dtype=np.int32)
-seen_n = 0
-reader = con.execute(f"SELECT k.pos, j.* EXCLUDE (h) FROM ({q_load}) j JOIN keypos k USING (h)").to_arrow_reader(50_000)
-while True:
-    try: b = reader.read_next_batch()
-    except StopIteration: break
-    pos = b.column("pos").to_numpy(); emb = b.column("embedding")
-    vals = emb.values.to_numpy(zero_copy_only=False); n = len(b)
-    X[pos] = vals.reshape(n, -1)[:, :D]              # scattered writes into the single memmap
-    if (seen_n // 50_000) % 8 == 7: X.flush()
-    for k, (a_, s_) in enumerate(zip(b.column("ats").to_pylist(), b.column("slug").to_pylist())):
-        board_of[pos[k]] = board_ids.setdefault((a_, s_), len(board_ids))
-    for k, (ti, lo, hi) in enumerate(zip(b.column("title").to_pylist(), b.column("location").to_pylist(), b.column("company_hint").to_pylist())):
-        titles[pos[k]] = ti; locs[pos[k]] = lo; hints[pos[k]] = hi
-    seen_n += n
-    print(f"\r  loaded {seen_n:,}/{N:,}", end="", file=sys.stderr, flush=True)
-print(file=sys.stderr)
-del reader  # keypos stays registered: the filler pass anti-joins against it
-assert seen_n == N, f"loaded {seen_n} rows, expected {N}"
-if any(t is None for t in titles): sys.exit("the key join lost rows")
-boards = [None] * len(board_ids)
-for k, i_ in board_ids.items(): boards[i_] = k
-del board_ids
-# Clean + unit-normalize IN ROW BLOCKS (a whole-matrix norm would materialize an X-sized temp).
-for _i in range(0, X.shape[0], 200_000):
-	_blk = X[_i:_i + 200_000]
-	np.nan_to_num(_blk, copy=False)
-	_b32 = _blk.astype(np.float32)
-	_blk[:] = _b32 / (np.sqrt((_b32 * _b32).sum(axis=1, keepdims=True)) + 1e-9)
-	del _b32
-del _blk
-X.flush()
-N, D = X.shape
-print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memmap, {X.nbytes/1e9:.1f} GB on disk); rss {_rss():.1f} GiB")
-# The load ran DuckDB under a 6 GB cap and its buffer pool keeps what it cached; the PCA below allocates Z (N x 256
-# f32, 3.6 GB at 3.56M rows) on top of it and the 12 GiB cloud box killed the process right after PCA (2026-09-11).
-# A 1 GB cap evicts the pool now; the fill and pass 2 set their own caps when they need DuckDB again.
-con.execute("SET memory_limit='1GB'"); import gc as _gc; _gc.collect()
-print(f"duckdb buffers released; rss {_rss():.1f} GiB", flush=True)
-if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
-
-# company name per board from boards parquet (resolved), else slug
-B = f"{root.rstrip('/')}/boards/*.parquet"
-comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
-compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size_bucket, company_hq_country, company_is_staffing_agency, company_description FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
-
-# PCA for splitting
-t = time.time()
-rng = np.random.default_rng(0)
-samp = X[rng.choice(N, min(N, 50_000), replace=False)].astype(np.float32)
-mu = samp.mean(0)
-_, _, Vt = np.linalg.svd(samp - mu, full_matrices=False)
-P = Vt[: args.pca].T.astype(np.float32)
-# project in row blocks: (X - mu) would materialize an X-sized temp (~18 GB at 3M jobs)
-Z = np.empty((N, args.pca), dtype=np.float32)
-for _i in range(0, N, 200_000):
-	Z[_i:_i + 200_000] = (X[_i:_i + 200_000] - mu) @ P
-print(f"PCA-{args.pca} in {time.time()-t:.0f}s; rss {_rss():.1f} GiB", flush=True)
-
-def sims_to(idx, cen, chunk=200_000):
-    """X[idx] @ cen without materializing X[idx] for huge nodes."""
-    out = np.empty(len(idx), dtype=np.float32)
-    for i in range(0, len(idx), chunk): out[i:i + chunk] = X[idx[i:i + chunk]] @ cen
-    return out
-
-# recursive bisection
-nodes = []; order = np.empty(N, dtype=np.int64); pos = 0
-def two_means(idx, iters=6, chunk=500_000):
-    # chunked: Z[idx] for the root node is a multi-GB copy, and each iteration made several of them
-    r = np.random.default_rng(len(idx) * 7919)
-    c = Z[r.choice(idx, 2, replace=False)].copy()
-    lab = np.empty(len(idx), dtype=bool)
-    for _ in range(iters):
-        for i in range(0, len(idx), chunk):
-            zi = Z[idx[i:i + chunk]]
-            lab[i:i + chunk] = ((zi - c[1]) ** 2).sum(1) < ((zi - c[0]) ** 2).sum(1)
-        for k, m in ((0, ~lab), (1, lab)):
-            if m.any():
-                sel = idx[m]; acc = np.zeros(Z.shape[1], dtype=np.float64)
-                for i in range(0, len(sel), chunk): acc += Z[sel[i:i + chunk]].sum(0, dtype=np.float64)
-                c[k] = (acc / len(sel)).astype(np.float32)
-    return lab
-def build(idx, parent, depth):
-    global pos
-    cen = np.zeros(D, dtype=np.float64)
-    for i in range(0, len(idx), 200_000): cen += X[idx[i:i + 200_000]].sum(0, dtype=np.float64)
-    cen = (cen / len(idx)).astype(np.float32); cen /= np.linalg.norm(cen) + 1e-9
-    rad = float((1 - sims_to(idx, cen)).max())
-    me = len(nodes); nodes.append({"id": me, "parent": parent, "lo": pos, "hi": None, "radius": round(rad, 4), "depth": depth, "children": [], "_cen": cen})
-    split = None
-    if len(idx) > args.leaf_max and rad > args.leaf_radius and depth < 40:
-        lab = two_means(idx); a, b = idx[~lab], idx[lab]
-        if len(a) and len(b): split = (a, b)
-    if split is None:
-        order[pos:pos + len(idx)] = idx; pos += len(idx)
+# --- checkpoint between the fill and pass 2 (tmp/<date>.tree/ in the bucket) ---------------------------------------
+# Pass 2 (the staging write) is where the 12 GiB cloud box fails, and every retry replayed the vector load, PCA, the
+# bisection and the fill (~90 min) to get back there (2026-09-12). What pass 2 needs is small: the row order, the
+# nodes, the two key arrays, the board of each builder row, plus manifest.json and centroids.bin. It is saved right
+# after the manifest is written; a complete checkpoint for the same export (meta.json is uploaded last; the jobs files
+# are signed) is picked up on its own at the next start of the stage and the build resumes at pass 2.
+_date = export_dir.rstrip("/").rsplit("/", 1)[-1]
+_ck_key = f"tmp/{_date}.tree/"; _ck = os.path.join(work, "tree.ckpt"); os.makedirs(_ck, exist_ok=True)
+_CK_FILES = ["order.npy", "board_of.npy", "H.arrow", "HF.arrow", "manifest.json", "centroids.bin", "meta.json"]  # meta last: its presence means complete
+def _export_sig():
+    """The export's jobs files (name, size): a checkpoint built from a different parquet stage is not resumed."""
+    pfx = export_dir.split("/", 3)[3].rstrip("/") + "/jobs/"
+    return hashlib.sha256(json.dumps(sorted((k, sz) for k, sz, _ in r2.list(pfx))).encode()).hexdigest()
+RESUMED = False
+_CKPT = r2 is not None and is_s3 and os.environ.get("TREE_CHECKPOINT", "1") == "1"
+_meta = None
+if _CKPT and r2.head(_ck_key + "meta.json"):
+    r2.get_file(_ck_key + "meta.json", os.path.join(_ck, "meta.json")); _meta = json.load(open(os.path.join(_ck, "meta.json")))
+    if _meta.get("export_sig") != _export_sig(): print(f"checkpoint at {_ck_key} is from a different export; rebuilding", flush=True); _meta = None
+if _meta is not None:
+    import pyarrow as pa
+    for f in _CK_FILES:
+        if f != "meta.json" and r2.head(_ck_key + f): r2.get_file(_ck_key + f, os.path.join(_ck, f))
+    N, M, NT, N_FP, N_AGG, D, tag = _meta["N"], _meta["M"], _meta["NT"], _meta["N_FP"], _meta["N_AGG"], _meta["D"], _meta["tag"]
+    nodes = _meta["nodes"]; boards = [tuple(b) for b in _meta["boards"]]; leaves = [n for n in nodes if not n["children"]]
+    order = np.load(os.path.join(_ck, "order.npy")); board_of = np.load(os.path.join(_ck, "board_of.npy"))
+    H = pa.ipc.open_file(os.path.join(_ck, "H.arrow")).read_all().column("h").combine_chunks()
+    HF = pa.ipc.open_file(os.path.join(_ck, "HF.arrow")).read_all().column("h").combine_chunks() if M else None
+    import shutil as _sh
+    for f in ("manifest.json", "centroids.bin"): _sh.copy(os.path.join(_ck, f), os.path.join(out, f))
+    B = f"{root.rstrip('/')}/boards/*.parquet"
+    comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+    compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size, company_hq, company_staffing, company_desc FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+    def company(r):
+        a, s = boards[board_of[r]]
+        return comp.get((a, s), s)
+    print(f"resumed at pass 2 from {_ck_key}: {NT:,} rows, {len(nodes)} nodes, {len(leaves)} leaves; rss {_rss():.1f} GiB", flush=True)
+    RESUMED = True
+if not RESUMED:
+    N = con.execute(f"SELECT count(*) {WHERE_}").fetchone()[0]
+    D = 1536
+    _xpath = os.path.join(work, f"{TMP}.vectors.f16.npy")
+    if os.path.exists(_xpath): os.remove(_xpath)
+    # Deterministic row order without a second copy of the matrix: pass A reads only the keys and sorts them; pass B
+    # joins each batch to its sorted position in DuckDB and writes every vector straight to that slot of ONE
+    # file-backed float16 array. (The old load + key-sorted copy needed 2x the matrix on disk; 20 GB is all a cloud
+    # container has.) Same export in, same tree out: the order is the sorted key order, whatever the scan order was.
+    import pyarrow as pa, pyarrow.compute as pc
+    t2 = time.time()
+    # TREE_SAMPLE_ROWS: build the tree on a uniform sample of first-party rows (the cloud instance cannot hold every
+    # vector); every other embedded row, first-party or job board, is placed into the tree afterwards (see "filler").
+    SAMPLE = int(os.environ.get("TREE_SAMPLE_ROWS", "0"))
+    N_FP = N
+    if SAMPLE and SAMPLE < N:
+        Hs = con.execute(f"SELECT h FROM (SELECT {HKEY} {WHERE_}) USING SAMPLE reservoir({SAMPLE} ROWS) REPEATABLE (42) ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
+        N = len(Hs); print(f"tree built on a sample of {N:,} of {N_FP:,} first-party rows (TREE_SAMPLE_ROWS)", flush=True)
     else:
-        nodes[me]["children"] = [build(split[0], me, depth + 1), build(split[1], me, depth + 1)]
-    nodes[me]["hi"] = pos
-    return me
-t = time.time(); build(np.arange(N), None, 0)
-leaves = [n for n in nodes if not n["children"]]
-print(f"tree: {len(nodes)} nodes, {len(leaves)} leaves in {time.time()-t:.0f}s; leaf sizes median {int(np.median([n['hi']-n['lo'] for n in leaves]))}, max {max(n['hi']-n['lo'] for n in leaves)}")
-
-# labels: top title words + medoid + exemplars
-STOP = set("and or of the for a in to with at on & senior sr jr ii iii i lead staff associate assistant manager specialist".split())
-def words(idx, k=4):
-    c = collections.Counter()
-    if len(idx) > 20000: idx = np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
-    for r in idx:
-        for w in re.findall(r"[a-z][a-z+#]+", titles[r].lower()):
-            if w not in STOP and len(w) > 2: c[w] += 1
-    return [w for w, _ in c.most_common(k)]
-def company(r):
-    a, s = boards[board_of[r]]
-    return comp.get((a, s)) or hints[r] or s
-def norm_title(t):
-    return re.sub(r"[^a-z]+", " ", t.lower()).strip()
-
-def sub_medoids(idx, k, rng_seed):
-    """k-means (in PCA space) inside a group, on a sample for big groups; returns medoid row per
-    sub-cluster, largest first."""
-    r = np.random.default_rng(rng_seed)
-    samp = idx if len(idx) <= 5000 else r.choice(idx, 5000, replace=False)
-    Zi = Z[samp]
-    c = Zi[r.choice(len(samp), k, replace=False)].copy()
-    for _ in range(8):
-        d = ((Zi[:, None, :] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
-        for j in range(k):
-            m = lab == j
-            if m.any(): c[j] = Zi[m].mean(0)
-    out = []
-    for j in np.argsort(-np.bincount(lab, minlength=k)):
-        m = np.where(lab == j)[0]
-        if len(m) == 0: continue
-        sub = samp[m]; cen = X[sub].mean(0, dtype=np.float32); cen /= np.linalg.norm(cen) + 1e-9
-        out.append((int(len(m)), sub[int(np.argmax(X[sub] @ cen))]))
-    return out
-
-def exemplars_for(idx, cen, k=6):
-    """Medoid of the group, then the medoids of its sub-clusters (typical job of each region inside the
-    group), largest region first, skipping repeated titles (location-replicated postings)."""
-    med = idx[int(np.argmax(sims_to(idx, cen)))]
-    kk = max(2, min(8, len(idx) // 25))
-    cand = [r for _, r in sub_medoids(idx, kk, len(idx))] if len(idx) >= 10 else list(idx)
-    seen = {norm_title(titles[med])}; ex = [med]
-    for r in cand:
-        t = norm_title(titles[r])
-        if t in seen: continue
-        seen.add(t); ex.append(r)
-        if len(ex) >= k: break
-    return ex
-
-for n in nodes:
-    idx = order[n["lo"]:n["hi"]]
-    ex_rows = exemplars_for(idx, n["_cen"])
-    n["size"] = int(len(idx)); n["label"] = " · ".join(words(idx))
-    n["exemplars"] = [{"title": titles[r][:80], "company": company(r)[:40], "location": locs[r][:40]} for r in ex_rows]
-    n["medoid"] = titles[ex_rows[0]][:80]
-    samp = idx if len(idx) <= 20000 else np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
-    n["distinct_titles"] = int(len({norm_title(titles[r]) for r in samp}) * (len(idx) / len(samp)))
-
-# ---- filler: job-board postings (the aggregator tier) are placed into the first-party tree, not used to build it.
-# Each batch descends from the root to a leaf by centroid cosine (the same walk the client does), so the tree's
-# shape, labels, and exemplars stay first-party while the groups carry both tiers. Vectors go to a second memmap.
-M = 0; fill_leaf = None; HF = None
-FILL_SRC = f"SELECT {HKEY}, embedding {WHERE_ROWS}"
-M = con.execute(f"SELECT count(*) FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").fetchone()[0]
-if M:
-    t = time.time()
-    fill_leaf = np.empty(M, dtype=np.int32); HF = []
-    kids = {n["id"]: n["children"] for n in nodes}
-    CEN = np.stack([n["_cen"] for n in nodes]).astype(np.float32)  # (nodes x D) unit centroids
-    def descend(V):
-        """Leaf id per row of V (float32, unit rows): start at the root, take the child with the higher cosine."""
-        node = np.zeros(len(V), dtype=np.int32); active = np.arange(len(V))
-        while len(active):
-            nxt = []
-            for nid in np.unique(node[active]):
-                ch = kids[nid]
-                rows = active[node[active] == nid]
-                if not ch: continue
-                sims = V[rows] @ CEN[ch].T           # (rows x 2)
-                node[rows] = np.asarray(ch, dtype=np.int32)[sims.argmax(1)]
-                nxt.append(rows)
-            active = np.concatenate(nxt) if nxt else np.empty(0, dtype=np.int64)
-        return node
-    pos_ = 0
-    con.execute(f"SET memory_limit='{os.environ.get('TREE_FILL_MEMORY', '3GB')}'")  # a streaming scan; the box also holds Z, the centroids and the memmap (12 GiB in the cloud)
-    reader = con.execute(f"SELECT j.h, j.embedding FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").to_arrow_reader(50_000)
+        Hs = con.execute(f"SELECT {HKEY} {WHERE_} ORDER BY 1").fetch_arrow_table().column("h").combine_chunks()
+        if len(Hs) != N: sys.exit(f"keys {len(Hs)} != rows {N}")
+    con.register("keypos", pa.table({"h": Hs, "pos": pa.array(np.arange(N, dtype=np.int64))}))
+    H = Hs  # keys in row order (sorted)
+    X = np.lib.format.open_memmap(_xpath, mode="w+", dtype=np.float16, shape=(N, D))  # storage only; consumers compute f32/f64 per block
+    titles = [None] * N; locs = [None] * N; hints = [None] * N
+    board_ids = {}; board_of = np.empty(N, dtype=np.int32)
+    seen_n = 0
+    reader = con.execute(f"SELECT k.pos, j.* EXCLUDE (h) FROM ({q_load}) j JOIN keypos k USING (h)").to_arrow_reader(50_000)
     while True:
         try: b = reader.read_next_batch()
         except StopIteration: break
-        n = len(b); vals = b.column("embedding").values.to_numpy(zero_copy_only=False).reshape(n, -1)[:, :D].astype(np.float32)
-        np.nan_to_num(vals, copy=False); vals /= (np.sqrt((vals * vals).sum(axis=1, keepdims=True)) + 1e-9)
-        fill_leaf[pos_:pos_ + n] = descend(vals)  # the vector is not kept: pass 2 reads it back from the parquet rows
-        HF.append(pa.array(b.column("h").to_pylist(), type=pa.string())); pos_ += n
-        print(f"\r  placed {pos_:,}/{M:,} rows into the tree", end="", file=sys.stderr, flush=True)
-    print(file=sys.stderr); del reader
-    assert pos_ == M, f"placed {pos_} filler rows, expected {M}"
-    HF = pa.chunked_array(HF).combine_chunks()
-    # renumber: every leaf keeps its builder rows first, then its filler rows; internal nodes span their leaves
-    fill_order = np.argsort(fill_leaf, kind="stable"); fill_sorted = fill_leaf[fill_order]
-    fill_lo = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="left"); fill_hi = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="right")
-    new_order = []; cursor = 0; leaf_new = {}
-    for n in nodes:
-        n["fp"] = n["hi"] - n["lo"]
-    def renumber(n):
-        global cursor
-        if n["children"]:
-            lo = cursor
-            for c in n["children"]: renumber(nodes[c])
-            n["lo"], n["hi"] = lo, cursor
-        else:
-            b_idx = order[n["lo"]:n["hi"]]; f_idx = fill_order[fill_lo[n["id"]]:fill_hi[n["id"]]] + N
-            n["lo"] = cursor; new_order.append(b_idx); new_order.append(f_idx); cursor += len(b_idx) + len(f_idx); n["hi"] = cursor
-    renumber(nodes[0])
-    order = np.concatenate(new_order); assert len(order) == N + M
-    for n in nodes: n["size"] = n["hi"] - n["lo"]
-    print(f"placed {M:,} rows into {len(leaves)} groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
-# Split on overflow, so every group file stays fetchable. A leaf the radius rule would not split (a tight cluster of
-# near-identical postings, 11,627 builders in the 2026-09-10 build) plus its filler can reach 200 MB. Such a leaf becomes
-# chunks of its own DFS range: children that share the parent's centroid and label, ids appended to the tree. A query
-# routed to that neighbourhood ranks the chunks together (same centroid), only across files of bounded size.
-MAX_GROUP = int(os.environ.get("MAX_GROUP_ROWS", "2500"))
-_big = [n for n in nodes if not n["children"] and n["hi"] - n["lo"] > MAX_GROUP]
-for n in _big:
-    k = -(-(n["hi"] - n["lo"]) // MAX_GROUP); bounds = np.linspace(n["lo"], n["hi"], k + 1).astype(int)
-    fp_end = n["lo"] + n.get("fp", n["hi"] - n["lo"])  # builder rows come first in a leaf's range, then its filler
-    for i in range(k):
-        c = {kk: vv for kk, vv in n.items() if kk != "children"}
-        c.update(id=len(nodes), parent=n["id"], lo=int(bounds[i]), hi=int(bounds[i + 1]), children=[], depth=n["depth"] + 1)
-        c["size"] = c["hi"] - c["lo"]; c["fp"] = max(0, min(fp_end, c["hi"]) - c["lo"])
-        if n.get("label"): c["label"] = f"{n['label']} · {i + 1}/{k}"
-        nodes.append(c); n["children"].append(c["id"])
-leaves = [n for n in nodes if not n["children"]]
-if _big: print(f"split {len(_big)} oversized groups (> {MAX_GROUP:,} rows) into {sum(len(n['children']) for n in _big)} chunks sharing their parent's centroid; largest group now {max(n['hi'] - n['lo'] for n in leaves):,}", flush=True)
-NT = N + M
-con.unregister("keypos")
-N_AGG = con.execute(f"SELECT count(*) {WHERE_ROWS} AND coalesce(tier, 'first_party') = 'aggregator'").fetchone()[0] if _has_tier else 0
+        pos = b.column("pos").to_numpy(); emb = b.column("embedding")
+        vals = emb.values.to_numpy(zero_copy_only=False); n = len(b)
+        X[pos] = vals.reshape(n, -1)[:, :D]              # scattered writes into the single memmap
+        if (seen_n // 50_000) % 8 == 7: X.flush()
+        for k, (a_, s_) in enumerate(zip(b.column("ats").to_pylist(), b.column("slug").to_pylist())):
+            board_of[pos[k]] = board_ids.setdefault((a_, s_), len(board_ids))
+        for k, (ti, lo, hi) in enumerate(zip(b.column("title").to_pylist(), b.column("location").to_pylist(), b.column("company_hint").to_pylist())):
+            titles[pos[k]] = ti; locs[pos[k]] = lo; hints[pos[k]] = hi
+        seen_n += n
+        print(f"\r  loaded {seen_n:,}/{N:,}", end="", file=sys.stderr, flush=True)
+    print(file=sys.stderr)
+    del reader  # keypos stays registered: the filler pass anti-joins against it
+    assert seen_n == N, f"loaded {seen_n} rows, expected {N}"
+    if any(t is None for t in titles): sys.exit("the key join lost rows")
+    boards = [None] * len(board_ids)
+    for k, i_ in board_ids.items(): boards[i_] = k
+    del board_ids
+    # Clean + unit-normalize IN ROW BLOCKS (a whole-matrix norm would materialize an X-sized temp).
+    for _i in range(0, X.shape[0], 200_000):
+        _blk = X[_i:_i + 200_000]
+        np.nan_to_num(_blk, copy=False)
+        _b32 = _blk.astype(np.float32)
+        _blk[:] = _b32 / (np.sqrt((_b32 * _b32).sum(axis=1, keepdims=True)) + 1e-9)
+        del _b32
+    del _blk
+    X.flush()
+    N, D = X.shape
+    print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memmap, {X.nbytes/1e9:.1f} GB on disk); rss {_rss():.1f} GiB")
+    # The load ran DuckDB under a 6 GB cap and its buffer pool keeps what it cached; the PCA below allocates Z (N x 256
+    # f32, 3.6 GB at 3.56M rows) on top of it and the 12 GiB cloud box killed the process right after PCA (2026-09-11).
+    # A 1 GB cap evicts the pool now; the fill and pass 2 set their own caps when they need DuckDB again.
+    con.execute("SET memory_limit='1GB'"); import gc as _gc; _gc.collect()
+    print(f"duckdb buffers released; rss {_rss():.1f} GiB", flush=True)
+    if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
-# outputs
-C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
-C.tofile(os.path.join(out, "centroids.bin"))
-manifest = {
-    "recipe": tag, "dims": D, "jobs": N_FP, "jobs_aggregator": N_AGG, "jobs_total": NT, "built_on": N, "nodes": len(nodes), "leaves": len(leaves),
-    "groups": args.groups_prefix,   # where this build's group files live under /data/ (per-build prefix; readers must use it)
-    "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
-    "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
-}
-with open(os.path.join(out, "manifest.json"), "w") as f: json.dump(manifest, f)
+    # company name per board from boards parquet (resolved), else slug
+    B = f"{root.rstrip('/')}/boards/*.parquet"
+    comp = dict(((a, s), n) for a, s, n in con.execute(f"SELECT ats, slug, company_name FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+    compfull = dict(((a, s), {"name": n, "website": w, "industry": i, "size": z, "hq": h, "staffing": st, "desc": d}) for a, s, n, w, i, z, h, st, d in con.execute(f"SELECT ats, slug, company_name, company_website, company_industry, company_size_bucket, company_hq_country, company_is_staffing_agency, company_description FROM read_parquet('{B}') WHERE company_name IS NOT NULL").fetchall())
+
+    # PCA for splitting
+    t = time.time()
+    rng = np.random.default_rng(0)
+    samp = X[rng.choice(N, min(N, 50_000), replace=False)].astype(np.float32)
+    mu = samp.mean(0)
+    _, _, Vt = np.linalg.svd(samp - mu, full_matrices=False)
+    P = Vt[: args.pca].T.astype(np.float32)
+    # project in row blocks: (X - mu) would materialize an X-sized temp (~18 GB at 3M jobs)
+    Z = np.empty((N, args.pca), dtype=np.float32)
+    for _i in range(0, N, 200_000):
+        Z[_i:_i + 200_000] = (X[_i:_i + 200_000] - mu) @ P
+    print(f"PCA-{args.pca} in {time.time()-t:.0f}s; rss {_rss():.1f} GiB", flush=True)
+
+    def sims_to(idx, cen, chunk=200_000):
+        """X[idx] @ cen without materializing X[idx] for huge nodes."""
+        out = np.empty(len(idx), dtype=np.float32)
+        for i in range(0, len(idx), chunk): out[i:i + chunk] = X[idx[i:i + chunk]] @ cen
+        return out
+
+    # recursive bisection
+    nodes = []; order = np.empty(N, dtype=np.int64); pos = 0
+    def two_means(idx, iters=6, chunk=500_000):
+        # chunked: Z[idx] for the root node is a multi-GB copy, and each iteration made several of them
+        r = np.random.default_rng(len(idx) * 7919)
+        c = Z[r.choice(idx, 2, replace=False)].copy()
+        lab = np.empty(len(idx), dtype=bool)
+        for _ in range(iters):
+            for i in range(0, len(idx), chunk):
+                zi = Z[idx[i:i + chunk]]
+                lab[i:i + chunk] = ((zi - c[1]) ** 2).sum(1) < ((zi - c[0]) ** 2).sum(1)
+            for k, m in ((0, ~lab), (1, lab)):
+                if m.any():
+                    sel = idx[m]; acc = np.zeros(Z.shape[1], dtype=np.float64)
+                    for i in range(0, len(sel), chunk): acc += Z[sel[i:i + chunk]].sum(0, dtype=np.float64)
+                    c[k] = (acc / len(sel)).astype(np.float32)
+        return lab
+    def build(idx, parent, depth):
+        global pos
+        cen = np.zeros(D, dtype=np.float64)
+        for i in range(0, len(idx), 200_000): cen += X[idx[i:i + 200_000]].sum(0, dtype=np.float64)
+        cen = (cen / len(idx)).astype(np.float32); cen /= np.linalg.norm(cen) + 1e-9
+        rad = float((1 - sims_to(idx, cen)).max())
+        me = len(nodes); nodes.append({"id": me, "parent": parent, "lo": pos, "hi": None, "radius": round(rad, 4), "depth": depth, "children": [], "_cen": cen})
+        split = None
+        if len(idx) > args.leaf_max and rad > args.leaf_radius and depth < 40:
+            lab = two_means(idx); a, b = idx[~lab], idx[lab]
+            if len(a) and len(b): split = (a, b)
+        if split is None:
+            order[pos:pos + len(idx)] = idx; pos += len(idx)
+        else:
+            nodes[me]["children"] = [build(split[0], me, depth + 1), build(split[1], me, depth + 1)]
+        nodes[me]["hi"] = pos
+        return me
+    t = time.time(); build(np.arange(N), None, 0)
+    leaves = [n for n in nodes if not n["children"]]
+    print(f"tree: {len(nodes)} nodes, {len(leaves)} leaves in {time.time()-t:.0f}s; leaf sizes median {int(np.median([n['hi']-n['lo'] for n in leaves]))}, max {max(n['hi']-n['lo'] for n in leaves)}")
+
+    # labels: top title words + medoid + exemplars
+    STOP = set("and or of the for a in to with at on & senior sr jr ii iii i lead staff associate assistant manager specialist".split())
+    def words(idx, k=4):
+        c = collections.Counter()
+        if len(idx) > 20000: idx = np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
+        for r in idx:
+            for w in re.findall(r"[a-z][a-z+#]+", titles[r].lower()):
+                if w not in STOP and len(w) > 2: c[w] += 1
+        return [w for w, _ in c.most_common(k)]
+    def company(r):
+        a, s = boards[board_of[r]]
+        return comp.get((a, s)) or hints[r] or s
+    def norm_title(t):
+        return re.sub(r"[^a-z]+", " ", t.lower()).strip()
+
+    def sub_medoids(idx, k, rng_seed):
+        """k-means (in PCA space) inside a group, on a sample for big groups; returns medoid row per
+        sub-cluster, largest first."""
+        r = np.random.default_rng(rng_seed)
+        samp = idx if len(idx) <= 5000 else r.choice(idx, 5000, replace=False)
+        Zi = Z[samp]
+        c = Zi[r.choice(len(samp), k, replace=False)].copy()
+        for _ in range(8):
+            d = ((Zi[:, None, :] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
+            for j in range(k):
+                m = lab == j
+                if m.any(): c[j] = Zi[m].mean(0)
+        out = []
+        for j in np.argsort(-np.bincount(lab, minlength=k)):
+            m = np.where(lab == j)[0]
+            if len(m) == 0: continue
+            sub = samp[m]; cen = X[sub].mean(0, dtype=np.float32); cen /= np.linalg.norm(cen) + 1e-9
+            out.append((int(len(m)), sub[int(np.argmax(X[sub] @ cen))]))
+        return out
+
+    def exemplars_for(idx, cen, k=6):
+        """Medoid of the group, then the medoids of its sub-clusters (typical job of each region inside the
+        group), largest region first, skipping repeated titles (location-replicated postings)."""
+        med = idx[int(np.argmax(sims_to(idx, cen)))]
+        kk = max(2, min(8, len(idx) // 25))
+        cand = [r for _, r in sub_medoids(idx, kk, len(idx))] if len(idx) >= 10 else list(idx)
+        seen = {norm_title(titles[med])}; ex = [med]
+        for r in cand:
+            t = norm_title(titles[r])
+            if t in seen: continue
+            seen.add(t); ex.append(r)
+            if len(ex) >= k: break
+        return ex
+
+    for n in nodes:
+        idx = order[n["lo"]:n["hi"]]
+        ex_rows = exemplars_for(idx, n["_cen"])
+        n["size"] = int(len(idx)); n["label"] = " · ".join(words(idx))
+        n["exemplars"] = [{"title": titles[r][:80], "company": company(r)[:40], "location": locs[r][:40]} for r in ex_rows]
+        n["medoid"] = titles[ex_rows[0]][:80]
+        samp = idx if len(idx) <= 20000 else np.random.default_rng(len(idx)).choice(idx, 20000, replace=False)
+        n["distinct_titles"] = int(len({norm_title(titles[r]) for r in samp}) * (len(idx) / len(samp)))
+
+    # ---- filler: job-board postings (the aggregator tier) are placed into the first-party tree, not used to build it.
+    # Each batch descends from the root to a leaf by centroid cosine (the same walk the client does), so the tree's
+    # shape, labels, and exemplars stay first-party while the groups carry both tiers. Vectors go to a second memmap.
+    M = 0; fill_leaf = None; HF = None
+    FILL_SRC = f"SELECT {HKEY}, embedding {WHERE_ROWS}"
+    M = con.execute(f"SELECT count(*) FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").fetchone()[0]
+    if M:
+        t = time.time()
+        fill_leaf = np.empty(M, dtype=np.int32); HF = []
+        kids = {n["id"]: n["children"] for n in nodes}
+        CEN = np.stack([n["_cen"] for n in nodes]).astype(np.float32)  # (nodes x D) unit centroids
+        def descend(V):
+            """Leaf id per row of V (float32, unit rows): start at the root, take the child with the higher cosine."""
+            node = np.zeros(len(V), dtype=np.int32); active = np.arange(len(V))
+            while len(active):
+                nxt = []
+                for nid in np.unique(node[active]):
+                    ch = kids[nid]
+                    rows = active[node[active] == nid]
+                    if not ch: continue
+                    sims = V[rows] @ CEN[ch].T           # (rows x 2)
+                    node[rows] = np.asarray(ch, dtype=np.int32)[sims.argmax(1)]
+                    nxt.append(rows)
+                active = np.concatenate(nxt) if nxt else np.empty(0, dtype=np.int64)
+            return node
+        pos_ = 0
+        con.execute(f"SET memory_limit='{os.environ.get('TREE_FILL_MEMORY', '3GB')}'")  # a streaming scan; the box also holds Z, the centroids and the memmap (12 GiB in the cloud)
+        reader = con.execute(f"SELECT j.h, j.embedding FROM ({FILL_SRC}) j ANTI JOIN keypos k USING (h)").to_arrow_reader(50_000)
+        while True:
+            try: b = reader.read_next_batch()
+            except StopIteration: break
+            n = len(b); vals = b.column("embedding").values.to_numpy(zero_copy_only=False).reshape(n, -1)[:, :D].astype(np.float32)
+            np.nan_to_num(vals, copy=False); vals /= (np.sqrt((vals * vals).sum(axis=1, keepdims=True)) + 1e-9)
+            fill_leaf[pos_:pos_ + n] = descend(vals)  # the vector is not kept: pass 2 reads it back from the parquet rows
+            HF.append(pa.array(b.column("h").to_pylist(), type=pa.string())); pos_ += n
+            print(f"\r  placed {pos_:,}/{M:,} rows into the tree", end="", file=sys.stderr, flush=True)
+        print(file=sys.stderr); del reader
+        assert pos_ == M, f"placed {pos_} filler rows, expected {M}"
+        HF = pa.chunked_array(HF).combine_chunks()
+        # renumber: every leaf keeps its builder rows first, then its filler rows; internal nodes span their leaves
+        fill_order = np.argsort(fill_leaf, kind="stable"); fill_sorted = fill_leaf[fill_order]
+        fill_lo = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="left"); fill_hi = np.searchsorted(fill_sorted, [n["id"] for n in nodes], side="right")
+        new_order = []; cursor = 0; leaf_new = {}
+        for n in nodes:
+            n["fp"] = n["hi"] - n["lo"]
+        def renumber(n):
+            global cursor
+            if n["children"]:
+                lo = cursor
+                for c in n["children"]: renumber(nodes[c])
+                n["lo"], n["hi"] = lo, cursor
+            else:
+                b_idx = order[n["lo"]:n["hi"]]; f_idx = fill_order[fill_lo[n["id"]]:fill_hi[n["id"]]] + N
+                n["lo"] = cursor; new_order.append(b_idx); new_order.append(f_idx); cursor += len(b_idx) + len(f_idx); n["hi"] = cursor
+        renumber(nodes[0])
+        order = np.concatenate(new_order); assert len(order) == N + M
+        for n in nodes: n["size"] = n["hi"] - n["lo"]
+        print(f"placed {M:,} rows into {len(leaves)} groups in {time.time()-t:.0f}s; largest group now {max(n['hi']-n['lo'] for n in leaves):,}")
+    # Split on overflow, so every group file stays fetchable. A leaf the radius rule would not split (a tight cluster of
+    # near-identical postings, 11,627 builders in the 2026-09-10 build) plus its filler can reach 200 MB. Such a leaf becomes
+    # chunks of its own DFS range: children that share the parent's centroid and label, ids appended to the tree. A query
+    # routed to that neighbourhood ranks the chunks together (same centroid), only across files of bounded size.
+    MAX_GROUP = int(os.environ.get("MAX_GROUP_ROWS", "2500"))
+    _big = [n for n in nodes if not n["children"] and n["hi"] - n["lo"] > MAX_GROUP]
+    for n in _big:
+        k = -(-(n["hi"] - n["lo"]) // MAX_GROUP); bounds = np.linspace(n["lo"], n["hi"], k + 1).astype(int)
+        fp_end = n["lo"] + n.get("fp", n["hi"] - n["lo"])  # builder rows come first in a leaf's range, then its filler
+        for i in range(k):
+            c = {kk: vv for kk, vv in n.items() if kk != "children"}
+            c.update(id=len(nodes), parent=n["id"], lo=int(bounds[i]), hi=int(bounds[i + 1]), children=[], depth=n["depth"] + 1)
+            c["size"] = c["hi"] - c["lo"]; c["fp"] = max(0, min(fp_end, c["hi"]) - c["lo"])
+            if n.get("label"): c["label"] = f"{n['label']} · {i + 1}/{k}"
+            nodes.append(c); n["children"].append(c["id"])
+    leaves = [n for n in nodes if not n["children"]]
+    if _big: print(f"split {len(_big)} oversized groups (> {MAX_GROUP:,} rows) into {sum(len(n['children']) for n in _big)} chunks sharing their parent's centroid; largest group now {max(n['hi'] - n['lo'] for n in leaves):,}", flush=True)
+    NT = N + M
+    con.unregister("keypos")
+    N_AGG = con.execute(f"SELECT count(*) {WHERE_ROWS} AND coalesce(tier, 'first_party') = 'aggregator'").fetchone()[0] if _has_tier else 0
+
+    # outputs
+    C = np.stack([n["_cen"] for n in nodes]).astype(np.float16)
+    C.tofile(os.path.join(out, "centroids.bin"))
+    manifest = {
+        "recipe": tag, "dims": D, "jobs": N_FP, "jobs_aggregator": N_AGG, "jobs_total": NT, "built_on": N, "nodes": len(nodes), "leaves": len(leaves),
+        "groups": args.groups_prefix,   # where this build's group files live under /data/ (per-build prefix; readers must use it)
+        "built_at": int(time.time() * 1000), "pca": {"mu": mu.astype(float).round(5).tolist(), "components": None},
+        "tree": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes],
+    }
+    with open(os.path.join(out, "manifest.json"), "w") as f: json.dump(manifest, f)
+    if _CKPT:
+        _t = time.time()
+        json.dump({"N": N, "M": M, "NT": NT, "N_FP": N_FP, "N_AGG": N_AGG, "D": D, "tag": tag, "boards": boards, "export_sig": _export_sig(),
+                   "nodes": [{k: v for k, v in n.items() if not k.startswith("_")} for n in nodes]}, open(os.path.join(_ck, "meta.json"), "w"))
+        np.save(os.path.join(_ck, "order.npy"), order); np.save(os.path.join(_ck, "board_of.npy"), board_of)
+        with pa.ipc.new_file(os.path.join(_ck, "H.arrow"), pa.schema([("h", H.type)])) as w: w.write_table(pa.table({"h": H}))
+        if M:
+            with pa.ipc.new_file(os.path.join(_ck, "HF.arrow"), pa.schema([("h", HF.type)])) as w: w.write_table(pa.table({"h": HF}))
+        import shutil as _sh
+        for f in ("manifest.json", "centroids.bin"): _sh.copy(os.path.join(out, f), os.path.join(_ck, f))
+        for f in _CK_FILES:
+            if os.path.exists(os.path.join(_ck, f)): r2.put_file(_ck_key + f, os.path.join(_ck, f))
+        print(f"checkpoint for pass 2 written to {_ck_key} in {time.time()-_t:.0f}s", flush=True)
 # Pass 2 (group files): the parquet is streamed back in DFS order. `assign` maps each row's key to its DFS
 # position; DuckDB joins, sorts by position (spilling to temp_directory), and hands back record batches. Leaves are
 # contiguous in that order, so a file is written the moment its last row arrives. Vectors come from X (the same
@@ -433,6 +485,8 @@ if _bucket_stage:
     for k, _, _ in r2.list(f"tmp/{TMP}.stage/"): r2.delete(k)
 else: shutil.rmtree(stage, ignore_errors=True)
 if seen_rows != NT or written != len(leaves): sys.exit(f"group pass wrote {written}/{len(leaves)} files over {seen_rows}/{NT} rows")
+if r2 is not None:
+    for k, _, _ in r2.list(_ck_key): r2.delete(k)  # pass 2 is done: the checkpoint has served
 if uploader:
     failed = uploader.join()
     print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
@@ -441,4 +495,4 @@ try: os.remove(_xpath)
 except OSError: pass
 shutil.rmtree(con_tmp, ignore_errors=True)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
-print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({C.nbytes/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")
+print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({os.path.getsize(os.path.join(out,'centroids.bin'))/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")
