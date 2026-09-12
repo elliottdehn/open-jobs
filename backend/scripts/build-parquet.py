@@ -47,7 +47,7 @@ if only:
 if not dedup_only and not files and not snap_dirs and not snap_r2:
     sys.exit("no export/*.ndjson files or snapshots/; run scripts/pull-snapshots.mjs or scripts/export.mjs first")
 for d in ("jobs", "boards"):
-    os.makedirs(os.path.join(root, d), exist_ok=True)
+    os.makedirs(os.path.join(os.path.realpath(root), d), exist_ok=True)  # /app/export is a symlink into /work, which a fresh (worker) container does not have yet
 
 con = duckdb.connect()
 con.execute("SET TimeZone='UTC'")  # date-only posting dates cast to the session zone; the laptop (EDT) and the container (UTC) disagreed by 4 h on 2026-09-10
