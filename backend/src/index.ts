@@ -448,9 +448,6 @@ export default {
 		//   GET  /run                               state, what is running, the journal (starts, exits with codes, errors)
 		if (parts[0] === "run") {
 			const c = env.CONSOLIDATE.getByName("consolidate");
-			if (request.method === "GET") return Response.json(await c.status());
-			// the process posts its output to the object that started it (the chain's, or a worker's)
-			if (parts[1] === "output" && request.method === "POST") { const who = url.searchParams.get("who") || "consolidate"; await env.CONSOLIDATE.getByName(who).output(Number(url.searchParams.get("code") ?? -1), await request.text()); return Response.json({ ok: true }); }
 			// worker containers for a fanned-out stage (stage.py PARQUET_WORKERS): POST {args, env, label} starts one; GET reads it
 			if (parts[1] === "worker" && parts.length === 3) {
 				const w = env.CONSOLIDATE.getByName(`worker-${parts[2]}`);
@@ -460,6 +457,10 @@ export default {
 				if (request.method === "POST" && url.searchParams.get("stop")) { await w.halt(url.searchParams.get("stop") === "kill" ? "SIGKILL" : "SIGTERM"); return Response.json({ stopped: true }); }
 				return new Response("POST {args, env, label} | POST ?stop=term|kill | GET", { status: 400 });
 			}
+			if (request.method === "GET") return Response.json(await c.status());
+			// the process posts its output to the object that started it (the chain's, or a worker's)
+			if (parts[1] === "output" && request.method === "POST") { const who = url.searchParams.get("who") || "consolidate"; await env.CONSOLIDATE.getByName(who).output(Number(url.searchParams.get("code") ?? -1), await request.text()); return Response.json({ ok: true }); }
+
 			const b = (await request.json().catch(() => ({}))) as { date?: string; from?: string; stage?: string; env?: Record<string, string> };
 			const date = b.date ?? new Date().toISOString().slice(0, 10);
 			if (parts[1] === "exec" && request.method === "POST" && Array.isArray((b as { args?: string[] }).args)) return Response.json(await c.run((b as { args: string[] }).args, b.env ?? {}, `exec ${(b as { args: string[] }).args.join(" ").slice(0, 80)}`));
