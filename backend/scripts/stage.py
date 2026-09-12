@@ -166,7 +166,44 @@ elif a.stage == "parquet":
     # file under the old footer (garbage decoded as text, 2026-09-09). Boards retry their write ten minutes later.
     if r2_mode and not a.dry_run:
         lock_call("freeze", {"holder": lock_holder(), "ttlMs": LOCK_TTL_MS}); print("snapshot writes frozen for the read", flush=True)
-    try: run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
+    try:
+        nw = int(os.environ.get("PARQUET_WORKERS", "0") or 0)
+        if r2_mode and nw > 0 and not a.dry_run:
+            # Fan out across worker containers (src/consolidate.ts): dark parts by index modulo, the other sources
+            # spread by snapshot bytes; each worker runs build-parquet with its slice; then a second round runs the
+            # end-of-run dedup, pass B split the same way. This stage holds the lock and the snapshot freeze meanwhile.
+            r2 = r2c(); sizes = {}
+            for k, sz, _ in r2.list("snapshots/"):
+                if k.endswith(".parquet"): x = k.split("/")[1]; sizes[x] = sizes.get(x, 0) + sz
+            others = sorted((x for x in sizes if x != "dark" and x in boards and x not in missing), key=lambda x: -sizes[x])
+            slots = [[] for _ in range(nw)]; load = [0] * nw
+            for x in others: i = load.index(min(load)); slots[i].append(x); load[i] += sizes[x]
+            def fan(round_label, worker_args):
+                import urllib.request
+                hdr = {"authorization": f"Bearer {token}", "content-type": "application/json"}
+                starts = {}
+                for i, wargs in enumerate(worker_args):
+                    body = json.dumps({"args": wargs, "env": {"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2"}, "label": f"{round_label} {i}"}).encode()
+                    r = json.load(urllib.request.urlopen(urllib.request.Request(f"{a.worker}/run/worker/{i}", data=body, headers=hdr), timeout=60))
+                    if not r.get("started"): sys.exit(f"worker {i} did not start: {r}")
+                    starts[i] = time.time() * 1000; print(f"  worker {i}: {' '.join(wargs)[:150]}", flush=True)
+                done = {}
+                while len(done) < len(worker_args):
+                    time.sleep(60)
+                    for i in starts:
+                        if i in done: continue
+                        st = json.load(urllib.request.urlopen(urllib.request.Request(f"{a.worker}/run/worker/{i}", headers=hdr), timeout=60))
+                        stops = [e for e in st.get("journal", []) if e.get("ev") == "stop" and e.get("t", 0) > starts[i]]
+                        if stops:
+                            done[i] = stops[-1].get("exitCode"); tail = ((st.get("lastOutput") or {}).get("text") or "").strip().splitlines()[-3:]
+                            print(f"  worker {i} exited {done[i]} after {(time.time() * 1000 - starts[i]) / 60000:.0f} min: " + " | ".join(t[:100] for t in tail), flush=True)
+                bad = {i: c for i, c in done.items() if c != 0}
+                if bad: sys.exit(f"{round_label}: worker(s) failed: {bad}")
+            base = ["/usr/local/bin/uv", "run", "scripts/build-parquet.py", "--publish"]
+            print(f"parquet fan-out across {nw} workers: dark parts by index, then {sum(len(x) for x in slots)} other sources by bytes", flush=True)
+            fan("parquet", [base + [f"--ats=dark,{','.join(slots[i])}" if slots[i] else "--ats=dark", f"--parts=mod:{nw}:{i}"] for i in range(nw)])
+            fan("dedup", [base + ["--dedup-only", f"--parts=mod:{nw}:{i}"] for i in range(nw)])
+        else: run(cmd, env={"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2" if r2_mode else "local"})
     finally:
         if r2_mode and not a.dry_run:
             try: lock_call("thaw", {"holder": lock_holder()}); print("snapshot writes thawed", flush=True)

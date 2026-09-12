@@ -21,6 +21,14 @@ argv = sys.argv[1:]
 only = set(next((a.split("=", 1)[1] for a in argv if a.startswith("--ats=")), "").split(",")) - {""}
 publish = "--publish" in argv
 dedup_only = "--dedup-only" in argv  # rerun just the end-of-run aggregator dedup over the day's dark part files
+# --parts=0,3,5 or --parts=mod:N:i (this worker takes part indices with pi % N == i): one worker's slice of a source
+# that converts in parts (dark). Other workers run the same command with a different slice; the packs are computed
+# identically from the same snapshot listing, so slices never overlap.
+_parts_arg = next((a.split("=", 1)[1] for a in argv if a.startswith("--parts=")), "")
+def part_selected(pi):
+    if not _parts_arg: return True
+    if _parts_arg.startswith("mod:"): _, n, i = _parts_arg.split(":"); return pi % int(n) == int(i)
+    return pi in {int(x) for x in _parts_arg.split(",") if x}
 from_r2 = os.environ.get("SNAPSHOT_SOURCE", "local") == "r2"
 r2 = R2() if (from_r2 or publish) else None
 files = sorted(glob.glob(os.path.join(root, "*.ndjson")))
@@ -277,6 +285,7 @@ for src in ([] if dedup_only else (snap_dirs or snap_r2)):
         print(f"{ats:16} {total_rows:,} rows -> {len(packs)} parts of <= {PART_ROWS:,}", flush=True)
     else: packs = [None]
     for pi, files in enumerate(packs):
+        if files is not None and not part_selected(pi): continue
         name = ats if files is None else f"{ats}.p{pi}"
         outs = {k: os.path.join(root, k, f"{name}.parquet") for k in ("jobs", "boards")}
         if files is not None and _published_recently(name):
@@ -359,6 +368,8 @@ def dedup_aggregators():
     # pass B: rewrite each part keeping first-party rows and winning aggregator rows
     kept = 0
     for n in names:
+        _m = re.search(r"\.p(\d+)\.parquet$", n)
+        if not part_selected(int(_m.group(1)) if _m else 0): continue
         local = os.path.join(root, "jobs", n)
         if low and not os.path.exists(local): os.makedirs(os.path.dirname(local), exist_ok=True); r2.get_file(f"exports/{date_name}/jobs/{n}", local)
         tmpf = local + ".dedup"

@@ -41,9 +41,14 @@ export class Consolidate extends Container<Env> {
 		// The process runs in the background of the wrapper; its output tail is posted every two minutes while it runs
 		// (code -1) and once more with the real exit code when it ends, so a three-hour chain is watchable in GET /run.
 		const wrap = String.raw`post() { /usr/local/bin/python3 - "$1" <<'PY'
-import sys, os, urllib.request
+import sys, os, urllib.request, shutil, time
 code = sys.argv[1]; data = open('/tmp/run.out', 'rb').read()[-200000:]
-req = urllib.request.Request(os.environ['WORKER_URL'] + '/run/output?code=' + code, data=data, headers={'authorization': 'Bearer ' + os.environ['ADMIN_TOKEN'], 'content-type': 'text/plain'})
+try:
+    la = os.getloadavg(); mi = {l.split(':')[0]: int(l.split()[1]) for l in open('/proc/meminfo') if l.startswith(('MemTotal', 'MemAvailable'))}
+    du = shutil.disk_usage(os.environ.get('WORK_ROOT', '/work'))
+    data += ('\n[host %s] load %.1f %.1f %.1f (%d cpus) | mem %.1f of %.1f GiB free | disk %s: %.1f GB free\n' % (time.strftime('%H:%M:%S', time.gmtime()), la[0], la[1], la[2], os.cpu_count() or 0, mi.get('MemAvailable', 0) / 2**20, mi.get('MemTotal', 0) / 2**20, os.environ.get('WORK_ROOT', '/work'), du.free / 1e9)).encode()
+except Exception as e: data += ('\n[host stats unavailable: %s]\n' % e).encode()
+req = urllib.request.Request(os.environ['WORKER_URL'] + '/run/output?code=' + code + '&who=' + os.environ.get('RUN_OBJECT', 'consolidate'), data=data, headers={'authorization': 'Bearer ' + os.environ['ADMIN_TOKEN'], 'content-type': 'text/plain'})
 try: urllib.request.urlopen(req, timeout=30)
 except Exception as e: print('output post failed', e)
 PY
@@ -51,7 +56,7 @@ PY
 : > /tmp/run.out; ( "$@" 2>&1 | tee -a /tmp/run.out; echo $PIPESTATUS > /tmp/run.code ) &
 while kill -0 $! 2>/dev/null; do sleep 120; kill -0 $! 2>/dev/null && post -1; done
 code=$(cat /tmp/run.code 2>/dev/null || echo 1); post "$code"; exit "$code"`;
-		await this.start({ entrypoint: ["/bin/bash", "-c", wrap, "run", ...args], envVars: { ...this.baseEnv(), ...extra }, enableInternet: true });
+		await this.start({ entrypoint: ["/bin/bash", "-c", wrap, "run", ...args], envVars: { ...this.baseEnv(), RUN_OBJECT: this.ctx.id.name ?? "consolidate", ...extra }, enableInternet: true });
 		return { started: true };
 	}
 	/** The process's captured output (last 200 KB) and exit code, posted by the wrapper above. */
@@ -78,7 +83,7 @@ code=$(cat /tmp/run.code 2>/dev/null || echo 1); post "$code"; exit "$code"`;
 		const lo = (await this.ctx.storage.get<{ t: number; code: number; text: string }>("lastOutput")) ?? null;
 		return { state: await this.getState(), current: (await this.ctx.storage.get<Current>("current")) ?? null, journal: ((await this.ctx.storage.get<Journal[]>("journal")) ?? []).slice(-50), lastOutput: lo && { ...lo, text: lo.text.slice(-20000) } };
 	}
-	async halt(): Promise<void> { await this.stop("SIGTERM"); }
+	async halt(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): Promise<void> { await this.stop(signal); }
 }
 
 // The documented form: assigned through the base class's static setter (a static field on the subclass shadows the accessor).

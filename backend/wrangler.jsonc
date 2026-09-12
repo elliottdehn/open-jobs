@@ -23,7 +23,7 @@
 	// The consolidation container (CONTAINER.md): the same image as the laptop (backend/Dockerfile, built for
 	// linux/amd64 and pushed by `wrangler deploy`), the largest self-serve instance, one at a time.
 	"containers": [
-		{ "class_name": "Consolidate", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard-4", "max_instances": 1 }
+		{ "class_name": "Consolidate", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard-4", "max_instances": 6 }  // 1 chain + up to 5 fan-out workers (stage.py PARQUET_WORKERS)
 	],
 	"durable_objects": {
 		"bindings": [

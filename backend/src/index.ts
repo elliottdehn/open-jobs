@@ -449,13 +449,23 @@ export default {
 		if (parts[0] === "run") {
 			const c = env.CONSOLIDATE.getByName("consolidate");
 			if (request.method === "GET") return Response.json(await c.status());
-			if (parts[1] === "output" && request.method === "POST") { await c.output(Number(url.searchParams.get("code") ?? -1), await request.text()); return Response.json({ ok: true }); }
+			// the process posts its output to the object that started it (the chain's, or a worker's)
+			if (parts[1] === "output" && request.method === "POST") { const who = url.searchParams.get("who") || "consolidate"; await env.CONSOLIDATE.getByName(who).output(Number(url.searchParams.get("code") ?? -1), await request.text()); return Response.json({ ok: true }); }
+			// worker containers for a fanned-out stage (stage.py PARQUET_WORKERS): POST {args, env, label} starts one; GET reads it
+			if (parts[1] === "worker" && parts.length === 3) {
+				const w = env.CONSOLIDATE.getByName(`worker-${parts[2]}`);
+				if (request.method === "GET") return Response.json(await w.status());
+				const wb = (await request.json().catch(() => ({}))) as { args?: string[]; env?: Record<string, string>; label?: string };
+				if (request.method === "POST" && Array.isArray(wb.args)) return Response.json(await w.run(wb.args, wb.env ?? {}, wb.label ?? `worker ${parts[2]}`));
+				if (request.method === "POST" && url.searchParams.get("stop")) { await w.halt(url.searchParams.get("stop") === "kill" ? "SIGKILL" : "SIGTERM"); return Response.json({ stopped: true }); }
+				return new Response("POST {args, env, label} | POST ?stop=term|kill | GET", { status: 400 });
+			}
 			const b = (await request.json().catch(() => ({}))) as { date?: string; from?: string; stage?: string; env?: Record<string, string> };
 			const date = b.date ?? new Date().toISOString().slice(0, 10);
 			if (parts[1] === "exec" && request.method === "POST" && Array.isArray((b as { args?: string[] }).args)) return Response.json(await c.run((b as { args: string[] }).args, b.env ?? {}, `exec ${(b as { args: string[] }).args.join(" ").slice(0, 80)}`));
 			if (parts[1] === "chain" && request.method === "POST") return Response.json(await c.run(["/bin/bash", "/app/scripts/container-chain.sh", b.from ?? "all", date], b.env ?? {}, `chain ${date} from ${b.from ?? "all"}`));
 			if (parts[1] === "stage" && request.method === "POST" && b.stage) return Response.json(await c.run(["/usr/local/bin/uv", "run", "--script", "/app/scripts/stage.py", b.stage, "--date", date, "--source", "r2"], b.env ?? {}, `${b.stage} ${date}`));
-			if (parts[1] === "stop" && request.method === "POST") { await c.halt(); return Response.json({ stopped: true }); }
+			if (parts[1] === "stop" && request.method === "POST") { await c.halt(url.searchParams.get("signal") === "kill" ? "SIGKILL" : "SIGTERM"); return Response.json({ stopped: true }); }
 			return new Response("POST /run/chain {date, from, env} | POST /run/stage {stage, date, env} | POST /run/stop | GET /run", { status: 400 });
 		}
 		// POST /rowmeter -> metered rows written per statement shape, on a scratch board (diagnostic)
