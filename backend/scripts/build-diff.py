@@ -273,12 +273,15 @@ carried_files = []
 if carry_boards and not a.no_carry:
     for ats in sorted({k[0] for k in carry_boards}):
         jp = f"{new}/jobs/{ats}.parquet"; tmp = (jp if not new.startswith("s3://") else os.path.join(a.out, ".tmp", f"carry-{ats}.parquet")) + ".tmp"
+        # The scan is cut to the carried boards' slugs before the key check: with the semi-join alone DuckDB hashed
+        # yesterday's whole side (18 GB of dark on 2026-09-11), spilled 12 GB and died; filtered, it streams.
+        slugs_in = "(" + ", ".join("'%s'" % k[1].replace("'", "''") for k in carry_boards if k[0] == ats) + ")"
+        carried_old = f"""SELECT {collist} FROM old o WHERE o.ats='{ats}' AND CAST(o.slug AS VARCHAR) IN {slugs_in}
+              AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))"""
         if _exists(jp):
-            con.execute(f"""COPY (SELECT * FROM read_parquet('{jp}')
-              UNION ALL BY NAME SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))
-              ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+            con.execute(f"""COPY (SELECT * FROM read_parquet('{jp}') UNION ALL BY NAME {carried_old}) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
         else:
-            con.execute(f"""COPY (SELECT {collist} FROM old o WHERE o.ats='{ats}' AND EXISTS (SELECT 1 FROM carryk k WHERE k.ats=o.ats AND k.slug=CAST(o.slug AS VARCHAR) AND k.id=CAST(o.id AS VARCHAR))) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+            con.execute(f"""COPY ({carried_old}) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
         if jp.startswith("s3://"): r2.put_file(_key(jp), tmp); os.remove(tmp)
         else: os.replace(tmp, jp)
         carried_files.append(jp)
