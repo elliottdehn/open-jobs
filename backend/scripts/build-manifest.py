@@ -418,10 +418,11 @@ t = time.time()
 # under 4 GB; 6 GB works), fewer threads mean fewer concurrent sort partitions, and small batches bound the
 # Python-side copy. Output is unaffected.
 # The tree's own arrays are done (pass 2 reads vectors from the parquet rows): free them before DuckDB grows.
-del Z
-try: del X; os.remove(_xpath)
-except (NameError, OSError): pass
-del titles, locs  # the node labels are built; two lists of N strings go before DuckDB grows (hints stay: company() in pass 2 reads them)
+if not RESUMED:
+    del Z
+    try: del X; os.remove(_xpath)
+    except (NameError, OSError): pass
+    del titles, locs  # the node labels are built; two lists of N strings go before DuckDB grows (hints stay: company() in pass 2 reads them)
 import gc; gc.collect()
 print(f"  pass 2 start: rss {_rss():.1f} GiB", file=sys.stderr, flush=True)
 con.execute(f"SET memory_limit='{os.environ.get('TREE_PASS2_MEMORY', '8GB')}'"); con.execute("SET threads=2")
@@ -501,7 +502,7 @@ if uploader:
     print(f"published {r2.uploaded} group files ({r2.uploaded_bytes/1e6:.0f} MB) to {args.groups_prefix}; {len(failed)} failed" + (f", e.g. {failed[0]}" if failed else "") + "; the finalize stage reconciles", flush=True)
     json.dump({"prefix": args.groups_prefix, "published": r2.uploaded, "failed": failed, "sizes": uploader.sizes}, open(os.path.join(out, ".published-groups.json"), "w"))
 try: os.remove(_xpath)
-except OSError: pass
+except (NameError, OSError): pass
 shutil.rmtree(con_tmp, ignore_errors=True)
 size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(out, "groups", "*.json")))
 print(f"wrote manifest ({os.path.getsize(os.path.join(out,'manifest.json'))/1e6:.1f} MB), centroids ({os.path.getsize(os.path.join(out,'centroids.bin'))/1e6:.1f} MB), {len(leaves)} group files ({size/1e6:.0f} MB) in {time.time()-t:.0f}s")
