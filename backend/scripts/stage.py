@@ -232,6 +232,7 @@ elif a.stage == "diff":
         if sides:
             d = sides[-1][:-5]; name = os.path.basename(d); r2 = r2c(); n = 0
             for part in sorted(glob.glob(os.path.join(d, "*.parquet"))):
+                if os.path.getsize(part) == 0: continue  # build-diff.py already uploaded it and left the placeholder
                 r2.put_file(f"diffs/{name}/{os.path.basename(part)}", part, "application/octet-stream"); open(part, "w").close(); n += 1
             # the lite parts and the sidecar go up too (kept locally for the feed): a resume in a fresh container can
             # then still index this diff from the bucket alone

@@ -259,6 +259,14 @@ side = {"schema_version": 2, "from": pd, "to": nd, "old_jobs": n_old, "new_jobs"
         "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "content_on": ["added", "changed"], "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f), "sha256": lite_hashes[os.path.basename(f)]} for f in lparts], "bytes": lite_bytes}}
 json.dump(side, open(outd + ".json", "w"), indent=1)
 
+# LOW_DISK (the 20 GB cloud container): the full parts go to the bucket now and become empty placeholders locally, so
+# the carry-forward queries below have spill room (2026-09-11: 9.7 GB of parts + lite left DuckDB 3.6 GB of temp and
+# the carry COPY died "failed to offload data block"). stage.py skips the placeholders and uploads the rest.
+if os.environ.get("LOW_DISK") == "1" and r2 is not None:
+    name = os.path.basename(outd)
+    for f in parts: r2.put_file(f"diffs/{name}/{os.path.basename(f)}", f, "application/octet-stream"); open(f, "w").close()
+    print(f"uploaded {len(parts)} full diff part(s) ({out_bytes / 1e9:.1f} GB) to diffs/{name}/ and freed them locally (LOW_DISK)", flush=True)
+
 # carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.
 # Slugs are compared as text: a provider whose slugs are all digits gets a numeric slug column in boards/*.parquet.
 carried_files = []
