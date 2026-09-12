@@ -20,6 +20,10 @@ for i in $(seq 1 240); do
   case "$s" in settled\ new-image\ starting\ 0*) break;; esac
   sleep 5
 done
+# A stopped instance is what picks up the new image: the object keeps its instance alive for hours between commands
+# (a batch chain has no requests to count as activity), so stop it now if nothing is running.
+busy=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; print('yes' if json.load(sys.stdin).get('current') else 'no')" 2>/dev/null || echo '?')
+if [ "$busy" = "no" ]; then curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; sleep 10; else echo "a run is in progress; the new image applies after it ends"; fi
 # Verify from inside: ask the container for its build id, fresh each attempt (the instance can still be switching for
 # a minute after the rollout reads settled, and an early answer comes from the old process).
 for i in $(seq 1 20); do
