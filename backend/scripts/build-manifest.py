@@ -134,7 +134,7 @@ print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memm
 # The load ran DuckDB under a 6 GB cap and its buffer pool keeps what it cached; the PCA below allocates Z (N x 256
 # f32, 3.6 GB at 3.56M rows) on top of it and the 12 GiB cloud box killed the process right after PCA (2026-09-11).
 # A 1 GB cap evicts the pool now; the fill and pass 2 set their own caps when they need DuckDB again.
-del reader; con.execute("SET memory_limit='1GB'"); import gc as _gc; _gc.collect()
+con.execute("SET memory_limit='1GB'"); import gc as _gc; _gc.collect()
 print(f"duckdb buffers released; rss {_rss():.1f} GiB", flush=True)
 if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
