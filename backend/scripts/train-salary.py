@@ -22,11 +22,16 @@ con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute(
 # SALARY_SCAN_ROWS: the scan is sampled at the query like the other trainers (about 44% of these rows state a USD
 # salary, so 600k rows feed the 250k reservoir); the full scan of 6.3M rows over the bucket ran at ~11k rows/min
 # single-threaded through the extractor (2026-09-12), hours in front of the finalize stage.
-SCAN_ROWS = int(os.environ.get("SALARY_SCAN_ROWS", "600000"))
+# Bernoulli, not row-count: `USING SAMPLE n ROWS` is a reservoir that materializes every sampled wide row (content +
+# vector) before yielding one, and 600k of them OOM-killed the 12 GiB box in 40 s (2026-09-12). A percentage streams.
+SCAN_ROWS = int(os.environ.get("SALARY_SCAN_ROWS", "1200000"))
+_tot = con.execute(f"SELECT count(*) FROM read_parquet('{J}') WHERE is_open AND embed_status='done' AND embedding IS NOT NULL").fetchone()[0]
+_pct = max(1, min(100, -(-100 * SCAN_ROWS // max(_tot, 1))))
+print(f"  salary scan: {_pct}% of {_tot:,} open embedded rows (bernoulli)", file=sys.stderr, flush=True)
 q = f"""SELECT embed_model, content, embedding FROM read_parquet('{J}')
         WHERE is_open AND embed_status='done' AND embedding IS NOT NULL AND length(content) > 300
           AND (contains(content, '$') OR contains(content, 'USD') OR contains(content, '€') OR contains(content, '£'))
-        USING SAMPLE {SCAN_ROWS} ROWS"""
+        USING SAMPLE {_pct}% (bernoulli)"""
 import re
 GATE = re.compile(r"[$€£]\s*\d|\b(?:USD|salary|compensation|pay range)\b", re.I)
 # Bounded memory: a ridge fit on 1536 dims does not need every stated salary. Reservoir-sample up to MAX_ROWS so the

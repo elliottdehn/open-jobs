@@ -22,8 +22,12 @@ work = os.environ.get("WORK_DIR") or (os.path.join(os.path.dirname(__file__), ".
 J = f"{root}/jobs/*.parquet"
 SAMPLE = int(os.environ.get("SAMPLE", "250000"))
 con = (R2().duckdb(duckdb.connect()) if _s3 else duckdb.connect()); con.execute("SET threads=4"); con.execute(f"SET memory_limit='{'4GB' if _s3 else '8GB'}'")  # bucket reads buffer on top of the cap; con.execute("SET arrow_large_buffer_size=true")
+# Bernoulli, not row-count: a `USING SAMPLE n ROWS` reservoir materializes every sampled wide row before yielding one
+# (the salary trainer's 600k OOM-killed the 12 GiB cloud box, 2026-09-12); a percentage streams.
+_tot = con.execute(f"SELECT count(*) FROM read_parquet('{J}') WHERE is_open AND embed_status='done' AND embedding IS NOT NULL").fetchone()[0]
+_pct = max(1, min(100, -(-100 * SAMPLE // max(_tot, 1))))
 q = f"""SELECT embed_model, title, location, content, embedding FROM read_parquet('{J}')
-        WHERE is_open AND embed_status='done' AND embedding IS NOT NULL USING SAMPLE {SAMPLE} ROWS"""
+        WHERE is_open AND embed_status='done' AND embedding IS NOT NULL USING SAMPLE {_pct}% (bernoulli)"""
 CLASSES = ["remote", "hybrid", "onsite"]
 cache = os.path.join(work, "web", "arrangement-train.npz")
 t0 = time.time(); X = []; y = []; seen = 0; tag = None; counts = {c: 0 for c in CLASSES + ["unknown"]}
