@@ -23,14 +23,15 @@ done
 # A stopped instance is what picks up the new image: the object keeps its instance alive for hours between commands
 # (a batch chain has no requests to count as activity), so stop it now if nothing is running.
 busy=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; print('yes' if json.load(sys.stdin).get('current') else 'no')" 2>/dev/null || echo '?')
-if [ "$busy" = "no" ]; then curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; sleep 10; else echo "a run is in progress; the new image applies after it ends"; fi
-# Verify from inside: ask the container for its build id, fresh each attempt (the instance can still be switching for
-# a minute after the rollout reads settled, and an early answer comes from the old process).
-for i in $(seq 1 20); do
+if [ "$busy" = "no" ]; then curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; echo "  stopped the idle instance; giving the platform 75 s to replace it"; sleep 75; else echo "a run is in progress; the new image applies after it ends"; fi
+# Verify from inside: one build-id check per attempt, well spaced. Asking every few seconds keeps restarting the old
+# instance, which is exactly what prevents its replacement.
+for i in $(seq 1 6); do
   curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
-  sleep 8
+  sleep 15
   live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); t=(d.get('lastOutput') or {}).get('text') or ''; print(t.strip().splitlines()[-1] if t.strip() else '')" 2>/dev/null || echo '?')
   [ "$live" = "$BUILD" ] && { echo "image $BUILD live"; exit 0; }
-  echo "  $(date +%T) container reports '$live'"
+  echo "  $(date +%T) container reports '$live'; stopping and waiting 60 s"
+  curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; sleep 60
 done
 echo "container reports '$live', expected $BUILD"; exit 1
