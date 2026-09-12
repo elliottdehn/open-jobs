@@ -203,6 +203,7 @@ def finalize(ats, outs, name=None):
     n = con.execute(f"SELECT count(*) FROM read_parquet('{outs['jobs']}')").fetchone()[0]
     if publish:
         for k in ("jobs", "boards"): r2.put_file(f"exports/{date_name}/{k}/{name}.parquet", outs[k], "application/octet-stream")
+        if name in pack_sig: r2.put_bytes(f"exports/{date_name}/parts/{name}.pack", pack_sig[name].encode(), "text/plain")
         if os.environ.get("LOW_DISK") == "1":  # cloud container (20 GB disk): the bucket copy is the copy
             for k in ("jobs", "boards"): os.remove(outs[k])
     print(f"{ats:16} {n:>9,} jobs" + (f"  -> exports/{date_name}/" if publish else ""), flush=True)
@@ -232,13 +233,21 @@ for f in ([] if dedup_only else files):
 # ---- per-board R2 snapshot parquets: local (scripts/pull-snapshots.mjs) or read from the bucket in place ----
 import datetime as _dt
 PART_ROWS = int(os.environ.get("PARQUET_PART_ROWS", "2000000"))
+pack_sig = {}  # part name -> sha256 of its (file, rows) list: the layout the published part was built from
 def _published_recently(name):
-    """Same-day resume: both published objects exist and were written in the last 12 hours -> this run already did it."""
+    """Same-day resume: both published objects exist and were written in the last 12 hours -> this run already did it.
+    A part (dark.p<n>) also has to carry the same pack layout: packs are cut from the live snapshot listing, so a part
+    published under an earlier listing (snapshots rewritten between takes; 2026-09-11 went from 13 to 14 parts) no
+    longer lines up with the parts built now and is rebuilt."""
     if not (publish and from_r2 and not force): return False
     cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=12)
     for k in ("jobs", "boards"):
         h = r2.head(f"exports/{date_name}/{k}/{name}.parquet")
         if not h or not h.get("modified") or h["modified"] < cut: return False
+    if name in pack_sig:
+        try: prev = r2.client.get_object(Bucket=r2.bucket, Key=f"exports/{date_name}/parts/{name}.pack")["Body"].read().decode().strip()
+        except Exception: prev = None
+        if prev != pack_sig[name]: print(f"{name:16} published earlier under a different pack layout; rebuilt", flush=True); return False
     return True
 
 for src in ([] if dedup_only else (snap_dirs or snap_r2)):
@@ -288,6 +297,8 @@ for src in ([] if dedup_only else (snap_dirs or snap_r2)):
         if files is not None and not part_selected(pi): continue
         name = ats if files is None else f"{ats}.p{pi}"
         outs = {k: os.path.join(root, k, f"{name}.parquet") for k in ("jobs", "boards")}
+        if files is not None:
+            import hashlib as _hl; pack_sig[name] = _hl.sha256(json.dumps(sorted((f, counts[f]) for f in files)).encode()).hexdigest()
         if files is not None and _published_recently(name):
             print(f"{name:16} published earlier this run; skipped", flush=True); continue
         fileset = None if files is None else set(files)
