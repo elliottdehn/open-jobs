@@ -12,6 +12,11 @@ publishes centroids + manifest. Run: uv run scripts/build-manifest.py [--leaf-ma
 """
 import argparse, base64, collections, glob, json, os, re, sys, time
 import numpy as np, duckdb
+def _rss():
+    """Resident set of this process in GiB (Linux), for the phase lines: the cloud box has 12 GiB and no swap."""
+    try:
+        with open("/proc/self/status") as f: return next(int(l.split()[1]) for l in f if l.startswith("VmRSS:")) / 2**20
+    except Exception: return float("nan")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--leaf-max", type=int, default=400)
@@ -125,7 +130,12 @@ for _i in range(0, X.shape[0], 200_000):
 del _blk
 X.flush()
 N, D = X.shape
-print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memmap, {X.nbytes/1e9:.1f} GB on disk)")
+print(f"loaded {N:,} vectors x {D} in {time.time()-t:.0f}s (key-sorted; one memmap, {X.nbytes/1e9:.1f} GB on disk); rss {_rss():.1f} GiB")
+# The load ran DuckDB under a 6 GB cap and its buffer pool keeps what it cached; the PCA below allocates Z (N x 256
+# f32, 3.6 GB at 3.56M rows) on top of it and the 12 GiB cloud box killed the process right after PCA (2026-09-11).
+# A 1 GB cap evicts the pool now; the fill and pass 2 set their own caps when they need DuckDB again.
+del reader; con.execute("SET memory_limit='1GB'"); import gc as _gc; _gc.collect()
+print(f"duckdb buffers released; rss {_rss():.1f} GiB", flush=True)
 if os.environ.get("BUILD_MANIFEST_STOP_AFTER") == "load": print("stopping after load (BUILD_MANIFEST_STOP_AFTER)"); os.remove(_xpath); sys.exit(0)
 
 # company name per board from boards parquet (resolved), else slug
@@ -144,7 +154,7 @@ P = Vt[: args.pca].T.astype(np.float32)
 Z = np.empty((N, args.pca), dtype=np.float32)
 for _i in range(0, N, 200_000):
 	Z[_i:_i + 200_000] = (X[_i:_i + 200_000] - mu) @ P
-print(f"PCA-{args.pca} in {time.time()-t:.0f}s")
+print(f"PCA-{args.pca} in {time.time()-t:.0f}s; rss {_rss():.1f} GiB", flush=True)
 
 def sims_to(idx, cen, chunk=200_000):
     """X[idx] @ cen without materializing X[idx] for huge nodes."""
