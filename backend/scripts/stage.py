@@ -185,7 +185,7 @@ elif a.stage == "parquet":
                 for i, wargs in enumerate(worker_args):
                     body = json.dumps({"args": wargs, "env": {"EXPORT_DIR": export_local, "SNAPSHOT_SOURCE": "r2"}, "label": f"{round_label} {i}"}).encode()
                     r = json.load(urllib.request.urlopen(urllib.request.Request(f"{a.worker}/run/worker/{i}", data=body, headers=hdr), timeout=60))
-                    if not r.get("started"): sys.exit(f"worker {i} did not start: {r}")
+                    if not r.get("started"): record(False, f"worker {i} did not start"); sys.exit(f"worker {i} did not start: {r}")
                     starts[i] = time.time() * 1000; print(f"  worker {i}: {' '.join(wargs)[:150]}", flush=True)
                 done = {}
                 while len(done) < len(worker_args):
@@ -198,7 +198,7 @@ elif a.stage == "parquet":
                             done[i] = stops[-1].get("exitCode"); tail = ((st.get("lastOutput") or {}).get("text") or "").strip().splitlines()[-3:]
                             print(f"  worker {i} exited {done[i]} after {(time.time() * 1000 - starts[i]) / 60000:.0f} min: " + " | ".join(t[:100] for t in tail), flush=True)
                 bad = {i: c for i, c in done.items() if c != 0}
-                if bad: sys.exit(f"{round_label}: worker(s) failed: {bad}")
+                if bad: record(False, f"{round_label}: worker(s) failed: {bad}"); sys.exit(f"{round_label}: worker(s) failed: {bad}")
             base = ["/usr/local/bin/uv", "run", "scripts/build-parquet.py", "--publish"]
             print(f"parquet fan-out across {nw} workers: dark parts by index, then {sum(len(x) for x in slots)} other sources by bytes", flush=True)
             fan("parquet", [base + [f"--ats=dark,{','.join(slots[i])}" if slots[i] else "--ats=dark", f"--parts=mod:{nw}:{i}"] for i in range(nw)])
@@ -328,7 +328,7 @@ elif a.stage == "report":
     rows = [json.loads(l) for l in open(RUNLOG)] if os.path.exists(RUNLOG) else []
     seen = {}
     for r in rows: seen[r["stage"]] = r          # last outcome per stage
-    failed = [s for s, r in seen.items() if not r["ok"]]
+    failed = [s for s, r in seen.items() if not r["ok"]] or (["(no stage recorded)"] if not seen else [])  # an empty record is not a success
     mf = os.path.join(work, "web", "manifest.json"); jobs = json.load(open(mf))["jobs"] if os.path.exists(mf) else None
     side = sorted(glob.glob(f"export/diffs/*__{a.date}.json")); d = json.load(open(side[-1])) if side else {}
     fr = os.path.join(WORK_ROOT if r2_mode else ".", "export", "feed", "published.json"); gen = json.load(open(fr))["generation"][:8] if os.path.exists(fr) else None
