@@ -237,6 +237,53 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   are skipped by the same-run check. Standing conclusion: the export's JSON group format is a contract (mirrors depend
   on it), so CPU-bound stages scale by containers, not by changing what is written.
 
+## Runbook (the workflows in use, 2026-09-11)
+
+All admin calls take `authorization: Bearer $(cat backend/admin_token.txt)`; `W=https://backend.dehnbostele.workers.dev`.
+
+**Deploy code or the image to the cloud.** `scripts/cloud-deploy.sh` (from `backend/`). It writes `scripts/BUILD`
+(build id), runs `wrangler deploy` (Worker + image, built for linux/amd64 and pushed; fails loudly if the registry
+rejects a layer, which it did when the uplink was busy), polls `wrangler containers info` until the app's image is
+the pushed digest and no rollout is active, stops the idle instance (only a stopped instance picks up a new image;
+the 14 h keep-alive would keep the old one answering), waits 75 s, and asks the container for its build id until it
+matches. `cloud-deploy.sh --wait` does only the wait-and-verify half. Never poll a rollout by starting the container.
+A Worker-only change still goes through the same script.
+
+**Run the nightly chain in the cloud.** `POST $W/run/chain {"date": "YYYY-MM-DD", "from": "all" | "<stage>",
+"env": {...}}`. One container runs `scripts/container-chain.sh` (pull parquet diff ledger tree estimators finalize
+history feed archive retention, then report; ledger/history/feed/archive are warning-only, the rest stop the chain).
+Env worth passing: `PARQUET_WORKERS=4` fans the parquet stage out across worker containers; `ESTIMATORS_ONLY=...`
+reruns a subset of the estimators. Resume after a failure with `"from": "<stage>"`; already-published parquet parts
+and groups are skipped by the same-run checks, and the diff's parts, lite parts and sidecar are uploaded right after
+the diff so a resume in a fresh container still indexes them.
+
+**Run one stage.** `POST $W/run/stage {"stage": "...", "date": "...", "env": {...}}`. `selftest` is lock-free and
+prints the platform facts and the bucket read rate. Every other stage but ingest/report takes the publisher lock:
+a cloud stage cannot run while a laptop run holds it, and vice versa.
+
+**Watch it.** `GET $W/run`: `state`, `current` (what is running, since when), `journal` (start / output / stop with
+exit code, last 50), `lastOutput` (the process's last 200 KB, refreshed every two minutes while it runs; its last line
+is the host line: load, memory, disk). Workers: `GET $W/run/worker/<i>`. The full stdout is in the Cloudflare
+dashboard (Workers & Pages > backend > Containers / Observability). Locally a relay Monitor can poll `GET /run` and
+write `logs/cloud-chain-<date>.tail`. Read the JSON with `curl -o file` + python, never through `echo "$var"` (the
+shell mangles escaped control characters).
+
+**Stop it.** `POST $W/run/stop` (SIGTERM; a stage may keep running) or `POST $W/run/stop?signal=kill`. After a kill:
+the publisher lock stays held until its TTL and the snapshot freeze stays on, so `scripts/container-run.sh unlock
+--date D` (or `POST $W/lock/release {holder, force: true}`) and `POST $W/lock/thaw {holder, force: true}`; check
+`GET $W/lock` shows `lock: null, snapshotsFrozen: false`. A start that answers `busy` is waiting for the previous
+process's stop event; wait for `current` to clear.
+
+**Run it on the laptop instead.** `uv run scripts/stage.py ingest --date D` (laptop-only providers), then
+`scripts/container-run.sh all --date D` or `from <stage> --date D`; the script caffeinates itself (the Mac's
+maintenance sleep skews the Docker clock into R2 403s). Same image, same flags (`LOW_DISK`, `STAGE_TO_BUCKET`), the
+work volume persists between stages. Do not run the laptop chain and the cloud chain at once: one lock.
+
+**Morning checks.** The report line in Slack (or `logs/night-<date>.log` / `GET /run`), `GET /data/manifest-head.json`
+(`built_at`, `jobs_total`, `groups`), the 10:00 UTC silence alarm posts if nothing published in 26 h, and
+`uv run scripts/cf-usage.py --hours 24` for the meters. If a stage failed: read the traceback in `lastOutput`, fix,
+`cloud-deploy.sh`, resume `from <stage>`.
+
 ## Running the container locally
 
 ```sh
