@@ -82,7 +82,10 @@ def lock_release(force=False):
         if r["ok"] and os.path.exists(LOCKFILE): os.remove(LOCKFILE)
     except Exception as e: print(f"WARNING: lock release failed: {e}", flush=True)
 if a.stage == "unlock":
-    lock_release(force=True); sys.exit(0)
+    lock_release(force=True)
+    try: lock_call("thaw", {"holder": lock_holder(), "force": True}); print("snapshot writes thawed", flush=True)  # a killed or failed parquet stage leaves the freeze on
+    except Exception as e: print(f"WARNING: thaw failed: {e}", flush=True)
+    sys.exit(0)
 if a.stage not in ("ingest", "report", "selftest") and not a.dry_run:
     if not token: sys.exit("ADMIN_TOKEN is required: the publisher lock lives behind the admin endpoints")
     holder = lock_holder()

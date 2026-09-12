@@ -14,7 +14,7 @@ run() { echo "--- $1 $(date -u '+%H:%M:%S')"; /usr/local/bin/uv run --script /ap
 echo "=== container consolidation $DATE from ${STAGES[0]} (cloud) $(date -u '+%H:%M:%S')"
 for st in "${STAGES[@]}"; do
   if ! run "$st"; then
-    case "$st" in ledger|history|feed|archive) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; run report || true; exit 1;; esac
+    case "$st" in ledger|history|feed|archive) echo "WARNING: $st failed; continuing";; *) echo "FAILED at $st"; run unlock || true; run report || true; exit 1;; esac  # unlock: a resume runs in a fresh container with a new holder id
   fi
 done
 run report || true; echo "=== done $(date -u '+%H:%M:%S')"
