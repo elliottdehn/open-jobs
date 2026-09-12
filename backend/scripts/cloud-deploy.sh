@@ -6,6 +6,13 @@ set -eo pipefail; cd "$(dirname "$0")/.."
 export PATH=/Applications/Docker.app/Contents/Resources/bin:$PATH
 T=$(tr -d '[:space:]' < admin_token.txt); W=${WORKER_URL:-https://backend.dehnbostele.workers.dev}
 if [ "$1" != "--wait" ]; then
+  # A deploy is a rollout: the platform stops EVERY running instance of the old image ("Runtime signalled the
+  # container to exit due to a new version rollout"), killing a chain and its workers mid-stage (2026-09-11 take 3).
+  # Refuse while any run object is busy; --force overrides when that is the intent.
+  busy=$(for o in "" worker/0 worker/1 worker/2 worker/3 worker/4 worker/5; do curl -s -H "authorization: Bearer $T" "$W/run/$o" | python3 -c '
+import json,sys; d=json.load(sys.stdin); c=d.get("current"); st=(d.get("state") or {}).get("status")
+print(sys.argv[1] or "chain", c["label"]) if c and st in ("running","healthy") else None' "$o"; done)
+  if [ -n "$busy" ] && [ "$1" != "--force" ]; then echo "REFUSED: a deploy rolls over running containers and would kill:"; echo "$busy"; echo "wait for it, or cloud-deploy.sh --force"; exit 2; fi
   BUILD="$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"; echo "$BUILD" > scripts/BUILD; echo "build id $BUILD"
   npx wrangler deploy > /tmp/cloud-deploy.out 2>&1; rc=$?
   grep -E 'Current Version|Building image|: digest:' /tmp/cloud-deploy.out || true

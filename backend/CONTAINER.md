@@ -244,9 +244,12 @@ All admin calls take `authorization: Bearer $(cat backend/admin_token.txt)`; `W=
 **Deploy code or the image to the cloud.** `scripts/cloud-deploy.sh` (from `backend/`). It writes `scripts/BUILD`
 (build id), runs `wrangler deploy` (Worker + image, built for linux/amd64 and pushed; fails loudly if the registry
 rejects a layer, which it did when the uplink was busy), polls `wrangler containers info` until the app's image is
-the pushed digest and no rollout is active, stops the idle instance (only a stopped instance picks up a new image;
-the 14 h keep-alive would keep the old one answering), waits 75 s, and asks the container for its build id until it
-matches. `cloud-deploy.sh --wait` does only the wait-and-verify half. Never poll a rollout by starting the container.
+the pushed digest and no rollout is active, stops the idle instance (the keep-alive would otherwise keep the old one
+answering until the rollout reaches it), waits 75 s, and asks the container for its build id until it
+matches. `cloud-deploy.sh --wait` does only the wait-and-verify half. Never poll a rollout by starting the container. **A deploy is a rollout that stops every running instance of the old image** (the journal shows
+"Runtime signalled the container to exit due to a new version rollout"): it killed take 3 of the 2026-09-11 chain and
+its four workers mid-stage. The script now refuses while any run object is busy (`--force` overrides); deploy between
+runs, or accept the restart and resume `from <stage>` after unlock.
 A Worker-only change still goes through the same script.
 
 **Run the nightly chain in the cloud.** `POST $W/run/chain {"date": "YYYY-MM-DD", "from": "all" | "<stage>",
