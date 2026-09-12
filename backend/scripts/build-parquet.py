@@ -398,7 +398,11 @@ def show(sql):
 
 B = os.path.join(root, "boards", "*.parquet")
 J = os.path.join(root, "jobs", "*.parquet")
-dedup_aggregators()
+# A fan-out worker (--parts, stage.py PARQUET_WORKERS) converts its slice only: the dedup is its own round, run once
+# every worker has published (otherwise each worker rewrites its parts against a partial first-party set and races
+# a part another worker is still publishing; 2026-09-11 take 4).
+if dedup_only or not _parts_arg: dedup_aggregators()
+else: print("fan-out slice done; aggregator dedup runs in the dedup round", flush=True)
 if glob.glob(J):
     show(f"SELECT count(*) AS boards, count(*) FILTER (last_status='ok') AS ok, count(*) FILTER (last_status='gone') AS gone, count(*) FILTER (last_status='error') AS error, count(*) FILTER (last_status IS NULL) AS unfetched FROM read_parquet('{B}', union_by_name=true)")
     show(f"SELECT ats, count(*) AS jobs, count(*) FILTER (is_open) AS open, count(*) FILTER (length(content) > 800) AS with_body, count(DISTINCT slug) AS boards FROM read_parquet('{J}', union_by_name=true) GROUP BY ats ORDER BY jobs DESC")
