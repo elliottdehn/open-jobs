@@ -14,7 +14,9 @@ type Current = { label: string; startedAt: number; args: string[] };
 export const WORKER_INTERNAL = "http://worker.internal";
 
 export class Consolidate extends Container<Env> {
-	sleepAfter = "14h"; // a batch run has no activity in the Container sense; the process ends on its own well before this
+	// Idle instances stop 30 min after their last activity (an idle instance is billed and keeps an old image alive).
+	// A running process counts as activity: the wrapper posts its output every two minutes and output() renews.
+	sleepAfter = "30m";
 	enableInternet = true;
 
 	private baseEnv(): Record<string, string> {
@@ -62,6 +64,7 @@ code=$(cat /tmp/run.code 2>/dev/null || echo 1); post "$code"; exit "$code"`;
 	/** The process's captured output (last 200 KB) and exit code, posted by the wrapper above. */
 	async output(code: number, text: string): Promise<void> {
 		await this.ctx.storage.put("lastOutput", { t: Date.now(), code, text });
+		try { this.renewActivityTimeout(); } catch { /* not running */ }
 		if (code === -1) return;  // an interim tail while the process runs: kept in lastOutput, not in the journal
 		const tail = text.trim().split("\n").slice(-3).join(" | ");
 		await this.journal({ t: Date.now(), ev: "output" as Journal["ev"], exitCode: code, message: tail.slice(0, 300) });
