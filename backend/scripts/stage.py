@@ -190,7 +190,11 @@ elif a.stage == "diff":
             d = sides[-1][:-5]; name = os.path.basename(d); r2 = r2c(); n = 0
             for part in sorted(glob.glob(os.path.join(d, "*.parquet"))):
                 r2.put_file(f"diffs/{name}/{os.path.basename(part)}", part, "application/octet-stream"); open(part, "w").close(); n += 1
-            print(f"uploaded {n} diff part(s) to diffs/{name}/ and freed the local copies (LOW_DISK)", flush=True)
+            # the lite parts and the sidecar go up too (kept locally for the feed): a resume in a fresh container can
+            # then still index this diff from the bucket alone
+            for part in sorted(glob.glob(os.path.join(d, "lite", "*.parquet"))): r2.put_file(f"diffs/{name}/lite/{os.path.basename(part)}", part, "application/octet-stream")
+            r2.put_file(f"diffs/{name}.json", d + ".json", "application/json")
+            print(f"uploaded {n} diff part(s), the lite parts and the sidecar to diffs/{name}/; freed the local full parts (LOW_DISK)", flush=True)
 elif a.stage == "tree":
     # group files stream to R2 while the tree writes them (the 2026-09-08 run skipped this and finalize spent 26 min
     # uploading 37 GB instead); finalize still reconciles by size, so a missed upload here is caught there
