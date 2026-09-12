@@ -360,11 +360,15 @@ t = time.time()
 del Z
 try: del X; os.remove(_xpath)
 except (NameError, OSError): pass
+del titles, locs, hints  # the node labels are built; three lists of N strings (~1.5 GB at 3.56M rows) go before DuckDB grows
 import gc; gc.collect()
+print(f"  pass 2 start: rss {_rss():.1f} GiB", file=sys.stderr, flush=True)
 con.execute(f"SET memory_limit='{os.environ.get('TREE_PASS2_MEMORY', '8GB')}'"); con.execute("SET threads=2")
-# The staging write keeps 18 parquet files open in the bucket; DuckDB's uploader holds up to 50 parts in flight per
-# file, gigabytes of buffers outside anything else's control. Four is plenty for one writer per partition.
-con.execute("SET s3_uploader_thread_limit=4")
+# The staging write keeps ~26 parquet files open in the bucket; DuckDB's uploader holds up to 50 parts in flight per
+# file, gigabytes of buffers outside anything else's control. Four is plenty for one writer per partition, and the
+# part size follows s3_uploader_max_filesize / max parts: the 800 GB default makes 80 MB parts (26 files x 80 MB of
+# buffers outside the cap; OOM-killed on the 12 GiB box 2026-09-11), 50 GB makes them the 5 MB S3 minimum.
+con.execute("SET s3_uploader_thread_limit=4"); con.execute("SET s3_uploader_max_filesize='50GB'")
 con.execute("CREATE TABLE assign (h VARCHAR, pos BIGINT)")
 _hall = pa.chunked_array([H.cast(pa.large_string())] + ([HF.cast(pa.large_string())] if M else [])).combine_chunks()  # DuckDB hands back large_string with arrow_large_buffer_size
 _assign = pa.table({"h": _hall.take(pa.array(order)), "pos": pa.array(np.arange(NT, dtype=np.int64))}); del _hall
@@ -396,7 +400,7 @@ else:
 con.execute("SET partitioned_write_flush_threshold=5000")
 con.execute(f"""COPY (SELECT a.pos, (a.pos // {CHUNK})::INTEGER AS chunk, j.* EXCLUDE (h) FROM ({q_rows}) j JOIN assign a USING (h))
   TO '{stage}' (FORMAT PARQUET, PARTITION_BY (chunk), COMPRESSION ZSTD, ROW_GROUP_SIZE 10000)""")
-print(f"  staged {NT:,} rows in {(NT + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s", file=sys.stderr, flush=True)
+print(f"  staged {NT:,} rows in {(NT + CHUNK - 1) // CHUNK} chunks, {time.time()-t:.0f}s; rss {_rss():.1f} GiB", file=sys.stderr, flush=True)
 def _batches():
     for k in range((NT + CHUNK - 1) // CHUNK):
         r = con.execute(f"SELECT * FROM read_parquet('{stage}/chunk={k}/*.parquet', hive_partitioning=false) ORDER BY pos").to_arrow_reader(5_000)
