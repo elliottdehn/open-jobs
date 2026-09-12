@@ -224,6 +224,19 @@ to `SLACK_RUN_WEBHOOK` or the ideas relay; `run.jsonl` per stage; `scripts/cf-us
   removal column is `unknown` from here). Chain order is now pull, parquet, diff, ledger, tree, ... The run of
   2026-09-11 was killed at the OOM and restarted from pull on this code.
 
+- **2026-09-11 night: the first cloud chain, paused for a fan-out.** Started 20:19 EDT after the laptop run was
+  stopped by hand. Pull and the laptop-only providers worked through `worker.internal`; the parquet stage found dark at
+  22,873,732 snapshot rows (13 parts of 2M) and converted the first part in 38 min on four cores: eight hours for dark
+  alone, 18 to 20 for the chain. Paused (the lock released, snapshots thawed by hand: a killed stage never thaws) and
+  the stage was made to fan out: with `PARQUET_WORKERS=N`, stage.py starts N worker containers (`POST /run/worker/<i>`,
+  objects `worker-<i>` of the same class, `max_instances` 6), each running `build-parquet.py --publish --ats=<slice>
+  --parts=mod:N:<i>` (dark parts by index modulo, other sources spread by snapshot bytes), waits for their exit codes,
+  then a second round with `--dedup-only` split the same way; the chain stage holds the lock and the freeze
+  throughout. Every interim post from a container now ends with a host line (load, memory, disk). `POST /run/stop?
+  signal=kill` for a process that ignores SIGTERM. Resumed `from parquet` with four workers; already-published parts
+  are skipped by the same-run check. Standing conclusion: the export's JSON group format is a contract (mirrors depend
+  on it), so CPU-bound stages scale by containers, not by changing what is written.
+
 ## Running the container locally
 
 ```sh
