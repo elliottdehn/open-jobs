@@ -24,14 +24,20 @@ done
 # (a batch chain has no requests to count as activity), so stop it now if nothing is running.
 busy=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; print('yes' if json.load(sys.stdin).get('current') else 'no')" 2>/dev/null || echo '?')
 if [ "$busy" = "no" ]; then curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; echo "  stopped the idle instance; giving the platform 75 s to replace it"; sleep 75; else echo "a run is in progress; the new image applies after it ends"; fi
-# Verify from inside: one build-id check per attempt, well spaced. Asking every few seconds keeps restarting the old
-# instance, which is exactly what prevents its replacement.
-for i in $(seq 1 6); do
+# Verify from inside: one build-id check per attempt. After the exec, wait for an answer NEWER than the exec (a cold
+# start takes a minute or two; stopping the instance while it starts just restarts the cold start). Only on a wrong
+# answer stop the instance, wait, and try again.
+for i in $(seq 1 4); do
+  t_exec=$(date +%s)000
   curl -s -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' "$W/run/exec" -d '{"args":["/bin/cat","/app/scripts/BUILD"]}' >/dev/null || true
-  sleep 15
-  live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); t=(d.get('lastOutput') or {}).get('text') or ''; ls=[l for l in t.strip().splitlines() if l.strip() and not l.startswith('[host')]; print(ls[-1] if ls else '')" 2>/dev/null || echo '?')  # the last line is the host stats; the answer is the line before
+  live=""
+  for j in $(seq 1 18); do
+    sleep 10
+    live=$(curl -s -H "authorization: Bearer $T" "$W/run" | python3 -c "import json,sys; d=json.load(sys.stdin); lo=d.get('lastOutput') or {}; t=lo.get('text') or ''; ls=[l for l in t.strip().splitlines() if l.strip() and not l.startswith('[host')]; print(ls[-1] if ls and lo.get('t',0) > $t_exec else '')" 2>/dev/null || echo '')
+    [ -n "$live" ] && break
+  done
   [ "$live" = "$BUILD" ] && { echo "image $BUILD live"; exit 0; }
-  echo "  $(date +%T) container reports '$live'; stopping and waiting 60 s"
+  echo "  $(date +%T) container reports '${live:-no answer in 3 min}'; stopping and waiting 60 s"
   curl -s -X POST -H "authorization: Bearer $T" "$W/run/stop" >/dev/null || true; sleep 60
 done
 echo "container reports '$live', expected $BUILD"; exit 1
