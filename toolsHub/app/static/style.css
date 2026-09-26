@@ -97,7 +97,20 @@ header.top{position:sticky;top:0;z-index:20;background:var(--glass);backdrop-fil
 
 /* ---------- layout ---------- */
 main{display:grid;grid-template-columns:262px minmax(0,1fr);position:relative;z-index:1}
-aside{border-right:1px solid var(--line);padding:var(--s-2) var(--s-3) var(--s-6);font-size:var(--t-sm);overflow:auto;height:calc(100vh - var(--top-h));position:sticky;top:var(--top-h);background:var(--bg);scrollbar-width:thin}
+aside{border-right:1px solid var(--line);padding:var(--s-2) var(--s-3) var(--s-6);font-size:var(--t-sm);overflow-y:auto;overflow-x:hidden;height:calc(100vh - var(--top-h));position:sticky;top:var(--top-h);background:var(--bg);overscroll-behavior:contain;
+  /* content dissolves into the lower edge instead of hard-cutting; the fade depth is
+     smaller than the bottom padding, so the last control is never dimmed at rest */
+  --fade:26px;
+  -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - var(--fade)),transparent);
+  mask-image:linear-gradient(to bottom,#000 calc(100% - var(--fade)),transparent)}
+/* sidebar scroll rail: a hairline guide with an accent thumb that wakes on hover */
+aside{scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+aside:hover{scrollbar-color:var(--acc) transparent}
+aside::-webkit-scrollbar{width:11px}
+aside::-webkit-scrollbar-track{margin:6px 0;background:linear-gradient(var(--line),var(--line)) center/1px 100% no-repeat}
+aside::-webkit-scrollbar-thumb{background:var(--line-3);background-clip:content-box;border:4px solid transparent;border-radius:var(--r-f);transition:background var(--ease)}
+aside:hover::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--acc),#a855f7);background-clip:content-box;border-width:3px}
+aside::-webkit-scrollbar-thumb:hover,aside::-webkit-scrollbar-thumb:active{background:linear-gradient(180deg,var(--acc-2),#c084fc);background-clip:content-box;border-width:3px}
 aside .sec{border-bottom:1px solid var(--line);padding:3px 0}
 aside .sec:last-of-type{border-bottom:0}
 aside summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:8px 7px;border-radius:var(--r-1);font:700 var(--t-xs)/1.3 var(--sans);letter-spacing:.075em;text-transform:uppercase;color:var(--fg-3);user-select:none;transition:color var(--ease),background var(--ease)}
