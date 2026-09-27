@@ -15,10 +15,13 @@
   --sans:'Manrope',-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --shadow:0 18px 50px rgba(0,0,0,.6);--ease:160ms cubic-bezier(.25,.85,.3,1);
-  --top-h:136px;
 }
-*{box-sizing:border-box}html{scroll-behavior:smooth}html,body{overflow-x:hidden;max-width:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:var(--t-md)/1.55 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+*{box-sizing:border-box}
+/* Fixed app shell: the document itself never scrolls, so the header and sidebar
+   cannot be scrolled away. #list owns the only vertical scroll in the main column. */
+html{height:100%}
+html,body{max-width:100%;overflow:hidden}
+body{margin:0;height:100%;height:100dvh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:var(--t-md)/1.55 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 body::before{content:'';position:fixed;inset:0 0 auto;height:420px;pointer-events:none;z-index:0;background:radial-gradient(900px 340px at 18% -8%,rgba(99,102,241,.10),transparent 70%),radial-gradient(720px 300px at 88% -12%,rgba(167,139,250,.07),transparent 70%)}
 a{color:var(--acc-2);text-decoration:none}a:hover{text-decoration:underline}
 h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.022em}h2{font-size:var(--t-2xl)}h3{font-size:var(--t-lg)}
@@ -65,7 +68,7 @@ input::placeholder{color:var(--fg-3)}
 .b.acc{border-color:var(--acc-line);background:var(--acc-bg);color:var(--acc-2)}
 
 /* ---------- header ---------- */
-header.top{position:sticky;top:0;z-index:20;background:var(--glass);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);border-bottom:1px solid var(--hair)}
+header.top{position:relative;z-index:20;flex:none;background:var(--glass);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);border-bottom:1px solid var(--hair)}
 .row{display:flex;align-items:center;gap:var(--s-3);padding:0 var(--s-5)}
 .row-search{height:56px;border-bottom:1px solid var(--hair)}
 .brand{display:flex;align-items:center;gap:9px;white-space:nowrap;flex:none}
@@ -96,8 +99,8 @@ header.top{position:sticky;top:0;z-index:20;background:var(--glass);backdrop-fil
 .pop .kv span:last-child{color:var(--fg-1);font-family:var(--mono)}
 
 /* ---------- layout ---------- */
-main{display:grid;grid-template-columns:262px minmax(0,1fr);position:relative;z-index:1}
-aside{border-right:1px solid var(--line);padding:var(--s-2) var(--s-3) var(--s-6);font-size:var(--t-sm);overflow-y:auto;overflow-x:hidden;height:calc(100vh - var(--top-h));position:sticky;top:var(--top-h);background:var(--bg);overscroll-behavior:contain;
+main{display:grid;grid-template-columns:262px minmax(0,1fr);position:relative;z-index:1;flex:1;min-height:0}
+aside{border-right:1px solid var(--line);padding:var(--s-2) var(--s-3) var(--s-6);font-size:var(--t-sm);overflow-y:auto;overflow-x:hidden;min-height:0;background:var(--bg);overscroll-behavior:contain;
   /* content dissolves into the lower edge instead of hard-cutting; the fade depth is
      smaller than the bottom padding, so the last control is never dimmed at rest */
   --fade:26px;
@@ -132,8 +135,16 @@ aside .sub h4:first-child{margin-top:2px}
 .facet-more{color:var(--fg-3);font:600 var(--t-xs)/1.4 var(--sans);padding:4px 7px;margin-top:2px;border-radius:var(--r-1);cursor:pointer;transition:color var(--ease),background var(--ease)}
 .facet-more:hover{color:var(--acc-2);background:var(--bg-2)}
 aside .clear{width:100%;margin-top:14px;justify-content:center}
-#list{padding:var(--s-3) var(--s-5) var(--s-6);max-width:1120px}
-#ideal{display:none;position:relative;z-index:1;margin:var(--s-3) var(--s-5) 0;background:var(--bg-1);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:var(--r-2);padding:var(--s-4) var(--s-5);white-space:pre-wrap;font-size:var(--t-sm);line-height:1.65;color:var(--fg-1);max-height:240px;overflow:auto}
+/* the main column is the only scroller; children are capped for line length rather
+   than the container, so the scrollbar rides the true right edge of the panel */
+#list{padding:var(--s-3) var(--s-5) var(--s-6);overflow-y:auto;overflow-x:hidden;min-height:0;overscroll-behavior:contain;scroll-behavior:smooth;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+#list>*{max-width:1120px}
+#list::-webkit-scrollbar{width:12px}
+#list::-webkit-scrollbar-track{background:transparent}
+#list::-webkit-scrollbar-thumb{background:var(--line-2);background-clip:content-box;border:4px solid transparent;border-radius:var(--r-f);transition:background var(--ease)}
+#list:hover::-webkit-scrollbar-thumb{background:var(--line-3);background-clip:content-box}
+#list::-webkit-scrollbar-thumb:hover,#list::-webkit-scrollbar-thumb:active{background:var(--acc);background-clip:content-box}
+#ideal{display:none;flex:none;position:relative;z-index:1;margin:var(--s-3) var(--s-5) 0;background:var(--bg-1);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:var(--r-2);padding:var(--s-4) var(--s-5);white-space:pre-wrap;font-size:var(--t-sm);line-height:1.65;color:var(--fg-1);max-height:240px;overflow:auto}
 
 /* ---------- job cards ---------- */
 .job{position:relative;overflow:hidden;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-2);padding:12px 16px;margin:7px 0;cursor:pointer;transition:border-color var(--ease),background var(--ease),box-shadow var(--ease),transform var(--ease)}
@@ -231,7 +242,6 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
 /* ---------- responsive ---------- */
 @media (max-width:1060px){.brand .sub{display:none}.btn .lbl-long{display:none}}
 @media (max-width:820px){
-  :root{--top-h:auto}
   .row{padding:0 var(--s-3)}
   .row-search{height:auto;padding-top:9px;padding-bottom:9px;flex-wrap:wrap}
   .search{order:3;flex-basis:100%;max-width:none;margin:0}
@@ -243,14 +253,13 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
   .row-controls select{flex:1}
   .row-status{height:auto;padding-top:7px;padding-bottom:7px;flex-wrap:wrap;gap:var(--s-2)}
   .row-status .legend{margin-left:0}
-  main{display:block}
+  main{display:flex;flex-direction:column}
   aside{display:none;position:fixed;inset:0;top:0;height:100dvh;z-index:35;padding:56px var(--s-4) var(--s-6);width:100%;border-right:0}
   body.filters aside{display:block}
-  body.filters{overflow:hidden}
   #filtersbtn{display:inline-flex}
   aside .closef{position:absolute;top:12px;right:12px}
   #ideal{margin:var(--s-3) var(--s-3) 0}
-  #list{padding:var(--s-3)}
+  #list{padding:var(--s-3);flex:1;min-height:0}
   .job{padding:11px 13px}
   .pair{grid-template-columns:1fr}
   .opt{max-height:36vh;padding:var(--s-4)}
