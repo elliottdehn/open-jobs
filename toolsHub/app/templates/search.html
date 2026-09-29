@@ -138,13 +138,23 @@ aside .sec>summary .cnt:empty{display:none}
 /* level 2 — group */
 aside .sub{padding:0 0 8px}
 aside .grp{margin-top:1px}
-aside .grp>summary{gap:8px;padding:7px 8px;border-radius:var(--r-1);font:600 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
+aside .grp>summary{flex-wrap:wrap;gap:5px 8px;padding:7px 8px;border-radius:var(--r-1);font:600 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
 aside .grp>summary:hover{color:var(--fg);background:var(--bg-2)}
 aside .grp>summary::before{opacity:.55}
 aside .grp>div{padding:1px 0 7px}
-/* a collapsed group still announces that it is filtering */
-aside .grp:has(input:checked)>summary{color:var(--acc-2)}
-aside .grp:has(input:checked)>summary::after{content:"";flex:none;width:5px;height:5px;margin-left:auto;border-radius:50%;background:var(--acc)}
+/* a group holding filters reads brighter, so the accent is left to the tags alone */
+aside .grp:has(input:checked)>summary{color:var(--fg)}
+/* count sits at the end of the label line */
+.gn{margin-left:auto;min-width:17px;text-align:center;font:600 var(--t-xs)/16px var(--sans);color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 6px}
+.gn:empty{display:none}
+/* tags take a full row of their own beneath the label */
+.tags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px}
+.tags:empty{display:none}
+.tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:var(--acc-bg);border:1px solid var(--acc-line);color:var(--acc-2);border-radius:var(--r-1);padding:2px 6px 2px 8px;font:500 var(--t-xs)/1.6 var(--sans);cursor:pointer;transition:background var(--ease),border-color var(--ease),color var(--ease)}
+.tag>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;transition:opacity var(--ease)}
+.tag:hover{background:var(--no-bg);border-color:var(--no-line);color:var(--no)}
+.tag:hover i{opacity:1}
 
 /* ---------- option rows ---------- */
 .facet{position:relative;display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:var(--r-1);cursor:pointer;color:var(--fg-1);font-size:var(--t-sm);transition:background var(--ease),color var(--ease)}
@@ -296,6 +306,8 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
   .facet .fn{min-width:40px}
   aside .grp>summary{padding:10px 8px;font-size:var(--t-md)}
   aside .sec>summary{padding:12px 8px}
+  .tag{padding:5px 8px 5px 11px;font-size:var(--t-sm)}
+  .tag i{font-size:11px}
   #ideal{margin:var(--s-3) var(--s-3) 0}
   #list{padding:var(--s-3);flex:1;min-height:0}
   .job{padding:11px 13px}
@@ -349,25 +361,26 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
   <aside id="side">
     <button class="btn ghost closef" id="closef">✕ Close</button>
     <details class="sec" open><summary>Fit for you<span class="cnt" id="cnt-fit"></span></summary><div class="sub">
-      <details class="grp" open><summary>Eligibility</summary><div id="f-el"></div></details>
-      <details class="grp" open><summary>Freshness</summary><div id="f-fr"></div></details></div></details>
+      <details class="grp" open><summary>Eligibility<span class="gn"></span><span class="tags"></span></summary><div id="f-el"></div></details>
+      <details class="grp"><summary>Freshness<span class="gn"></span><span class="tags"></span></summary><div id="f-fr"></div></details></div></details>
     <details class="sec" open><summary>Role<span class="cnt" id="cnt-role"></span></summary><div class="sub">
-      <details class="grp" open><summary>Seniority</summary><div id="f-sn"></div></details>
-      <details class="grp" open><summary>Work arrangement</summary><div id="f-rm"></div></details>
-      <details class="grp" open><summary>Salary (annual)</summary><div id="f-sa"></div></details>
-      <details class="grp" open><summary>Posted</summary><div id="f-ag"></div></details>
-      <details class="grp" open><summary>Employment</summary><div id="f-et"></div></details>
-      <details class="grp" open><summary>Role family</summary><div id="f-rf"></div></details></div></details>
+      <details class="grp" open><summary>Seniority<span class="gn"></span><span class="tags"></span></summary><div id="f-sn"></div></details>
+      <details class="grp" open><summary>Work arrangement<span class="gn"></span><span class="tags"></span></summary><div id="f-rm"></div></details>
+      <details class="grp"><summary>Salary (annual)<span class="gn"></span><span class="tags"></span></summary><div id="f-sa"></div></details>
+      <details class="grp" open><summary>Posted<span class="gn"></span><span class="tags"></span></summary><div id="f-ag"></div></details>
+      <details class="grp"><summary>Employment<span class="gn"></span><span class="tags"></span></summary><div id="f-et"></div></details>
+      <details class="grp"><summary>Role family<span class="gn"></span><span class="tags"></span></summary><div id="f-rf"></div></details></div></details>
     <details class="sec" open><summary>Location<span class="cnt" id="cnt-loc"></span></summary><div class="sub">
-      <details class="grp" open><summary>Country</summary><div id="f-co"></div></details>
-      <details class="grp" open><summary>Region / state</summary><div id="f-rg"></div></details>
-      <details class="grp" open><summary>City</summary><div id="f-ci"></div></details></div></details>
+      <details class="grp" open><summary>Country<span class="gn"></span><span class="tags"></span></summary><div id="f-co"></div></details>
+      <details class="grp"><summary>Region / state<span class="gn"></span><span class="tags"></span></summary><div id="f-rg"></div></details>
+      <details class="grp"><summary>City<span class="gn"></span><span class="tags"></span></summary><div id="f-ci"></div></details></div></details>
     <details class="sec"><summary>Company<span class="cnt" id="cnt-co"></span></summary><div class="sub">
-      <details class="grp" open><summary>Company</summary><div id="f-c"></div></details>
-      <details class="grp" open><summary>Industry</summary><div id="f-in"></div></details>
-      <details class="grp" open><summary>Size</summary><div id="f-cs"></div></details>
-      <details class="grp" open><summary>Source (ATS)</summary><div id="f-a"></div></details></div></details>
-    <details class="sec"><summary>Semantic group<span class="cnt" id="cnt-g"></span></summary><div class="sub"><div id="f-g"></div></div></details>
+      <details class="grp" open><summary>Company<span class="gn"></span><span class="tags"></span></summary><div id="f-c"></div></details>
+      <details class="grp"><summary>Industry<span class="gn"></span><span class="tags"></span></summary><div id="f-in"></div></details>
+      <details class="grp"><summary>Size<span class="gn"></span><span class="tags"></span></summary><div id="f-cs"></div></details>
+      <details class="grp"><summary>Source (ATS)<span class="gn"></span><span class="tags"></span></summary><div id="f-a"></div></details></div></details>
+    <details class="sec"><summary>Semantic group<span class="cnt" id="cnt-g"></span></summary><div class="sub">
+      <details class="grp" open><summary>Cluster<span class="gn"></span><span class="tags"></span></summary><div id="f-g"></div></details></div></details>
     <button class="btn ghost clear" id="clearf">Clear all filters</button>
   </aside>
   <div id="list"></div>
@@ -647,11 +660,27 @@ function ageBucket(j){if(!j.p)return 'unknown';const d=effAge(j);return d<=7?'th
 const keysOf={fr:j=>[freshness(j)],ag:j=>[ageBucket(j)],el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
 function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
 const facetShow={};
+// a facet key carries its own "(est.)" marker; strip it for display the same way the rows do
+function facetLabel(k){return /\(est\.\)$/.test(k)?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k}
+function unselect(f,k){sel[f].delete(k);event({type:'filter',facet:f,value:k,on:false});renderFacets();render(true,'filter')}
+// selected values are mirrored as removable tags inside <summary>, so they stay
+// readable when the group is collapsed — <details> hides everything else
+function renderGroupSummary(f,el){const grp=el.closest('.grp');if(!grp)return;
+  const nEl=grp.querySelector('.gn'),tEl=grp.querySelector('.tags');if(!nEl||!tEl)return;
+  nEl.textContent=sel[f].size||'';
+  tEl.innerHTML='';
+  for(const k of sel[f]){const t=document.createElement('button');t.type='button';t.className='tag';
+    t.title='Remove this filter';
+    t.innerHTML=`<span>${esc(facetLabel(k))}</span><i aria-hidden="true">✕</i>`;
+    // inside <summary>, a click would otherwise toggle the disclosure as well
+    t.onclick=e=>{e.preventDefault();e.stopPropagation();unselect(f,k)};
+    tEl.appendChild(t)}}
 function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
     entries.slice(0,cap).forEach(([k,n])=>{const l=document.createElement('label');l.className='facet';const est=/\(est\.\)$/.test(k);const cls=est?'est':f==='el'&&k==='ineligible'?'no':f==='el'&&k==='eligible'?'ok':'';
       l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
       l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
-    if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}}
+    if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}
+    renderGroupSummary(f,el)}
   const cnt=(fs)=>{const n=fs.reduce((s,f)=>s+sel[f].size,0);return n?`${n} active`:''};$('#cnt-fit').textContent=cnt(['el','fr']);$('#cnt-role').textContent=cnt(['sn','rm','sa','et','rf','ag']);$('#cnt-loc').textContent=cnt(['co','rg','ci']);$('#cnt-co').textContent=cnt(['c','in','cs','a']);$('#cnt-g').textContent=cnt(['g']);
   renderChips()}
 function renderChips(){const el=$('#chips');el.innerHTML='';

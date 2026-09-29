@@ -131,13 +131,23 @@ aside .sec>summary .cnt:empty{display:none}
 /* level 2 — group */
 aside .sub{padding:0 0 8px}
 aside .grp{margin-top:1px}
-aside .grp>summary{gap:8px;padding:7px 8px;border-radius:var(--r-1);font:600 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
+aside .grp>summary{flex-wrap:wrap;gap:5px 8px;padding:7px 8px;border-radius:var(--r-1);font:600 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
 aside .grp>summary:hover{color:var(--fg);background:var(--bg-2)}
 aside .grp>summary::before{opacity:.55}
 aside .grp>div{padding:1px 0 7px}
-/* a collapsed group still announces that it is filtering */
-aside .grp:has(input:checked)>summary{color:var(--acc-2)}
-aside .grp:has(input:checked)>summary::after{content:"";flex:none;width:5px;height:5px;margin-left:auto;border-radius:50%;background:var(--acc)}
+/* a group holding filters reads brighter, so the accent is left to the tags alone */
+aside .grp:has(input:checked)>summary{color:var(--fg)}
+/* count sits at the end of the label line */
+.gn{margin-left:auto;min-width:17px;text-align:center;font:600 var(--t-xs)/16px var(--sans);color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 6px}
+.gn:empty{display:none}
+/* tags take a full row of their own beneath the label */
+.tags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px}
+.tags:empty{display:none}
+.tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:var(--acc-bg);border:1px solid var(--acc-line);color:var(--acc-2);border-radius:var(--r-1);padding:2px 6px 2px 8px;font:500 var(--t-xs)/1.6 var(--sans);cursor:pointer;transition:background var(--ease),border-color var(--ease),color var(--ease)}
+.tag>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;transition:opacity var(--ease)}
+.tag:hover{background:var(--no-bg);border-color:var(--no-line);color:var(--no)}
+.tag:hover i{opacity:1}
 
 /* ---------- option rows ---------- */
 .facet{position:relative;display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:var(--r-1);cursor:pointer;color:var(--fg-1);font-size:var(--t-sm);transition:background var(--ease),color var(--ease)}
@@ -289,6 +299,8 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
   .facet .fn{min-width:40px}
   aside .grp>summary{padding:10px 8px;font-size:var(--t-md)}
   aside .sec>summary{padding:12px 8px}
+  .tag{padding:5px 8px 5px 11px;font-size:var(--t-sm)}
+  .tag i{font-size:11px}
   #ideal{margin:var(--s-3) var(--s-3) 0}
   #list{padding:var(--s-3);flex:1;min-height:0}
   .job{padding:11px 13px}
