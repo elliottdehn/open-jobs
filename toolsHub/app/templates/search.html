@@ -129,19 +129,25 @@ aside summary::-webkit-details-marker{display:none}
 aside summary::before{content:"";flex:none;width:5px;height:5px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(-45deg);transition:transform var(--ease)}
 aside details[open]>summary::before{transform:rotate(45deg)}
 
-/* level 1 — section */
-aside .sec>summary{gap:9px;padding:9px 8px;border-radius:var(--r-1);font:700 var(--t-xs)/1.3 var(--sans);letter-spacing:.075em;text-transform:uppercase;color:var(--fg-2)}
+/* level 1 — section: the parent. Bigger marker, wider tracking, heavier weight. */
+aside .sec>summary{gap:9px;padding:10px 8px;border-radius:var(--r-1);font:700 var(--t-xs)/1.3 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--fg-2)}
 aside .sec>summary:hover{color:var(--fg);background:var(--bg-2)}
+aside .sec[open]>summary{color:var(--fg-1)}
+aside .sec>summary::before{width:6px;height:6px;border-width:0 1.8px 1.8px 0}
 aside .sec>summary .cnt{margin-left:auto;font:600 var(--t-xs)/16px var(--sans);letter-spacing:0;text-transform:none;color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 8px}
 aside .sec>summary .cnt:empty{display:none}
 
-/* level 2 — group */
-aside .sub{padding:0 0 8px}
+/* level 2 — group: indented behind a containment rail, lighter weight than its
+   section and a smaller, dimmer marker, so the two never read as siblings */
+aside .sub{padding:2px 0 10px;margin-left:11px;border-left:1px solid var(--line)}
+aside .sec:has(input:checked)>.sub{border-left-color:var(--acc-line)}
 aside .grp{margin-top:1px}
-aside .grp>summary{flex-wrap:wrap;gap:5px 8px;padding:7px 8px;border-radius:var(--r-1);font:600 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
+aside .grp>summary{flex-wrap:wrap;gap:5px 7px;padding:6px 8px 6px 10px;border-radius:0 var(--r-1) var(--r-1) 0;font:500 var(--t-sm)/1.35 var(--sans);color:var(--fg-2)}
 aside .grp>summary:hover{color:var(--fg);background:var(--bg-2)}
-aside .grp>summary::before{opacity:.55}
-aside .grp>div{padding:1px 0 7px}
+aside .grp[open]>summary{color:var(--fg-1)}
+aside .grp>summary::before{width:4px;height:4px;border-width:0 1.3px 1.3px 0;opacity:.4}
+aside .grp>summary:hover::before{opacity:.85}
+aside .grp>div{padding:1px 0 7px 4px}
 /* a group holding filters reads brighter, so the accent is left to the tags alone */
 aside .grp:has(input:checked)>summary{color:var(--fg)}
 /* count sits at the end of the label line */
@@ -305,8 +311,8 @@ aside .clear{width:100%;margin-top:14px;justify-content:center}
   .facet input{width:18px;height:18px}
   .facet input:checked{background-size:13px}
   .facet .fn{min-width:40px}
-  aside .grp>summary{padding:10px 8px;font-size:var(--t-md)}
-  aside .sec>summary{padding:12px 8px}
+  aside .grp>summary{padding:10px 8px 10px 11px;font-size:var(--t-sm)}
+  aside .sec>summary{padding:13px 8px}
   .tag{padding:5px 8px 5px 11px;font-size:var(--t-sm)}
   .tag i{font-size:11px}
   #ideal{margin:var(--s-3) var(--s-3) 0}
