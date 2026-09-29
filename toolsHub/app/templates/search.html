@@ -145,14 +145,15 @@ aside .grp>div{padding:1px 0 7px}
 /* a group holding filters reads brighter, so the accent is left to the tags alone */
 aside .grp:has(input:checked)>summary{color:var(--fg)}
 /* count sits at the end of the label line */
-.gn{margin-left:auto;min-width:17px;text-align:center;font:600 var(--t-xs)/16px var(--sans);color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 6px}
+.gn{margin-left:auto;flex:none;font:500 var(--t-xs)/16px var(--mono);font-variant-numeric:tabular-nums;color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 7px;cursor:help}
 .gn:empty{display:none}
 /* tags take a full row of their own beneath the label */
 .tags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px}
 .tags:empty{display:none}
 .tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:var(--acc-bg);border:1px solid var(--acc-line);color:var(--acc-2);border-radius:var(--r-1);padding:2px 6px 2px 8px;font:500 var(--t-xs)/1.6 var(--sans);cursor:pointer;transition:background var(--ease),border-color var(--ease),color var(--ease)}
 .tag>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;transition:opacity var(--ease)}
+.tag b{flex:none;font:400 var(--t-xs)/1 var(--mono);font-variant-numeric:tabular-nums;opacity:.6}
+.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;margin-left:1px;padding-left:5px;border-left:1px solid rgba(255,255,255,.13);transition:opacity var(--ease)}
 .tag:hover{background:var(--no-bg);border-color:var(--no-line);color:var(--no)}
 .tag:hover i{opacity:1}
 
@@ -665,13 +666,22 @@ function facetLabel(k){return /\(est\.\)$/.test(k)?k.replace(/^≈ /,'').replace
 function unselect(f,k){sel[f].delete(k);event({type:'filter',facet:f,value:k,on:false});renderFacets();render(true,'filter')}
 // selected values are mirrored as removable tags inside <summary>, so they stay
 // readable when the group is collapsed — <details> hides everything else
+// Selecting several values in one facet is an OR, and co/rg/ci return several keys
+// per job (a posting listed in two countries), so adding up the per-tag counts would
+// double-count. Count the union over JOBS instead — only for facets that have a
+// selection, so this stays off the path when nothing is filtered.
+function selMatchCount(f){if(!sel[f].size)return 0;
+  let n=0;for(const j of JOBS)if(keysOf[f](j).some(k=>sel[f].has(k)))n++;return n}
 function renderGroupSummary(f,el){const grp=el.closest('.grp');if(!grp)return;
   const nEl=grp.querySelector('.gn'),tEl=grp.querySelector('.tags');if(!nEl||!tEl)return;
-  nEl.textContent=sel[f].size||'';
+  const size=sel[f].size;
+  if(size){const m=selMatchCount(f);nEl.textContent=m.toLocaleString();
+    nEl.title=`${size} filter${size>1?'s':''} selected · ${m.toLocaleString()} job${m===1?'':'s'} match at least one of them`}
+  else{nEl.textContent='';nEl.removeAttribute('title')}
   tEl.innerHTML='';
-  for(const k of sel[f]){const t=document.createElement('button');t.type='button';t.className='tag';
-    t.title='Remove this filter';
-    t.innerHTML=`<span>${esc(facetLabel(k))}</span><i aria-hidden="true">✕</i>`;
+  for(const k of sel[f]){const c=facets[f][k]||0;const t=document.createElement('button');t.type='button';t.className='tag';
+    t.title=`${k} · ${c.toLocaleString()} jobs · click to remove`;
+    t.innerHTML=`<span>${esc(facetLabel(k))}</span><b>${c.toLocaleString()}</b><i aria-hidden="true">✕</i>`;
     // inside <summary>, a click would otherwise toggle the disclosure as well
     t.onclick=e=>{e.preventDefault();e.stopPropagation();unselect(f,k)};
     tEl.appendChild(t)}}

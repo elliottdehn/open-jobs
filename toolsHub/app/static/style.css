@@ -138,14 +138,15 @@ aside .grp>div{padding:1px 0 7px}
 /* a group holding filters reads brighter, so the accent is left to the tags alone */
 aside .grp:has(input:checked)>summary{color:var(--fg)}
 /* count sits at the end of the label line */
-.gn{margin-left:auto;min-width:17px;text-align:center;font:600 var(--t-xs)/16px var(--sans);color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 6px}
+.gn{margin-left:auto;flex:none;font:500 var(--t-xs)/16px var(--mono);font-variant-numeric:tabular-nums;color:var(--acc-2);background:var(--acc-bg);border:1px solid var(--acc-line);border-radius:var(--r-f);padding:0 7px;cursor:help}
 .gn:empty{display:none}
 /* tags take a full row of their own beneath the label */
 .tags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px}
 .tags:empty{display:none}
 .tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:var(--acc-bg);border:1px solid var(--acc-line);color:var(--acc-2);border-radius:var(--r-1);padding:2px 6px 2px 8px;font:500 var(--t-xs)/1.6 var(--sans);cursor:pointer;transition:background var(--ease),border-color var(--ease),color var(--ease)}
 .tag>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;transition:opacity var(--ease)}
+.tag b{flex:none;font:400 var(--t-xs)/1 var(--mono);font-variant-numeric:tabular-nums;opacity:.6}
+.tag i{flex:none;font-style:normal;font-size:9px;opacity:.55;margin-left:1px;padding-left:5px;border-left:1px solid rgba(255,255,255,.13);transition:opacity var(--ease)}
 .tag:hover{background:var(--no-bg);border-color:var(--no-line);color:var(--no)}
 .tag:hover i{opacity:1}
 
