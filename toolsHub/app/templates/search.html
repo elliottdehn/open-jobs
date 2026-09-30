@@ -166,6 +166,8 @@ aside .grp:has(input:checked)>summary{color:var(--fg)}
 /* ---------- option rows ---------- */
 .facet{position:relative;display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:var(--r-1);cursor:pointer;color:var(--fg-1);font-size:var(--t-sm);transition:background var(--ease),color var(--ease)}
 .facet:hover{background:var(--bg-2);color:var(--fg)}
+/* nothing left to match under the current filters — still selectable, just receded */
+.facet.zero{opacity:.4}.facet.zero:hover{opacity:.75}
 .facet:has(input:checked){background:var(--acc-bg);color:var(--fg)}
 .facet:has(input:focus-visible){box-shadow:0 0 0 2px var(--acc)}
 /* custom control: a real checkbox with its native chrome removed, so click,
@@ -665,34 +667,55 @@ function isBumped(j){return !!(j.p&&j.s&&j.p-j.s>7*864e5)}  // posting claims to
 function freshness(j){const d=effAge(j);if(d==null||!j.p)return 'unknown';if(d>365)return '👻 ghost risk';if(j.agp==null)return 'unknown';return d<=j.agp?'🌱 fresh':'🥀 stale'}
 function ageBucket(j){if(!j.p)return 'unknown';const d=effAge(j);return d<=7?'this week':d<=31?'this month':d<=93?'≤ 3 months':d<=365?'≤ 1 year':'over 1 year 👻'}
 const keysOf={fr:j=>[freshness(j)],ag:j=>[ageBucket(j)],el:j=>[j.el===true?'eligible':j.el===false?'ineligible':'unknown'],rm:j=>[j.rm&&j.rm!=='unknown'?j.rm:j.rme?j.rme.v+' (est.)':'unknown'],sn:j=>[j.sn?j.sn:j.sne?j.sne.v+' (est.)':'unknown'],rf:j=>j.e?[j.e.role_family||'other']:['(not enriched)'],et:j=>j.e?[j.e.employment_type||'unspecified']:['(not enriched)'],sa:salaryBucket,in:j=>j.co_?[j.co_.industry||'?']:['(not enriched)'],cs:j=>j.co_?[j.co_.size||'?']:['(not enriched)'],co:j=>j.co&&j.co.length?j.co.map(c=>NAMES[c]||c):j.coe?[(NAMES[j.coe.country]||j.coe.country)+' (est.)']:['(unknown)'],rg:j=>j.rg||[],ci:j=>j.ci||[],g:j=>['group '+j.g],c:j=>[j.c||'?'],a:j=>[j.k.split('/')[0]]};
-function rebuildFacets(){for(const f of FACETS)facets[f]={};for(const j of JOBS)for(const f of FACETS)for(const k of keysOf[f](j))facets[f][k]=(facets[f][k]||0)+1}
+// keysOf is only re-derived when enrichment changes a job's fields; caching it keeps the
+// per-keystroke recount below to plain array reads instead of 240k function calls
+let FKEYS=null,facetTotal=0;
+function rebuildFacets(){FKEYS=JOBS.map(j=>{const m={};for(const f of FACETS)m[f]=keysOf[f](j);return m})}
+// Contextual counts. Each facet is tallied against every OTHER active filter but not its
+// own: values within a facet are OR'd, so counting a facet against itself would print 0
+// beside every value you have not ticked, when ticking one would actually add results.
+// A job failing exactly one active facet still counts towards that facet (dropping it
+// would let the job through); failing two or more, it counts nowhere.
+function recountFacets(){for(const f of FACETS)facets[f]={};
+  if(!FKEYS)rebuildFacets();
+  const q=$('#q').value.trim().toLowerCase(),s=$('#show').value;
+  const active=FACETS.filter(f=>sel[f].size);facetTotal=0;
+  for(let i=0;i<JOBS.length;i++){const j=JOBS[i];if(!passesBase(j,q,s))continue;const K=FKEYS[i];
+    let nf=0,bad=null;
+    for(const g of active){if(!K[g].some(k=>sel[g].has(k))){bad=g;if(++nf>1)break}}
+    if(nf>1)continue;
+    if(nf===0)facetTotal++;
+    for(const f of FACETS){if(nf===1&&f!==bad)continue;
+      const t=facets[f];for(const k of K[f])t[k]=(t[k]||0)+1}}
+  // a ticked value that now matches nothing must still be listed, or it filters invisibly
+  for(const f of FACETS)for(const k of sel[f])if(facets[f][k]===undefined)facets[f][k]=0}
 const facetShow={};
 // a facet key carries its own "(est.)" marker; strip it for display the same way the rows do
 function facetLabel(k){return /\(est\.\)$/.test(k)?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k}
 function unselect(f,k){sel[f].delete(k);event({type:'filter',facet:f,value:k,on:false});renderFacets();render(true,'filter')}
 // selected values are mirrored as removable tags inside <summary>, so they stay
 // readable when the group is collapsed — <details> hides everything else
-// Selecting several values in one facet is an OR, and co/rg/ci return several keys
-// per job (a posting listed in two countries), so adding up the per-tag counts would
-// double-count. Count the union over JOBS instead — only for facets that have a
-// selection, so this stays off the path when nothing is filtered.
-function selMatchCount(f){if(!sel[f].size)return 0;
-  let n=0;for(const j of JOBS)if(keysOf[f](j).some(k=>sel[f].has(k)))n++;return n}
+// Now that the per-value counts are contextual, "jobs matching any value I ticked here,
+// given my other filters" is just the overall result count — the same number for every
+// filtered facet. So the pill counts selected values and the total goes in the tooltip.
 function renderGroupSummary(f,el){const grp=el.closest('.grp');if(!grp)return;
   const nEl=grp.querySelector('.gn'),tEl=grp.querySelector('.tags');if(!nEl||!tEl)return;
   const size=sel[f].size;
-  if(size){const m=selMatchCount(f);nEl.textContent=m.toLocaleString();
-    nEl.title=`${size} filter${size>1?'s':''} selected · ${m.toLocaleString()} job${m===1?'':'s'} match at least one of them`}
+  if(size){nEl.textContent=size;
+    nEl.title=`${size} value${size>1?'s':''} selected here · ${facetTotal.toLocaleString()} job${facetTotal===1?'':'s'} match all your filters`}
   else{nEl.textContent='';nEl.removeAttribute('title')}
   tEl.innerHTML='';
   for(const k of sel[f]){const c=facets[f][k]||0;const t=document.createElement('button');t.type='button';t.className='tag';
-    t.title=`${k} · ${c.toLocaleString()} jobs · click to remove`;
+    t.title=`${k} · ${c.toLocaleString()} jobs match this alongside your other filters · click to remove`;
     t.innerHTML=`<span>${esc(facetLabel(k))}</span><b>${c.toLocaleString()}</b><i aria-hidden="true">✕</i>`;
     // inside <summary>, a click would otherwise toggle the disclosure as well
     t.onclick=e=>{e.preventDefault();e.stopPropagation();unselect(f,k)};
     tEl.appendChild(t)}}
-function renderFacets(){for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';const entries=Object.entries(facets[f]).sort((a,b)=>b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
-    entries.slice(0,cap).forEach(([k,n])=>{const l=document.createElement('label');l.className='facet';const est=/\(est\.\)$/.test(k);const cls=est?'est':f==='el'&&k==='ineligible'?'no':f==='el'&&k==='eligible'?'ok':'';
+function renderFacets(){recountFacets();
+  for(const f of FACETS){const el=$('#f-'+f);el.innerHTML='';
+    // ticked values pin to the top so a narrowing count can never push an active filter past the cap
+    const entries=Object.entries(facets[f]).sort((a,b)=>(sel[f].has(b[0])-sel[f].has(a[0]))||b[1]-a[1]);const cap=facetShow[f]||(f==='g'?12:f==='rm'||f==='el'||f==='sn'?12:8);
+    entries.slice(0,cap).forEach(([k,n])=>{const l=document.createElement('label');l.className='facet'+(n===0&&!sel[f].has(k)?' zero':'');const est=/\(est\.\)$/.test(k);const cls=est?'est':f==='el'&&k==='ineligible'?'no':f==='el'&&k==='eligible'?'ok':'';
       l.innerHTML=`<input type="checkbox" ${sel[f].has(k)?'checked':''}><span class="fl ${cls}" title="${esc(k)}">${esc(est?k.replace(/^≈ /,'').replace(/ \(est\.\)$/,''):k)}</span><span class="fn">${n.toLocaleString()}</span>`;
       l.querySelector('input').onchange=e=>{e.target.checked?sel[f].add(k):sel[f].delete(k);event({type:'filter',facet:f,value:k,on:e.target.checked});renderFacets();render(true,'filter')};el.appendChild(l)});
     if(entries.length>cap){const m=document.createElement('div');m.className='facet-more';m.textContent=`+ ${entries.length-cap} more`;m.onclick=()=>{facetShow[f]=cap+25;renderFacets()};el.appendChild(m)}
@@ -709,11 +732,15 @@ function renderChips(){const el=$('#chips');el.innerHTML='';
 $('#clearf').onclick=()=>{for(const f of FACETS)sel[f].clear();renderFacets();render(true,'filter')};
 // ---- list
 let ranked=[],cur=0,shown=0,prevTop=null,CHIP=j=>[fscore(j),'Model score'];
-function passes(j){const q=$('#q').value.trim().toLowerCase();if(q&&!(j.searchText??=(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase()).includes(q))return false;
+// everything passes() tests except the facet checkboxes; q/s can be hoisted by callers
+// that run this over every job, so the DOM isn't read 15k times
+function passesBase(j,q,s){if(q===undefined)q=$('#q').value.trim().toLowerCase();if(s===undefined)s=$('#show').value;
+  if(q&&!(j.searchText??=(j.t+' '+j.c+' '+j.l+' '+j.jd).toLowerCase()).includes(q))return false;
   if(exclG.has(j.g3)||kwHidden(j))return false;
   if(st.eligOnly&&j.el===false&&!(j.rme&&sel.rm.has(j.rme.v+' (est.)')&&String(j.elr||'').startsWith('not labelled remote'))&&!(j.coe&&sel.co.has((NAMES[j.coe.country]||j.coe.country)+' (est.)')))return false;
-  for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;
-  const s=$('#show').value,l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
+  const l=st.labels[j.k];if(s==='unlabeled'&&l!==undefined)return false;if(s==='yes'&&l!==1)return false;if(s==='no'&&l!==0)return false;return true}
+function passes(j){if(!passesBase(j))return false;
+  for(const f in sel)if(sel[f].size&&!keysOf[f](j).some(k=>sel[f].has(k)))return false;return true}
 function fscore(j){return j.score+kwBoost(j)}
 function nc0(){return (st.compares||[]).length}
 const REASON={similar:'similarity to a job you liked',label:'your label',compare:'your comparisons',seed:'More / Less picks',sort:'your taste model',enrich:'new enrichment data',filter:'filters',search:'search',order:'sort order'};

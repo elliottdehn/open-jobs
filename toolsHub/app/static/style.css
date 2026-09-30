@@ -159,6 +159,8 @@ aside .grp:has(input:checked)>summary{color:var(--fg)}
 /* ---------- option rows ---------- */
 .facet{position:relative;display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:var(--r-1);cursor:pointer;color:var(--fg-1);font-size:var(--t-sm);transition:background var(--ease),color var(--ease)}
 .facet:hover{background:var(--bg-2);color:var(--fg)}
+/* nothing left to match under the current filters — still selectable, just receded */
+.facet.zero{opacity:.4}.facet.zero:hover{opacity:.75}
 .facet:has(input:checked){background:var(--acc-bg);color:var(--fg)}
 .facet:has(input:focus-visible){box-shadow:0 0 0 2px var(--acc)}
 /* custom control: a real checkbox with its native chrome removed, so click,
