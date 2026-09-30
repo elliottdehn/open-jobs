@@ -1,0 +1,15 @@
+[project]
+name = "toolshub"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "numpy",
+    "duckdb>=1.1",
+    "jinja2",
+    "python-multipart",
+]
+
+[tool.uv]
+package = false
