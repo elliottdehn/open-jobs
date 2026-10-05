@@ -184,6 +184,39 @@ def _written():
         try: size += os.path.getsize(f); parts += 1
         except OSError: pass
     return size, parts
+# LOW_DISK streaming: the 20 GB container cannot hold an 11-day diff (12.7 GB of parts filled the disk at 95% on
+# 2026-10-05). While the write runs, every finished part is hashed, uploaded to diffs/<name>/ and replaced by an empty
+# placeholder; the newest two files may still be open (two writer threads), so they wait for the next tick, and a
+# part is only taken once its size has not moved for a tick.
+_stream = os.environ.get("LOW_DISK") == "1" and r2 is not None
+_diff_name = os.path.basename(outd)
+part_info = {}      # basename -> (bytes, sha256) for every full part, streamed or not
+_seen_size = {}
+def _part_index(f):
+    m = re.search(r"data_(\d+)\.parquet$", f); return int(m.group(1)) if m else -1
+def _ship_part(f):
+    b = os.path.getsize(f); h = sha256_of(f)
+    r2.put_file(f"diffs/{_diff_name}/{os.path.basename(f)}", f, "application/octet-stream"); open(f, "w").close()
+    part_info[os.path.basename(f)] = (b, h)
+def _stream_finished(final=False):
+    if not _stream: return
+    files = sorted((f for f in glob.glob(os.path.join(outd, "data_*.parquet")) if os.path.basename(f) not in part_info), key=_part_index)
+    if not final and len(files) > 2: files = files[:-2]
+    elif not final: files = []
+    for f in files:
+        try: sz = os.path.getsize(f)
+        except OSError: continue
+        if sz == 0: continue
+        if not final and _seen_size.get(f) != sz: _seen_size[f] = sz; continue
+        _ship_part(f)
+def _clear_bucket_parts():
+    if not _stream: return
+    for k, _, _ in r2.list(f"diffs/{_diff_name}/data_"): r2.delete(k)
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
+    return h.hexdigest()
 def _copy_with_progress(sql):
     """Run the write on a cursor in a thread; the main thread reports progress and an ETA every 30 s."""
     import threading
@@ -197,7 +230,8 @@ def _copy_with_progress(sql):
     while th.is_alive():
         th.join(30)
         if not th.is_alive(): break
-        size, parts = _written(); el = time.time() - t; rx = _rx()
+        _stream_finished()
+        size, parts = _written(); size += sum(b for b, _ in part_info.values()); el = time.time() - t; rx = _rx()
         if scope and rx is not None and rx0 is not None and rx > rx0:
             frac = min((rx - rx0) / scope, 0.99)
             print(f"  diff write: {100 * frac:.0f}% of the bytes read ({(rx - rx0) / 1e9:.1f}/{scope / 1e9:.1f} GB, {(rx - rx0) / el / 1e6:.0f} MB/s), {parts} parts / {size / 1e9:.1f} GB written, {el / 60:.0f} min elapsed, ~{el * (1 - frac) / frac / 60:.0f} min left", flush=True)
@@ -206,6 +240,7 @@ def _copy_with_progress(sql):
     if err: raise err[0]
 for _attempt in range(4):
     try:
+        _clear_bucket_parts(); part_info.clear(); _seen_size.clear()
         _copy_with_progress(f"""COPY (
     SELECT k.op, '{pd}' AS from_date, '{nd}' AS to_date, NULL::VARCHAR AS removal, NULL::TIMESTAMPTZ AS removed_at_crawler, {new_collist}
     FROM new n JOIN evk_new k ON k.ats=n.ats AND k.slug=n.slug AND k.id=n.id WHERE n.ats IN {ats_new}
@@ -218,25 +253,26 @@ for _attempt in range(4):
         if _attempt == 3 or not isinstance(e, (duckdb.HTTPException, duckdb.IOException)): raise
         print(f"WARNING: diff write failed ({str(e)[:160]}); retrying in 60s ({_attempt + 1}/3)", flush=True)
         shutil.rmtree(outd, ignore_errors=True); time.sleep(60)
-parts = sorted(glob.glob(os.path.join(outd, "*.parquet"))); out_bytes = sum(os.path.getsize(f) for f in parts)
+_stream_finished(final=True)
+parts = sorted(glob.glob(os.path.join(outd, "*.parquet")), key=_part_index)
+for f in parts:
+    if os.path.basename(f) not in part_info: part_info[os.path.basename(f)] = (os.path.getsize(f), sha256_of(f))
+out_bytes = sum(b for b, _ in part_info.values())
+if _stream: print(f"uploaded {len(parts)} full diff part(s) ({out_bytes / 1e9:.1f} GB) to diffs/{_diff_name}/ while writing; local placeholders (LOW_DISK)", flush=True)
+_full_src = (f"read_parquet({[r2.url(f'diffs/{_diff_name}/{os.path.basename(f)}') for f in parts]!r})" if _stream else f"read_parquet('{outd}/*.parquet')")
 # lite projection: the same events without the vector or the raw provider / enrichment JSON. The description text
 # stays on `added` and `changed` rows (a mirror has to be able to show a new job) and is dropped where only the key
 # matters (removed, changed_prev, carried). Full parts remain the record.
 LITE_DROP = "raw_json, detail_raw_json, enrichment_json, embedding"
 lited = os.path.join(outd, "lite"); os.makedirs(lited, exist_ok=True)
 for f in glob.glob(os.path.join(lited, "*.parquet")): os.remove(f)
-con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) REPLACE (CASE WHEN op IN ('added', 'changed') THEN content END AS content) FROM read_parquet('{outd}/*.parquet'))
+con.execute(f"""COPY (SELECT * EXCLUDE ({LITE_DROP}) REPLACE (CASE WHEN op IN ('added', 'changed') THEN content END AS content) FROM {_full_src})
   TO '{lited}' (FORMAT PARQUET, COMPRESSION ZSTD, FILE_SIZE_BYTES '200MB')""")
 lparts = sorted(glob.glob(os.path.join(lited, "*.parquet"))); lite_bytes = sum(os.path.getsize(f) for f in lparts)
 
 # Integrity: sha256 per part, a content hash over the full parts, and the parent diff's content hash, so a chain
 # of diffs breaks loudly if a file goes missing or is truncated instead of replaying something plausible and wrong.
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
-    return h.hexdigest()
-part_hashes = {os.path.basename(f): sha256_of(f) for f in parts}
+part_hashes = {k: v[1] for k, v in part_info.items()}
 lite_hashes = {os.path.basename(f): sha256_of(f) for f in lparts}
 content_sha256 = hashlib.sha256("\n".join(f"{k} {v}" for k, v in sorted(part_hashes.items())).encode()).hexdigest()
 parent = None
@@ -265,7 +301,7 @@ side = {"schema_version": 2, "from": pd, "to": nd, "old_jobs": n_old, "new_jobs"
         "content_sha256": content_sha256, "parent": parent,
         "vanished_boards": [{"ats": k[0], "slug": k[1], "old_jobs": n, "verdict": verdict[(k[0], k[1])][0], "why": verdict[(k[0], k[1])][1]} for k, n in [((x[0], x[1]), x[2]) for x in absent]],
         "carried_into": [], "carry_done": False, "ok_to_prune": ok_to_prune, "seconds": round(time.time() - t0),
-        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f), "sha256": part_hashes[os.path.basename(f)]} for f in parts], "bytes": out_bytes,
+        "dir": os.path.relpath(outd), "parts": [{"file": os.path.basename(f), "bytes": part_info[os.path.basename(f)][0], "sha256": part_hashes[os.path.basename(f)]} for f in parts], "bytes": out_bytes,
         "lite": {"dir": os.path.relpath(lited), "drops": LITE_DROP.split(", "), "content_on": ["added", "changed"], "parts": [{"file": os.path.basename(f), "bytes": os.path.getsize(f), "sha256": lite_hashes[os.path.basename(f)]} for f in lparts], "bytes": lite_bytes}}
 json.dump(side, open(outd + ".json", "w"), indent=1)
 
@@ -273,9 +309,9 @@ json.dump(side, open(outd + ".json", "w"), indent=1)
 # the carry-forward queries below have spill room (2026-09-11: 9.7 GB of parts + lite left DuckDB 3.6 GB of temp and
 # the carry COPY died "failed to offload data block"). stage.py skips the placeholders and uploads the rest.
 if os.environ.get("LOW_DISK") == "1" and r2 is not None:
-    name = os.path.basename(outd)
-    for f in parts: r2.put_file(f"diffs/{name}/{os.path.basename(f)}", f, "application/octet-stream"); open(f, "w").close()
-    print(f"uploaded {len(parts)} full diff part(s) ({out_bytes / 1e9:.1f} GB) to diffs/{name}/ and freed them locally (LOW_DISK)", flush=True)
+    left = [f for f in parts if os.path.getsize(f) > 0]
+    for f in left: r2.put_file(f"diffs/{_diff_name}/{os.path.basename(f)}", f, "application/octet-stream"); open(f, "w").close()
+    if left: print(f"uploaded {len(left)} remaining full diff part(s) to diffs/{_diff_name}/ and freed them locally (LOW_DISK)", flush=True)
 
 # carry vanished-but-not-empty boards forward into today's export, so the index and tomorrow's diff keep them.
 # Slugs are compared as text: a provider whose slugs are all digits gets a numeric slug column in boards/*.parquet.
