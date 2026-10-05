@@ -129,6 +129,33 @@ rule on `exports/<date>/` (keep the latest two) instead of local deletes; diffs 
   either in ten seconds. Each stage keeps printing the summary lines it does today; the Workflow
   keeps them for when the line says something failed.
 
+## Status (2026-10-05): the tenth cloud night, an eleven-day diff, 12 h plus the feed by hand
+
+The 2026-10-05 consolidation ran 04:55 to 16:54 UTC after an eleven-day gap (the last export was 09-24): 7,362,561
+-> 7,579,522 postings (+1,562,447 -1,345,490 ~232,333, carried 0, 980 boards emptied), 3,577,995 distinct vectors,
+12,836 group files (87.1 GB), head flipped 15:54 UTC, archive 31.80 GB, ledger 12,564,657 ever. The feed came 80
+min later by hand: generation 35cf2877 (1,794,780 upserts, 1,345,490 removes, 3,396 pages). Retention kept the
+09-24 full export, as designed: the diff removed more than 15% of the previous export, so it is not ok_to_prune.
+Same layout as the ninth night (chain on worker-4, fan-out on 0, 1, 2 and 5; `logs/hand/chain-on-w4.template.json`).
+
+Three hand steps, two of them fixes deployed the same day:
+
+- Worker-5's host was slow again, so the same slice ran as a helper on idle worker-0 (the recipe of the ninth
+  night); parquet took 4 h 57 min for 27,988,521 dark rows in 16 parts, dedup 39.7 -> 31.8 GB.
+- The diff ran out of disk at 12.7 GB of finished parts: eleven days of changes do not fit next to the two exports
+  on a 20 GB volume. The diff now streams each finished part to the bucket during the write under LOW_DISK and
+  reads the lite projection back from the bucket urls (4d81e0a, deployed while the chain was down); the resume
+  from diff wrote 62 parts (14.2 GB) with 12 GB still free. Pass 2's staging retry (50b71ae) fired once and worked.
+- The feed failed on one record: a teamtailor description of 7.9 MB against the 4 MiB page limit, and the writer
+  failed the whole generation ("job exceeds page byte limit"; the chain treats feed as warning-only and went on to
+  archive). An upsert that cannot fit a page now keeps its key and the other fields, loses the tail of its content
+  and carries `content_truncated: true` (a3a33a4, JOB-CHANGES.md); the page contract is unchanged. Deployed after
+  the report, then `stage.py feed` posted by hand to `/run/worker/4` (`logs/hand/feed-2026-10-05-on-w4.json`) and
+  an `unlock` after it: a hand stage holds the publisher lock at exit.
+
+Timings: parquet 4 h 57 min, diff 19 min on the second try, tree 2 h 50 min, estimators 2 h 11 min, archive 28
+min, retention 7 s, feed 80 min (by hand). Objects 0, 1, 2 and 4 still sit on good hosts; 3 and 5 do not.
+
 ## Status (2026-09-25): the ninth cloud night, on worker-4, 15.3 h
 
 The 2026-09-24 consolidation ran 02:02 to 17:20 UTC on the 24th, the first night on the new layout: the chain on
