@@ -117,7 +117,9 @@ The unpublished v1 group-diff proposal is not wire-compatible; v2 refuses v1 man
 2. Follow `previous` via `/data/changes/GENERATION/manifest.json` to the saved generation.
    On first sync, stop at the nearest `kind: bootstrap`. Verify every manifest hash and link.
 3. Apply generations oldest first, verifying each page's `bytes`, SHA256 and row count.
-   Pages contain at most 1,000 rows and 4 MiB. Oversized individual records fail publication.
+   Pages contain at most 1,000 rows and 4 MiB. An upsert whose content alone would overflow a page is
+   published with the tail of its content cut off and `content_truncated: true` on the event (the other
+   fields and the key are intact); nothing else is ever truncated.
 4. Upsert or delete by `ats/slug#id`. Commit all pages and the checkpoint atomically. A zero-page
    delta still advances the checkpoint. Retrying the same generation is a no-op; replaying an
    individual operation is idempotent.

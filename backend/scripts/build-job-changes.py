@@ -179,9 +179,31 @@ def check_sidecar(side):
             raise ValueError('invalid source event count')
 
 
+def fit_event(row):
+    """The encoded event line, cut to fit a page. An upsert whose content alone would overflow a page (2026-10-05:
+    one teamtailor description of 7.9 MB against the 4 MiB page limit) keeps its identity and the other fields and
+    loses the tail of its content; the event carries content_truncated so a reader can tell. Nothing else is ever
+    cut: a remove is tiny, and the other projected fields are bounded upstream. One record must not stop the feed."""
+    line = encode(row)
+    if len(line) < MAX_BYTES or row['op'] != 'upsert':
+        return line
+    row = dict(row, content_truncated=True)
+    content = row['job']['content']
+    keep = len(content)
+    while True:
+        row['job'] = dict(row['job'], content=content[:keep])
+        line = encode(row)
+        if len(line) < MAX_BYTES:  # the newline needs its byte
+            return line
+        overhead = len(line) - len(encode(content[:keep]))
+        keep = min(keep - max(1, keep // 100), keep * (MAX_BYTES - 1 - overhead) // max(len(line) - overhead, 1))
+        if keep <= 0:
+            raise ValueError('job exceeds page byte limit')
+
+
 def store_event(db, row):
     try:
-        db.execute('INSERT INTO events VALUES (?, ?)', (row['key'], zlib.compress(encode(row), 6)))
+        db.execute('INSERT INTO events VALUES (?, ?)', (row['key'], zlib.compress(fit_event(row), 6)))
     except sqlite3.IntegrityError as exc:
         raise ValueError('duplicate or conflicting job events') from exc
 
@@ -307,16 +329,23 @@ def write_generation(out, db, metadata, previous, scratch, stream=None):
             pages.append({'file': name, 'rows': len(buffer), 'bytes': len(data), 'sha256': digest(data)})
             buffer, size = [], 0
 
+    truncated = 0
     for (blob,) in db.execute('SELECT payload FROM events ORDER BY key'):
         line = zlib.decompress(blob) + b'\n'
         if len(line) > MAX_BYTES:
-            raise ValueError('job exceeds page byte limit')
+            raise ValueError('job exceeds page byte limit')  # fit_event() cut it at store time
         if len(buffer) >= MAX_ROWS or size + len(line) > MAX_BYTES:
             flush()
         buffer.append(line)
         size += len(line)
-        counts[json.loads(line)['op']] += 1
+        row = json.loads(line)
+        counts[row['op']] += 1
+        if row.get('content_truncated'):
+            truncated += 1
+            print(f"WARNING: {row['key']}: content cut to fit a page", file=sys.stderr)
     flush()
+    if truncated:
+        print(f'WARNING: {truncated} upsert(s) published with content_truncated', file=sys.stderr)
     header = dict(metadata, version=VERSION, scope=SCOPE,
                   previous=previous['generation'] if previous else None, counts=counts, pages=pages)
     header['generation'] = digest(encode(header))

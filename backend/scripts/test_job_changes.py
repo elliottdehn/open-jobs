@@ -192,8 +192,17 @@ class ChangesTest(unittest.TestCase):
     def test_page_bounds_and_oversize(self):
         header = self.bootstrap([self.job(str(i)) for i in range(1001)])
         self.assertEqual([p['rows'] for p in header['pages']], [1000, 1])
-        with self.assertRaisesRegex(ValueError, 'byte limit'):
-            self.bootstrap([self.job(content='x' * changes.MAX_BYTES)])
+        # One record over the page limit is cut, flagged and published; it never stops the feed (2026-10-05).
+        header = self.bootstrap([self.job(content='é' * changes.MAX_BYTES), self.job('2', content='x' * 1000)],
+                                day='2026-09-09')
+        self.assertEqual([p['rows'] for p in header['pages']], [1, 1])
+        self.assertLessEqual(max(p['bytes'] for p in header['pages']), changes.MAX_BYTES)
+        big, small = self.rows(header)
+        self.assertIs(big.get('content_truncated'), True)
+        self.assertNotIn('content_truncated', small)
+        self.assertTrue(0 < len(big['job']['content']) < changes.MAX_BYTES)
+        self.assertEqual(big['key'], 'example/company#1')
+        self.assertEqual(len(changes.encode(big)) + 1, header['pages'][0]['bytes'])
 
     def test_each_upload_failure_preserves_head_and_retry_succeeds(self):
         header = self.bootstrap()
